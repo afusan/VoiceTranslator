@@ -11,11 +11,12 @@
 | 状態 | タスク | 備考 |
 |---|---|---|
 | ☑ | プロジェクト方針定義(CLAUDE.md) | 完了 |
-| ☑ | Architecture.md 作成 | 本Phaseで完了 |
-| ☑ | UserSinario.md 作成 | 本Phaseで完了 |
-| ☑ | TaskList.md 作成 | 本Phaseで完了(=本ファイル) |
-| ☐ | ErrorCatalog.md 雛形作成 | エラー方針集約用。実装と並行で埋める |
-| ☐ | manual.md 雛形作成 | 内容は実装後に肉付け |
+| ☑ | Architecture.html 作成 | 完了(HTMLで図を視覚化、3スレッド構成も記載) |
+| ☑ | Class.md 作成 | 完了(AppController/ModelStatus含む) |
+| ☑ | UserSinario.md 作成 | 完了 |
+| ☑ | TaskList.md 作成 | 完了(=本ファイル) |
+| ☐ | ErrorCatalog.md 雛形作成 | エラー方針集約用。実装と並行で埋める(Phase 2予定) |
+| ☑ | manual.md 雛形作成 → 肉付け | 完了(Step6で肉付け済み) |
 
 ---
 
@@ -25,25 +26,27 @@
 
 | 状態 | タスク | 担当レイヤ | 備考 |
 |---|---|---|---|
-| ☐ | プロジェクト初期化(`src/` 配下、依存管理ファイル、エントリポイント) | - | poetry or uv 等で構築 |
-| ☐ | `Utterance` / `UtteranceTimeline` の実装 | 共通 | データクラス |
-| ☐ | `AppError` 階層と severity の定義 | 共通 | |
-| ☐ | `AudioCaptureBackend` I/F + `SoundcardCaptureBackend` | 入力 | デバイス選択+リサンプル |
-| ☐ | `DeviceValidator` (入力=出力チェック) | 入力 | 起動時バリデーション |
-| ☐ | `VadBackend` I/F + `SileroVadBackend` | VAD | 発話区切り |
-| ☐ | `AsrBackend` I/F + `FasterWhisperAsrBackend` | ASR | task=transcribe |
-| ☐ | `TranslatorBackend` I/F + `Nllb200TranslatorBackend` | 翻訳 | 別ステージ必須 |
-| ☐ | `TtsBackend` I/F + `SapiTtsBackend` (pyttsx3) | TTS | 仮実装 |
-| ☐ | `AudioOutputBackend` I/F + `SoundcardOutputBackend` | 出力 | 出力デバイス指定 |
-| ☐ | `PipelineCoordinator` 実装 | 制御 | 各ステージ直列接続 |
-| ☐ | `ConfigStore` (YAML 読書き) | 横断 | |
-| ☐ | `Logger` (画面+jsonl、ON/OFF) | 横断 | |
-| ☐ | `ErrorHandler` (4分類振り分け) | 横断 | |
-| ☐ | `MainWindow` / `SettingsPanel` / `ControlPanel` (customtkinter) | GUI | 必要最小機能のみ |
-| ☐ | `BackendRegistry` (バックエンド登録/列挙) | GUI | プルダウン項目供給 |
-| ☐ | レイテンシ表示パネル | GUI | timeline 集計 |
-| ☐ | small テスト整備(pytest 想定) | テスト | バックエンド毎にモック単位 |
-| ☐ | 録音WAV を使ったパイプラインE2Eテスト | テスト | デバイス非依存で再現可能 |
+| ☑ | プロジェクト初期化(`src/` 配下、依存管理ファイル、エントリポイント) | - | uv で構築 |
+| ☑ | `Utterance` / `UtteranceTimeline` の実装 | 共通 | `tts_samplerate` 追加済 |
+| ☑ | `AppError` 階層と severity の定義 | 共通 | |
+| ☑ | `AudioCaptureBackend` I/F + `SoundcardCaptureBackend` | 入力 | デバイス選択+リサンプル |
+| ☑ | `DeviceValidator` (入力=出力チェック) | 入力 | 起動時バリデーション |
+| ☑ | `VadBackend` I/F + `SileroVadBackend` | VAD | 発話区切り |
+| ☑ | `AsrBackend` I/F + `FasterWhisperAsrBackend` | ASR | task=transcribe |
+| ☑ | `TranslatorBackend` I/F + `Nllb200TranslatorBackend` | 翻訳 | 別ステージ必須 |
+| ☑ | `TtsBackend` I/F + `SapiTtsBackend` (pyttsx3) | TTS | WAV経由でPCM取得 |
+| ☑ | `AudioOutputBackend` I/F + `SoundcardOutputBackend` | 出力 | 出力デバイス指定 |
+| ☑ | `PipelineCoordinator` 実装 | 制御 | **3スレッド構成(B+案)** に進化 |
+| ☑ | `ConfigStore` (YAML 読書き) | 横断 | |
+| ☑ | `Logger` (画面+jsonl、ON/OFF) | 横断 | |
+| ☑ | `ErrorHandler` (4分類振り分け) | 横断 | |
+| ☑ | `MainWindow` / `SettingsPanel` / `ControlPanel` (customtkinter) | GUI | 最小機能 + モデルステータスラベル |
+| ☑ | `BackendRegistry` (バックエンド登録/列挙) | GUI | `register_default_backends` 提供 |
+| ☑ | `AppController`(GUI仲介+非同期Loader) | 制御 | B+案で追加 |
+| ☑ | `cache_check` + `ModelStatus` | 横断 | 起動時に各モデルのキャッシュ有無を判定し UI 表示 |
+| ☑ | レイテンシ表示パネル | GUI | timeline 集計、直近10件平均 |
+| ☑ | small テスト整備(pytest 想定) | テスト | バックエンド毎にモック単位 |
+| ☑ | 録音WAV を使ったパイプラインE2Eテスト | テスト | デバイス非依存で再現可能(`WavReplayCapture`) |
 
 ---
 
@@ -55,6 +58,7 @@
 | ☐ | GUI からの動的切替を稼働中でも反映 | 現状は次回開始時反映 |
 | ☐ | レイテンシ比較ビュー(直近N発話の平均) | バックエンド評価用 |
 | ☐ | ErrorCatalog の本格整備 | ライブラリ別エラー一覧 |
+| ☐ | モデル DL 進捗の UI 表示(huggingface_hub フック) | 現状は "Loading..." のみ |
 
 ---
 
@@ -86,3 +90,4 @@
 | ☐ | プロセス単位の音声取得(Win: PROCESS_LOOPBACK / Mac: ScreenCaptureKit / Linux: sink-input) | |
 | ☐ | 重い処理のサーバオフロード(リモート推論バックエンド) | |
 | ☐ | AEC オプション(WebRTC) | フィードバック対策の保険 |
+| ☐ | 各ステージのさらなる並列化(案C: ASR/翻訳/TTSを別スレッド) | スループットが足りなくなった時 |

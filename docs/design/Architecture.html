@@ -86,21 +86,90 @@
     <div class="stage"><div class="name">AudioOutput</div><div class="sub">出力</div></div>
   </div>
 
-  <div class="ctrl-band">PipelineCoordinator(発話単位 Utterance を全段に流し、開始/停止を制御)</div>
+  <div class="ctrl-band">PipelineCoordinator(発話単位 Utterance を 3スレッドに流し、開始/停止を制御)</div>
 
   <div class="cross-row">
+    <div class="cross"><div class="name">AppController</div><div class="sub">GUIと内部の仲介</div></div>
     <div class="cross"><div class="name">ConfigStore</div><div class="sub">設定保存/読込</div></div>
     <div class="cross"><div class="name">Logger</div><div class="sub">画面 + jsonl</div></div>
     <div class="cross"><div class="name">ErrorHandler</div><div class="sub">致命/回復/スキップ/警告</div></div>
-    <div class="cross"><div class="name">GUI</div><div class="sub">設定 + 動作操作</div></div>
+    <div class="cross"><div class="name">GUI</div><div class="sub">設定 + 動作操作 + ステータス表示</div></div>
   </div>
 
 </div>
 
 <p class="small">
-青ブロック: パイプラインステージ(直列接続)。 黄ブロック: 横断機能。 シアン帯: パイプライン制御。<br>
+青ブロック: パイプラインステージ(3スレッドに分散)。 黄ブロック: 横断機能。 シアン帯: パイプライン制御。<br>
 全ステージは「抽象I/F + 1つの具象実装」で構成し、後で差し替え可能にする(MVPは各1実装のみ)。
 </p>
+
+<!-- =================================================== -->
+<h2>1-2. スレッド構成(B+案)</h2>
+<p>UI フリーズ防止と取得ラグ抑制のため、以下の 5 スレッド構成で動かす。</p>
+
+<div class="thread-band">
+  <div class="thread-row">
+    <div class="thread ui">
+      <div class="name">UI (main)</div>
+      <div class="sub">tkinter mainloop / 設定操作</div>
+    </div>
+  </div>
+  <div class="thread-row"><span class="arrow">↓ start ボタン押下</span></div>
+  <div class="thread-row">
+    <div class="thread loader">
+      <div class="name">Loader (1回限り)</div>
+      <div class="sub">各バックエンドのモデルロード</div>
+    </div>
+  </div>
+  <div class="thread-row"><span class="arrow">↓ ロード完了で3スレッド起動</span></div>
+  <div class="thread-row">
+    <div class="thread bg">
+      <div class="name">Input thread</div>
+      <div class="sub">capture → VAD → q1</div>
+    </div>
+    <span class="qlabel">q1 (max 3)<br>あふれ=最古を捨てる</span>
+    <div class="thread bg">
+      <div class="name">Process thread</div>
+      <div class="sub">ASR → 翻訳 → TTS → q2</div>
+    </div>
+    <span class="qlabel">q2 (max 3)<br>あふれ=最古を捨てる</span>
+    <div class="thread bg">
+      <div class="name">Output thread</div>
+      <div class="sub">再生 + UI通知</div>
+    </div>
+  </div>
+</div>
+
+<table>
+  <tr><th>スレッド</th><th>役割</th><th>備考</th></tr>
+  <tr><td>UI (main)</td><td>tkinter mainloop。ユーザ操作と画面更新のみ。</td><td>常に応答可能を維持</td></tr>
+  <tr><td>Loader</td><td>各レイヤのバックエンドを順にインスタンス化(モデルロード)。完了/失敗を UI に通知。</td><td>1回限り起動・終了</td></tr>
+  <tr><td>Input</td><td>capture.read_chunk → vad.process で Utterance を作って q1 に投入。</td><td>取りこぼし最小化</td></tr>
+  <tr><td>Process</td><td>q1 から取り出し、ASR → 翻訳 → TTS を直列実行して q2 に投入。</td><td>処理が重い段</td></tr>
+  <tr><td>Output</td><td>q2 から取り出して再生、on_utterance_done コールバックを発火。</td><td>処理中の発話と並行再生可</td></tr>
+</table>
+
+<p class="small">
+キューあふれ時は<strong>最古の発話を捨てて新しい発話を優先</strong>する(リアルタイム性確保)。
+発話の取りこぼしが続く場合は Process 側のレイテンシ過大のシグナルとしてログに記録する。
+</p>
+
+<h3>停止シーケンス</h3>
+<ol>
+  <li>stop_event をセット → Input スレッドが次の read_chunk 完了後に終了</li>
+  <li>q1 にセンチネルを投入 → Process スレッドが終了</li>
+  <li>q2 にセンチネルを投入 → Output スレッドが終了</li>
+  <li>各スレッドを join → capture.stop() / output.stop() を呼んでデバイス解放</li>
+</ol>
+
+<h3>モデル状態(UI公開)</h3>
+<p>各レイヤのバックエンドについて以下の 3 状態を AppController が保持し、GUI に色付きラベルで表示する(英語固定)。</p>
+<table>
+  <tr><th>状態</th><th>表示</th><th>意味</th></tr>
+  <tr><td>NOT_DOWNLOADED</td><td>"Not Downloaded"(赤)</td><td>ローカルキャッシュ無し。起動時にDLが走る。</td></tr>
+  <tr><td>LOADING</td><td>"Loading..."(オレンジ)</td><td>DL or メモリへロード中。</td></tr>
+  <tr><td>LOADED</td><td>"Loaded"(緑)</td><td>メモリにロード済み or キャッシュ済み(即ロード可)。</td></tr>
+</table>
 
 <!-- =================================================== -->
 <h2>2. 各レイヤの役割</h2>
@@ -139,11 +208,13 @@
 <h3>横断機能</h3>
 <table>
   <tr><th>機能</th><th>役割</th></tr>
-  <tr><td><strong>PipelineCoordinator</strong></td><td>各レイヤを直列に接続し、Utterance を流す。開始/停止のライフサイクルを管理。</td></tr>
+  <tr><td><strong>AppController</strong></td><td>GUI と内部モジュールの仲介。Loader スレッド起動 / バックエンド生成 / モデル状態の発信 / 設定操作の窓口。</td></tr>
+  <tr><td><strong>PipelineCoordinator</strong></td><td>Input/Process/Output の 3 スレッドを起動・停止し、上限付きキューで連携。</td></tr>
   <tr><td><strong>ConfigStore</strong></td><td>選択中のバックエンド、デバイス、言語ペア、ログ出力先などの設定を YAML で永続化。</td></tr>
   <tr><td><strong>Logger</strong></td><td>アプリ全般のログ + 翻訳履歴の jsonl 出力。出力先と ON/OFF は設定から取得。</td></tr>
   <tr><td><strong>ErrorHandler</strong></td><td>例外を 致命 / 回復可能 / スキップ可能 / 警告 の4分類で振り分ける。詳細は <code>ErrorCatalog.md</code>(未作成) 参照予定。</td></tr>
-  <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態の可視化を提供する(customtkinter)。</td></tr>
+  <tr><td><strong>cache_check</strong></td><td>各バックエンドのモデルがローカルキャッシュにあるかを軽量判定。GUI の初期ステータス表示に使う。</td></tr>
+  <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態 + モデルステータスの可視化を提供する(customtkinter)。</td></tr>
 </table>
 
 <!-- =================================================== -->

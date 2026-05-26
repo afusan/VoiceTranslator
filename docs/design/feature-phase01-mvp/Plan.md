@@ -67,6 +67,13 @@ Phase 1 (MVP) の作業計画。
 20. smallテストの追補(各バックエンドのモック単位)
 21. README とユーザマニュアル(`docs/manual.md`)の肉付け
 
+### ステップ 7(追加): スレッド分割(B+案)とモデルステータスUI
+22. `PipelineCoordinator` を Input/Process/Output の 3 スレッド構成に書き換え(上限付きキュー、あふれは最古を捨てる)
+23. `AppController` に Loader スレッド経由の `start_pipeline_async()` を追加
+24. `ModelStatus`(NOT_DOWNLOADED / LOADING / LOADED, 英語表示固定)と `cache_check` の追加
+25. `SettingsPanel` にレイヤ別ステータスラベル(色付き)を表示
+26. `ControlPanel` を非同期起動対応にし、ロード中状態を表示
+
 ---
 
 ## 想定コミット粒度
@@ -79,12 +86,14 @@ Phase 1 (MVP) の作業計画。
 
 ## 完了条件 (Definition of Done)
 
-- [ ] uv 環境で `uv sync` → `uv run python -m voice_translator` でGUIが起動する
-- [ ] 録音WAVを入力源にできるE2Eテストが通る(`pytest` 一発)
-- [ ] 入力デバイスをスピーカ(ループバック)、出力デバイスを別物に設定して、英語音声 → 日本語TTS が再生される
-- [ ] 入力=出力 のバリデーションで起動拒否されることを目視確認
-- [ ] 設定の保存/読込ができる
-- [ ] レイテンシが画面に表示される
+- [x] uv 環境で `uv sync` → `py -m uv run python -m voice_translator` でGUIが起動する
+- [x] 録音WAVを入力源にできるE2Eテストが通る(`pytest` 一発、139件)
+- [ ] 入力デバイスをスピーカ(ループバック)、出力デバイスを別物に設定して、英語音声 → 日本語TTS が再生される(実機目視確認)
+- [ ] 入力=出力 のバリデーションで起動拒否されることを目視確認(実機目視確認)
+- [x] 設定の保存/読込ができる
+- [x] レイテンシが画面に表示される
+- [x] UI フリーズが起きない(Loader スレッドでモデル初期化を非同期化)
+- [x] レイヤ別モデルステータスが UI に表示される(英語: Not Downloaded / Loading... / Loaded)
 
 ---
 

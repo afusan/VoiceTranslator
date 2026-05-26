@@ -10,3 +10,7 @@ htmlcov/
 
 # uv / venv
 .venv/
+
+# アプリ実行時の出力
+/logs/
+/config.yaml
