@@ -65,6 +65,7 @@ class Utterance:
 
     # TTS で追記
     tts_pcm: Any = None
+    tts_samplerate: int = 0  # 0 は未設定。AudioOutput が再生時に参照する。
 
     # 全ステージで mark
     timeline: UtteranceTimeline = field(default_factory=UtteranceTimeline)
