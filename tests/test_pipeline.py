@@ -215,6 +215,38 @@ class TestPipelineErrorHandling:
         assert len(output.played) == 0
 
 
+class TestPipelineQueueOverflow:
+    """キューあふれ時のドロップとログ出力を検証。"""
+
+    def test_drop_counts_start_empty(self) -> None:
+        coord, _ = _build()
+        assert coord.get_drop_counts() == {}
+
+    def test_overflow_logs_warning_and_counts(self, caplog) -> None:
+        """queue_size=1 にして強制的にあふれさせる。"""
+        import logging
+
+        # logger 名 "voice_translator" の WARN 以上を捕捉
+        caplog.set_level(logging.WARNING, logger="voice_translator")
+
+        coord, _ = _build(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(20)],
+            queue_size=1,  # 強制的にあふれさせる
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        # 少し待ってからチェック
+        time.sleep(0.2)
+        coord.stop()
+
+        counts = coord.get_drop_counts()
+        # q1 か q2 いずれかでドロップが記録されているはず
+        assert sum(counts.values()) > 0, f"ドロップが記録されていない: {counts}"
+
+        # WARN ログに "queue overflow" が含まれること
+        overflow_logs = [r for r in caplog.records if "queue overflow" in r.message]
+        assert overflow_logs, "queue overflow ログが出ていない"
+
+
 class TestPipelineTimeline:
     def test_timeline_is_populated(self) -> None:
         seen: list[Utterance] = []

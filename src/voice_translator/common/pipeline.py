@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from typing import Callable
@@ -48,6 +49,7 @@ class PipelineCoordinator:
         on_utterance_done: Callable[[Utterance], None] | None = None,
         read_timeout: float = 0.1,
         queue_size: int = 3,
+        logger: logging.Logger | None = None,
     ) -> None:
         self._capture = capture
         self._vad = vad
@@ -60,10 +62,14 @@ class PipelineCoordinator:
         self._tgt_lang = tgt_lang
         self._on_utterance_done = on_utterance_done
         self._read_timeout = read_timeout
+        self._logger = logger or logging.getLogger("voice_translator")
 
         # キュー(Utterance または _SENTINEL を流す)
         self._q1: queue.Queue = queue.Queue(maxsize=queue_size)
         self._q2: queue.Queue = queue.Queue(maxsize=queue_size)
+
+        # overflow 累計(stage名 → 累積ドロップ数)
+        self._drop_counts: dict[str, int] = {}
 
         # スレッド + 停止フラグ
         self._stop_event = threading.Event()
@@ -161,7 +167,7 @@ class PipelineCoordinator:
             for utt in utterances:
                 if self._stop_event.is_set():
                     break
-                self._put_with_drop(self._q1, utt)
+                self._put_with_drop(self._q1, utt, "q1(Input→Process)")
 
     def _process_loop(self) -> None:
         """q1 から Utterance を取り、ASR→翻訳→TTS して q2 へ渡す。"""
@@ -193,7 +199,7 @@ class PipelineCoordinator:
                     break
                 continue  # SKIP/CONTINUE/RETRY: 当該発話は破棄して継続
 
-            self._put_with_drop(self._q2, utt)
+            self._put_with_drop(self._q2, utt, "q2(Process→Output)")
 
     def _output_loop(self) -> None:
         """q2 から Utterance を取り、再生 + UI 通知。"""
@@ -261,15 +267,30 @@ class PipelineCoordinator:
             except queue.Full:
                 pass
 
-    @staticmethod
-    def _put_with_drop(q: queue.Queue, item: object) -> None:
-        """満杯なら古いものから捨てて新しいものを入れる(リアルタイム性優先)。"""
+    def _put_with_drop(self, q: queue.Queue, item: object, stage_name: str) -> None:
+        """満杯なら古いものから捨てて新しいものを入れる(リアルタイム性優先)。
+
+        捨てたら WARN ログを出して累計を更新する(案C: 完全並列化が必要かの判断材料)。
+        """
+        dropped = 0
         while True:
             try:
                 q.put_nowait(item)
+                if dropped > 0:
+                    total = self._drop_counts.get(stage_name, 0) + dropped
+                    self._drop_counts[stage_name] = total
+                    self._logger.warning(
+                        "queue overflow in %s: dropped %d utterance(s), total=%d",
+                        stage_name, dropped, total,
+                    )
                 return
             except queue.Full:
                 try:
                     q.get_nowait()
+                    dropped += 1
                 except queue.Empty:
                     pass
+
+    def get_drop_counts(self) -> dict[str, int]:
+        """ステージ別の累計ドロップ件数のコピーを返す(診断用)。"""
+        return dict(self._drop_counts)
