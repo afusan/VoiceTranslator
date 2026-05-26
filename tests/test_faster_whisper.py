@@ -110,30 +110,6 @@ class TestTranscribe:
         backend.transcribe(Utterance(pcm=np.ones(160, dtype=np.float32)), "auto")
         assert fake_model.transcribe.call_args.kwargs["language"] is None
 
-    def test_default_beam_size_is_5(self, fake_faster_whisper) -> None:
-        """Step1 で beam_size 既定値が 5 になっていること。"""
-        _, fake_model = fake_faster_whisper
-        from voice_translator.asr.faster_whisper_backend import (
-            FasterWhisperAsrBackend,
-        )
-
-        backend = FasterWhisperAsrBackend()
-        backend.transcribe(Utterance(pcm=np.ones(160, dtype=np.float32)))
-        assert fake_model.transcribe.call_args.kwargs["beam_size"] == 5
-
-    def test_condition_on_previous_text_is_true(self, fake_faster_whisper) -> None:
-        """文脈一貫性のため明示的に True を渡していること。"""
-        _, fake_model = fake_faster_whisper
-        from voice_translator.asr.faster_whisper_backend import (
-            FasterWhisperAsrBackend,
-        )
-
-        backend = FasterWhisperAsrBackend()
-        backend.transcribe(Utterance(pcm=np.ones(160, dtype=np.float32)))
-        assert (
-            fake_model.transcribe.call_args.kwargs["condition_on_previous_text"] is True
-        )
-
     def test_inference_exception_wrapped_fatal(self, fake_faster_whisper) -> None:
         _, fake_model = fake_faster_whisper
         fake_model.transcribe = MagicMock(side_effect=RuntimeError("oom"))

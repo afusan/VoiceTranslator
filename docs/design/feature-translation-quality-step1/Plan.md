@@ -51,11 +51,11 @@
 
 ## 完了条件 (Definition of Done)
 
-- [ ] パラメータ変更後の値が `silero_backend.py` / `faster_whisper_backend.py` の既定値に反映されている
-- [ ] `condition_on_previous_text=True` が明示的に指定されている
-- [ ] `_put_with_drop` が overflow 時に WARN ログを出す
-- [ ] 既存テスト(139件) + 新規 overflow ログテスト 全パス
-- [ ] 実機で翻訳結果が改善する(目視確認、ユーザレビュー)
+- [x] ~~パラメータ変更後の値が `silero_backend.py` / `faster_whisper_backend.py` の既定値に反映されている~~ → **revert 済(下記「結果」参照)**
+- [x] ~~`condition_on_previous_text=True` が明示的に指定されている~~ → **revert 済**
+- [x] `_put_with_drop` が overflow 時に WARN ログを出す
+- [x] 既存テスト + 新規 overflow ログテスト 全パス(141件)
+- [x] 実機で翻訳結果を検証(レイテンシ増で revert 決定)
 
 ---
 
@@ -64,6 +64,20 @@
 - VAD 調整によるレイテンシは +200〜400ms 増えるが、文単位の翻訳精度向上で体感は良くなる想定
 - Whisper `beam_size=5` は速度1.5倍程度遅くなる(精度とのトレードオフ)
 - これらの値が「現環境(faster-whisper small / NLLB-200 600M / CPU)」での暫定最適値であり、モデル変更時には再評価が必要
+
+---
+
+## 結果(2026-05-26 実機検証後)
+
+- パラメータ調整(VAD min_silence_ms / speech_pad_ms、Whisper beam_size)を実機で試したところ、**翻訳の質向上は感じられたものの、レイテンシ増(+合計0.9〜2.4秒)が大きすぎて使いにくい** と判断。
+- **VAD と Whisper のパラメータは元の値に revert**(min_silence_ms=500、speech_pad_ms=100、beam_size=1、condition_on_previous_text の明示も除去)。
+- **overflow ログ機能は残す**(レイテンシ影響なし、将来の案C判断材料として有用)。
+- 翻訳精度問題は他の手段で取り組む方針:
+  - Step 2(Whisper モデルサイズ変更 small→medium)
+  - Step 3(NLLB サイズ変更)
+  - Step 4(LLM翻訳)
+  - これらは別ブランチで進める。
+- パラメータの再チューニングは「他の機能拡充の後、必要になったら」見直す予定。
 
 ---
 

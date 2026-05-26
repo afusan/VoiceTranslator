@@ -26,7 +26,7 @@ class FasterWhisperAsrBackend(AsrBackend):
         model_size: str = "small",
         device: str = "cpu",
         compute_type: str = "int8",
-        beam_size: int = 5,  # 既定: 1→5(誤り低減、速度1.5倍程度遅)
+        beam_size: int = 1,
     ) -> None:
         try:
             from faster_whisper import WhisperModel  # type: ignore
@@ -59,7 +59,6 @@ class FasterWhisperAsrBackend(AsrBackend):
                 language=language,
                 task="transcribe",
                 beam_size=self._beam_size,
-                condition_on_previous_text=True,  # 文脈一貫性のため明示的に指定
             )
             # segments_iter はジェネレータ。すべて取得して連結。
             text = " ".join(seg.text.strip() for seg in segments_iter if seg.text)

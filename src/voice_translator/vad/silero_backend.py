@@ -39,8 +39,8 @@ class SileroVadBackend(VadBackend):
         self,
         *,
         threshold: float = 0.5,
-        min_silence_ms: int = 800,   # 既定: 500→800(文末まで待つ)
-        speech_pad_ms: int = 250,    # 既定: 100→250(語尾の子音を逃さない)
+        min_silence_ms: int = 500,
+        speech_pad_ms: int = 100,
     ) -> None:
         # 遅延 import: silero-vad は依存(onnxruntime/torch)が重いため、
         # クラス生成時にのみ取り込む。テストでは monkeypatch しやすい。
