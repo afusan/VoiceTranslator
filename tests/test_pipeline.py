@@ -120,6 +120,7 @@ def _build(
     chunks: list[PcmChunk] | None = None,
     asr: AsrBackend | None = None,
     on_done: Callable[[Utterance], None] | None = None,
+    queue_size: int = 50,  # テストでは取りこぼし防止のため大きめ
 ) -> tuple[PipelineCoordinator, FakeOutput]:
     if chunks is None:
         chunks = [np.zeros(160, dtype=np.float32) for _ in range(5)]
@@ -136,6 +137,7 @@ def _build(
         tgt_lang="ja",
         on_utterance_done=on_done,
         read_timeout=0.01,
+        queue_size=queue_size,
     )
     return coord, output
 
@@ -204,6 +206,7 @@ class TestPipelineErrorHandling:
             src_lang="en",
             tgt_lang="ja",
             read_timeout=0.01,
+            queue_size=50,
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         assert _wait_until(lambda: not coord.is_running, timeout=2.0)

@@ -1,7 +1,7 @@
 """SettingsPanel: 設定操作UI(customtkinter)。
 
 役割: バックエンド/デバイス/言語ペア/ログ出力先 のプルダウン+入力欄と、
-設定の保存/読込ボタンを提供する。すべての操作は AppController に委譲する。
+設定の保存/読込ボタンを提供する。レイヤ別のモデルステータス(英語表示)も併記する。
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from voice_translator.common.app_controller import AppController
-from voice_translator.common.types import LayerKind
+from voice_translator.common.types import LayerKind, ModelStatus
 
 # GUIで切替対象とするレイヤと表示ラベル
 _LAYER_LABELS: list[tuple[LayerKind, str]] = [
@@ -21,25 +21,28 @@ _LAYER_LABELS: list[tuple[LayerKind, str]] = [
     (LayerKind.OUTPUT, "音声出力"),
 ]
 
-# GUIに出す代表的な言語コード(NLLB対応分の主要なもの)
 _LANG_CHOICES: list[str] = [
     "auto", "en", "ja", "zh", "ko", "es", "fr", "de", "it", "pt", "ru", "ar",
     "hi", "th", "vi", "id", "tr",
 ]
 
+# ModelStatus → 色マップ(customtkinter は色名そのまま使える)
+_STATUS_COLORS: dict[ModelStatus, str] = {
+    ModelStatus.NOT_DOWNLOADED: "#dc2626",  # red
+    ModelStatus.LOADING: "#d97706",         # amber
+    ModelStatus.LOADED: "#16a34a",          # green
+}
+
 
 class SettingsPanel(ctk.CTkFrame):
-    """設定操作のパネル。
-
-    役割: 各種プルダウンと「保存/再読込」ボタンを表示。
-    値変更時には AppController.set_setting() を呼ぶ。
-    """
+    """設定操作のパネル + レイヤ別モデルステータス表示。"""
 
     def __init__(self, master, controller: AppController) -> None:
         super().__init__(master)
         self._controller = controller
 
         self._backend_vars: dict[LayerKind, ctk.StringVar] = {}
+        self._status_labels: dict[LayerKind, ctk.CTkLabel] = {}
         self._capture_var = ctk.StringVar(value="(未選択)")
         self._output_var = ctk.StringVar(value="(未選択)")
         self._src_var = ctk.StringVar(value=str(controller.get_setting("languages", "src", default="auto")))
@@ -48,16 +51,16 @@ class SettingsPanel(ctk.CTkFrame):
 
         self._build_widgets()
         self._populate_devices_into_dropdowns()
+        self._sync_all_status_labels()
 
     # ============================================================
     def _build_widgets(self) -> None:
         ctk.CTkLabel(self, text="設定", font=("", 16, "bold")).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 4)
+            row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4)
         )
 
         row = 1
-
-        # バックエンド選択(レイヤ別)
+        # バックエンド選択 + ステータス
         for layer, label in _LAYER_LABELS:
             ctk.CTkLabel(self, text=f"{label} バックエンド:").grid(
                 row=row, column=0, sticky="w", padx=10, pady=2
@@ -69,10 +72,14 @@ class SettingsPanel(ctk.CTkFrame):
                 self,
                 values=names,
                 variable=var,
-                command=lambda v, lyr=layer: self._controller.set_setting("backends", lyr.value, v),
+                command=lambda v, lyr=layer: self._on_backend_change(lyr, v),
             )
             option.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
             self._backend_vars[layer] = var
+
+            status_label = ctk.CTkLabel(self, text="-", text_color="#64748b", anchor="w")
+            status_label.grid(row=row, column=2, sticky="ew", padx=(4, 10), pady=2)
+            self._status_labels[layer] = status_label
             row += 1
 
         # 入力デバイス
@@ -82,7 +89,7 @@ class SettingsPanel(ctk.CTkFrame):
         self._capture_dropdown = ctk.CTkOptionMenu(
             self, values=["(列挙中)"], variable=self._capture_var, command=self._on_capture_changed
         )
-        self._capture_dropdown.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        self._capture_dropdown.grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
         row += 1
 
         # 出力デバイス
@@ -92,7 +99,7 @@ class SettingsPanel(ctk.CTkFrame):
         self._output_dropdown = ctk.CTkOptionMenu(
             self, values=["(列挙中)"], variable=self._output_var, command=self._on_output_changed
         )
-        self._output_dropdown.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        self._output_dropdown.grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
         row += 1
 
         # src 言語
@@ -102,7 +109,7 @@ class SettingsPanel(ctk.CTkFrame):
         ctk.CTkOptionMenu(
             self, values=_LANG_CHOICES, variable=self._src_var,
             command=lambda v: self._controller.set_setting("languages", "src", v),
-        ).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        ).grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
         row += 1
 
         # tgt 言語
@@ -114,7 +121,7 @@ class SettingsPanel(ctk.CTkFrame):
             values=[c for c in _LANG_CHOICES if c != "auto"],
             variable=self._tgt_var,
             command=lambda v: self._controller.set_setting("languages", "tgt", v),
-        ).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        ).grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
         row += 1
 
         # ログ出力先
@@ -122,7 +129,7 @@ class SettingsPanel(ctk.CTkFrame):
             row=row, column=0, sticky="w", padx=10, pady=2
         )
         log_frame = ctk.CTkFrame(self)
-        log_frame.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        log_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
         log_frame.columnconfigure(0, weight=1)
         log_entry = ctk.CTkEntry(log_frame, textvariable=self._log_dir_var)
         log_entry.grid(row=0, column=0, sticky="ew")
@@ -134,7 +141,7 @@ class SettingsPanel(ctk.CTkFrame):
 
         # 保存/再読込
         btn_frame = ctk.CTkFrame(self)
-        btn_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=10, pady=(8, 8))
+        btn_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 8))
         ctk.CTkButton(btn_frame, text="設定を保存", command=self._on_save).pack(
             side="left", padx=4
         )
@@ -146,13 +153,37 @@ class SettingsPanel(ctk.CTkFrame):
         )
 
         self.columnconfigure(1, weight=1)
+        self.columnconfigure(2, weight=0)
 
     # ============================================================
+    # ステータス更新(AppController から呼ばれる)
+    # ============================================================
+    def on_status_change(self, layer: LayerKind, status: ModelStatus) -> None:
+        """AppController からのコールバック(別スレッド可)。UIへ反映する。"""
+        # tkinter はメインスレッドからの更新が必須
+        self.after(0, lambda: self._apply_status(layer, status))
+
+    def _apply_status(self, layer: LayerKind, status: ModelStatus) -> None:
+        label = self._status_labels.get(layer)
+        if label is None:
+            return
+        label.configure(text=status.value, text_color=_STATUS_COLORS.get(status, "#64748b"))
+
+    def _sync_all_status_labels(self) -> None:
+        """初期化時/再読込後に全レイヤのステータスを一括反映する。"""
+        for layer, status in self._controller.get_all_model_statuses().items():
+            self._apply_status(layer, status)
+
+    # ============================================================
+    def _on_backend_change(self, layer: LayerKind, value: str) -> None:
+        self._controller.set_setting("backends", layer.value, value)
+        # set_setting 側でステータスは更新されるが、ラベル反映は明示的に行う
+        self._sync_all_status_labels()
+
     def _populate_devices_into_dropdowns(self) -> None:
-        """capture/output のプルダウンに最新のデバイス一覧を反映する。"""
         try:
             sources = self._controller.list_capture_sources()
-        except Exception as e:  # noqa: BLE001 - 取得失敗でもUIは動かす
+        except Exception as e:  # noqa: BLE001
             sources = []
             self._capture_dropdown.configure(values=[f"(取得失敗: {e})"])
         try:
@@ -164,7 +195,6 @@ class SettingsPanel(ctk.CTkFrame):
         if sources:
             self._capture_dropdown.configure(values=[s.display_name for s in sources])
             self._capture_id_map = {s.display_name: s.source_id for s in sources}
-            # 設定値が一致するものを優先選択
             current_id = self._controller.get_setting("devices", "input")
             for s in sources:
                 if s.source_id == current_id:
@@ -215,8 +245,8 @@ class SettingsPanel(ctk.CTkFrame):
             self._show_message(f"読込失敗: {e}")
         else:
             self._populate_devices_into_dropdowns()
+            self._sync_all_status_labels()
             self._show_message("設定を再読込しました")
 
     def _show_message(self, msg: str) -> None:
-        # 簡易: コンソール+トースト的にラベル更新したいところだが、MVPでは print のみ
         print(f"[SettingsPanel] {msg}")

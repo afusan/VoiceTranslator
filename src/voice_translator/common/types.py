@@ -67,6 +67,20 @@ class OutputDevice:
 # ============================================================
 # バックエンド メタ情報
 # ============================================================
+class ModelStatus(str, Enum):
+    """バックエンドモデルの状態(UI表示用)。表示文字列は英語固定。
+
+    役割: GUI でレイヤ別の準備状況を表すラベル。
+    - NOT_DOWNLOADED: ローカルキャッシュに無い(初回起動でDLが必要)。
+    - LOADING:        DL中 or メモリへロード中。
+    - LOADED:         メモリに読み込み済み or キャッシュ済みで即ロード可能。
+    """
+
+    NOT_DOWNLOADED = "Not Downloaded"
+    LOADING = "Loading..."
+    LOADED = "Loaded"
+
+
 @dataclass(frozen=True)
 class BackendCapabilities:
     """バックエンドの性能/対応特性を表すメタ情報。

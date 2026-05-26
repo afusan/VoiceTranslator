@@ -125,6 +125,7 @@ class TestPipelineE2EWithSynthPcm:
             src_lang="en",
             tgt_lang="ja",
             read_timeout=0.01,
+            queue_size=100,  # テストでは取りこぼし防止のため大きめ
         )
 
         coord.start(capture_source_id="wav_replay", output_device_id="dummy_out")
@@ -169,6 +170,7 @@ class TestPipelineE2EWithSynthPcm:
             src_lang="en",
             tgt_lang="ja",
             read_timeout=0.01,
+            queue_size=100,
         )
         coord.start(capture_source_id="wav_replay", output_device_id="dummy_out")
         assert _wait_until(lambda: len(output.played) >= 1, timeout=3.0)

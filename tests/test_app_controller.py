@@ -150,6 +150,79 @@ class TestStartPipeline:
             ctrl.stop_pipeline()
 
 
+class TestAsyncStart:
+    def test_start_async_invokes_on_started(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        import threading
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+
+        started = threading.Event()
+        ctrl.start_pipeline_async(on_started=lambda: started.set())
+        try:
+            assert started.wait(timeout=3.0), "on_started が呼ばれない"
+            assert ctrl.is_running
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_start_async_invalid_device_raises_synchronously(
+        self, populated_registry, config
+    ) -> None:
+        from voice_translator.common.errors import FatalError
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        # devices は既定で None → 検証エラー
+        with pytest.raises(FatalError):
+            ctrl.start_pipeline_async()
+
+
+class TestModelStatus:
+    def test_initial_status_for_known_backends(
+        self, populated_registry, config, monkeypatch
+    ) -> None:
+        # cache_check 系を全部 LOADED に固定
+        from voice_translator.common import cache_check
+        monkeypatch.setattr(cache_check, "check_faster_whisper", lambda *a, **k: cache_check.ModelStatus.LOADED)
+        monkeypatch.setattr(cache_check, "check_nllb200", lambda *a, **k: cache_check.ModelStatus.LOADED)
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        from voice_translator.common.types import LayerKind, ModelStatus
+
+        for layer in LayerKind:
+            assert ctrl.get_model_status(layer) == ModelStatus.LOADED
+
+    def test_status_listener_invoked_during_load(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        import threading
+        from voice_translator.common.types import LayerKind, ModelStatus
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+
+        events: list[tuple[LayerKind, ModelStatus]] = []
+        ctrl.set_callbacks(on_status_change=lambda l, s: events.append((l, s)))
+
+        started = threading.Event()
+        ctrl.start_pipeline_async(on_started=lambda: started.set())
+        try:
+            assert started.wait(timeout=3.0)
+        finally:
+            ctrl.stop_pipeline()
+
+        # 全レイヤが LOADING → LOADED の遷移を踏んだことを確認
+        for layer in LayerKind:
+            seen = [s for (l, s) in events if l == layer]
+            assert ModelStatus.LOADING in seen, f"{layer}: LOADING 未通知"
+            assert seen[-1] == ModelStatus.LOADED, f"{layer}: 最終状態が LOADED でない"
+
+
 class TestCallbacks:
     def test_on_utterance_done_is_invoked_with_jsonl_write(
         self, populated_registry, config, tmp_path
