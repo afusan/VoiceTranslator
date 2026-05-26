@@ -22,12 +22,10 @@
 
 ---
 
-## [2026-05-26] 翻訳前後テキストの個別ログ出力(デバッグ用)
-- **内容**: 翻訳前テキスト(src_text)と翻訳後テキスト(tgt_text)を、現状の jsonl とは別に**個別のテキストファイル**としても出力できるようにする。出力可否は設定でON/OFF切替可能。
-- **背景**: jsonl は機械処理向けで人間が斜め読みしにくい。デバッグや翻訳品質チェックの場面では「src だけ通読」「tgt だけ通読」したいケースがある。
-- **対応の見送り理由**: MVPの jsonl で機能要件は満たしている。デバッグ用途は実装後の運用で必要性が見えてから対応する方が手戻りが少ない。
-- **再検討トリガ**: 翻訳品質を継続的に評価したいフェーズに入った時 / バックエンド差し替え(Phase 2)で比較が必要になった時。
-- **備考**: `Logger` レイヤに追加するのが自然。設定キーは `log.src_text_enabled` / `log.tgt_text_enabled` あたり。出力先ファイルは `<log_dir>/src.txt` / `<log_dir>/tgt.txt`。
+## [✅完了 2026-05-26] 翻訳前後テキストの個別ログ出力(デバッグ用)
+- **対応コミット**: `7e78950` / マージ `de9b9d1`(`feature/individual-text-logs`)
+- **対応内容**: `TextLogger` クラス追加、ファイル名は `soundsrc.txt` / `translated.txt`、ConfigStore に `log.src_text_enabled` / `log.tgt_text_enabled` 追加(既定 OFF)、書式 `[YYYY-MM-DD HH:MM:SS] [lang] text`、`config.yaml` で個別 ON/OFF。
+- **未対応 / 将来課題**: GUI からの ON/OFF 切替は未実装(`config.yaml` 直接編集)。Phase 2 で SettingsPanel に追加検討。
 
 ---
 
