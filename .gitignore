@@ -1,1 +1,16 @@
 /tmp
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# uv / venv
+.venv/
+
+# アプリ実行時の出力
+/logs/
+/config.yaml
