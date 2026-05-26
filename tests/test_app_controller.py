@@ -249,3 +249,79 @@ class TestCallbacks:
 
         assert seen == [u]
         assert (tmp_path / "logs" / "translations.jsonl").exists()
+
+
+class TestTextLoggerIntegration:
+    """AppController と TextLogger の連携を検証。"""
+
+    def test_text_logger_created_after_start_with_settings(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        import threading
+        from voice_translator.common.logger import TextLogger
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        ctrl.set_setting("log", "src_text_enabled", True)
+        ctrl.set_setting("log", "tgt_text_enabled", True)
+
+        started = threading.Event()
+        ctrl.start_pipeline_async(on_started=lambda: started.set())
+        try:
+            assert started.wait(timeout=3.0)
+            assert isinstance(ctrl._text_logger, TextLogger)
+            assert ctrl._text_logger.src_enabled is True
+            assert ctrl._text_logger.tgt_enabled is True
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_handle_utterance_done_writes_text_files(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        from voice_translator.common.logger import TextLogger, TranslationLogger
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+
+        # ロガーを直接差し込んで _handle_utterance_done を叩く
+        ctrl._translation_logger = TranslationLogger(
+            tmp_path / "logs" / "translations.jsonl", enabled=False
+        )
+        ctrl._text_logger = TextLogger(
+            src_path=tmp_path / "logs" / "soundsrc.txt",
+            tgt_path=tmp_path / "logs" / "translated.txt",
+            src_enabled=True,
+            tgt_enabled=True,
+        )
+
+        u = Utterance(src_text="hi", tgt_text="やあ", src_lang="en", tgt_lang="ja")
+        ctrl._handle_utterance_done(u)
+
+        assert (tmp_path / "logs" / "soundsrc.txt").exists()
+        assert (tmp_path / "logs" / "translated.txt").exists()
+
+    def test_text_logger_failure_does_not_block_callback(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        """TextLogger.write が例外を出しても UI コールバックは呼ばれる。"""
+        from unittest.mock import MagicMock
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        seen: list[Utterance] = []
+        ctrl.set_callbacks(on_utterance_done=lambda u: seen.append(u))
+
+        ctrl._text_logger = MagicMock()
+        ctrl._text_logger.write = MagicMock(side_effect=OSError("disk"))
+
+        u = Utterance(src_text="hi", tgt_text="やあ")
+        ctrl._handle_utterance_done(u)
+        assert seen == [u]
+
+
+class TestConfigDefaults:
+    def test_text_log_defaults_off(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_setting("log", "src_text_enabled") is False
+        assert ctrl.get_setting("log", "tgt_text_enabled") is False

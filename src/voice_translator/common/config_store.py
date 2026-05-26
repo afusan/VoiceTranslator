@@ -34,9 +34,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "output": "soundcard",
     },
     "log": {
-        "directory": "./logs",      # ログ・jsonl の出力先
-        "jsonl_enabled": True,      # 翻訳履歴 jsonl の出力 ON/OFF
-        "show_translation": True,   # GUI への翻訳テキスト表示 ON/OFF
+        "directory": "./logs",        # ログ・jsonl・テキスト の出力先
+        "jsonl_enabled": True,        # 翻訳履歴 jsonl の出力 ON/OFF(機械処理向け)
+        "src_text_enabled": False,    # 翻訳前テキスト soundsrc.txt の出力 ON/OFF(デバッグ用)
+        "tgt_text_enabled": False,    # 翻訳後テキスト translated.txt の出力 ON/OFF(デバッグ用)
+        "show_translation": True,     # GUI への翻訳テキスト表示 ON/OFF
     },
     "latency": {
         "warn_threshold_sec": 5.0,  # これを超えたら WARN

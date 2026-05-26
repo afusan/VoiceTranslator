@@ -119,6 +119,23 @@ MVP では各レイヤ1実装のみ:
 - アプリ全般ログ: `<ログ出力先>/app.log`
 - 翻訳履歴(jsonl): `<ログ出力先>/translations.jsonl`
   - 1行 = 1発話、`{ts, src_text, tgt_text, src_lang, tgt_lang, latency_ms, timeline}` を含む。
+- (任意) 翻訳前テキスト: `<ログ出力先>/soundsrc.txt`
+- (任意) 翻訳後テキスト: `<ログ出力先>/translated.txt`
+  - 既定は OFF。`config.yaml` で個別に ON 可能(下記参照)。
+  - 書式: `[YYYY-MM-DD HH:MM:SS] [lang] text`
+
+### 翻訳前後テキストの個別ログ(デバッグ用)
+翻訳品質を斜め読みでチェックしたいときに使う。`config.yaml` を編集して有効化:
+```yaml
+log:
+  directory: ./logs
+  jsonl_enabled: true
+  src_text_enabled: true    # 翻訳前(soundsrc.txt)を出力する
+  tgt_text_enabled: true    # 翻訳後(translated.txt)を出力する
+```
+- src/tgt 個別に ON/OFF 可能
+- 空テキストの発話はスキップされる(無音応答ノイズを抑える)
+- 追記モード(起動ごとに継続)、ローテーションなし
 
 ---
 
