@@ -40,6 +40,17 @@ class TestInitialization:
         # samplerate=16000 が渡されていること
         assert fake_module.VADIterator.call_args.kwargs["sampling_rate"] == 16000
 
+    def test_default_tuning_values(self, fake_silero) -> None:
+        """Step1 で更新したデフォルト値が VADIterator に渡ること。"""
+        fake_module, _ = fake_silero
+        from voice_translator.vad.silero_backend import SileroVadBackend
+
+        SileroVadBackend()
+        kwargs = fake_module.VADIterator.call_args.kwargs
+        assert kwargs["min_silence_duration_ms"] == 800  # 既定 500 → 800
+        assert kwargs["speech_pad_ms"] == 250            # 既定 100 → 250
+        assert kwargs["threshold"] == 0.5                # 維持
+
     def test_load_failure_raises_fatal(self, monkeypatch) -> None:
         # silero_vad import 時に例外を出す
         fake_module = MagicMock()
