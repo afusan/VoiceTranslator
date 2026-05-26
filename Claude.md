@@ -9,7 +9,7 @@
 - **アーキテクチャを意識**する。役割ベースの分割を優先する。
 - **クラスの役割を決めて表明**する。表明先は以下の2か所:
   - 該当クラスのコメント/Docstring の冒頭に1〜2行で役割を明記。
-  - `docs/design/Architecture.md` のクラス一覧に役割を記載。
+  - `docs/design/Class.md` のクラス一覧に役割を記載(レイヤ単位の責務は `Architecture.html`)。
 - 役割に沿って拡張し、異なる役割とみなせる場合は**役割を分割**する。
 - クラスは可能な限り**単一責任原則**を順守する。
 
@@ -33,7 +33,8 @@
 docs/
 ├── manual.md                  … アプリケーションの使い方
 └── design/
-    ├── Architecture.md        … アーキテクチャ(クラスとその役割)
+    ├── Architecture.html      … アーキテクチャ(レイヤ図・役割・I/F)
+    ├── Class.md               … クラス/モジュール詳細(Architectureから参照)
     ├── UserSinario.md         … ユーザシナリオ
     ├── TaskList.md            … 実装タスクリスト(全体)
     ├── pendList.md            … 保留・暫定決定リスト
@@ -43,9 +44,11 @@ docs/
 ```
 
 ※ 本アプリは DB を持たないため `DataModel.md` は作成しない(必要になったら追加)。
+※ `Architecture` は図を含むため html、`Class` はテキスト中心のため md。
 
 リンク一覧:
-- [docs/design/Architecture.md](docs/design/Architecture.md) — アーキテクチャ
+- [docs/design/Architecture.html](docs/design/Architecture.html) — アーキテクチャ(レイヤ図・役割・I/F)
+- [docs/design/Class.md](docs/design/Class.md) — クラス/モジュール詳細
 - [docs/design/UserSinario.md](docs/design/UserSinario.md) — ユーザシナリオ
 - [docs/design/TaskList.md](docs/design/TaskList.md) — 実装タスクリスト
 - [docs/design/pendList.md](docs/design/pendList.md) — 保留・暫定決定

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Architecture (アーキテクチャ)</title>
+<style>
+  body { font-family: "Yu Gothic UI", "Meiryo", sans-serif; max-width: 1100px; margin: 2em auto; padding: 0 1.2em; color: #1f2937; line-height: 1.65; }
+  h1 { border-bottom: 3px solid #2563eb; padding-bottom: 0.3em; }
+  h2 { border-bottom: 2px solid #94a3b8; padding-bottom: 0.2em; margin-top: 2em; color: #1e3a8a; }
+  h3 { margin-top: 1.5em; color: #1e40af; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.95em; }
+  th, td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: #e0e7ff; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-family: "Cascadia Code", Consolas, monospace; font-size: 0.92em; }
+  .callout { background: #eff6ff; border-left: 4px solid #2563eb; padding: 0.8em 1em; margin: 1em 0; }
+  .small { font-size: 0.88em; color: #475569; }
+  a { color: #1d4ed8; }
+
+  /* Layer diagram */
+  .pipeline { display: flex; flex-direction: column; align-items: stretch; margin: 1.5em 0; gap: 0; }
+  .row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0; }
+  .stage {
+    display: inline-flex; flex-direction: column; align-items: center;
+    background: linear-gradient(180deg,#dbeafe,#bfdbfe);
+    border: 2px solid #1d4ed8; border-radius: 8px;
+    padding: 10px 14px; min-width: 110px; text-align: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.07);
+  }
+  .stage .name { font-weight: 700; color: #1e3a8a; font-size: 1.0em; }
+  .stage .sub { font-size: 0.78em; color: #1e40af; margin-top: 2px; }
+  .arrow {
+    display: inline-flex; flex-direction: column; align-items: center;
+    margin: 0 4px; min-width: 90px;
+  }
+  .arrow .label {
+    font-size: 0.78em; color: #475569; background: #fff;
+    padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+    border: 1px dashed #94a3b8;
+  }
+  .arrow .line {
+    font-size: 1.4em; color: #2563eb; line-height: 1; margin-top: 2px;
+  }
+  .cross-row {
+    display: flex; gap: 1em; justify-content: center; margin-top: 1.8em;
+    flex-wrap: wrap;
+  }
+  .cross {
+    background: #fef3c7; border: 2px solid #d97706; border-radius: 8px;
+    padding: 8px 14px; min-width: 130px; text-align: center;
+  }
+  .cross .name { font-weight: 700; color: #92400e; }
+  .cross .sub { font-size: 0.78em; color: #78350f; margin-top: 2px; }
+  .ctrl-band {
+    margin: 1.2em auto 0; background: #ecfeff; border: 2px dashed #0e7490;
+    border-radius: 8px; padding: 6px 12px; text-align: center; max-width: 80%;
+    color: #155e75; font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<h1>Architecture (アーキテクチャ)</h1>
+<p class="small">
+本ドキュメントは <strong>レイヤ構成 / 各レイヤの役割 / レイヤ間でやり取りするデータ(I/F)</strong> を定義する。<br>
+クラス・モジュール単位の詳細は <a href="Class.md">Class.md</a> を参照。
+</p>
+
+<!-- =================================================== -->
+<h2>1. 全体レイヤ図</h2>
+
+<div class="pipeline">
+
+  <!-- main pipeline row -->
+  <div class="row">
+    <div class="stage"><div class="name">AudioCapture</div><div class="sub">入力</div></div>
+    <div class="arrow"><div class="label">PCMストリーム<br>(16k/mono/f32)</div><div class="line">→</div></div>
+    <div class="stage"><div class="name">VAD</div><div class="sub">発話区切り</div></div>
+    <div class="arrow"><div class="label">発話単位PCM</div><div class="line">→</div></div>
+    <div class="stage"><div class="name">ASR</div><div class="sub">書き起こし</div></div>
+    <div class="arrow"><div class="label">srcテキスト</div><div class="line">→</div></div>
+    <div class="stage"><div class="name">Translator</div><div class="sub">翻訳</div></div>
+    <div class="arrow"><div class="label">tgtテキスト</div><div class="line">→</div></div>
+    <div class="stage"><div class="name">TTS</div><div class="sub">音声合成</div></div>
+    <div class="arrow"><div class="label">合成PCM</div><div class="line">→</div></div>
+    <div class="stage"><div class="name">AudioOutput</div><div class="sub">出力</div></div>
+  </div>
+
+  <div class="ctrl-band">PipelineCoordinator(発話単位 Utterance を全段に流し、開始/停止を制御)</div>
+
+  <div class="cross-row">
+    <div class="cross"><div class="name">ConfigStore</div><div class="sub">設定保存/読込</div></div>
+    <div class="cross"><div class="name">Logger</div><div class="sub">画面 + jsonl</div></div>
+    <div class="cross"><div class="name">ErrorHandler</div><div class="sub">致命/回復/スキップ/警告</div></div>
+    <div class="cross"><div class="name">GUI</div><div class="sub">設定 + 動作操作</div></div>
+  </div>
+
+</div>
+
+<p class="small">
+青ブロック: パイプラインステージ(直列接続)。 黄ブロック: 横断機能。 シアン帯: パイプライン制御。<br>
+全ステージは「抽象I/F + 1つの具象実装」で構成し、後で差し替え可能にする(MVPは各1実装のみ)。
+</p>
+
+<!-- =================================================== -->
+<h2>2. 各レイヤの役割</h2>
+
+<table>
+  <tr>
+    <th>レイヤ</th>
+    <th>役割</th>
+  </tr>
+  <tr>
+    <td><strong>AudioCapture</strong></td>
+    <td>選択された入力デバイスから音声を取得し、内部標準フォーマット(16kHz/mono/float32)に正規化してパイプラインに供給する。</td>
+  </tr>
+  <tr>
+    <td><strong>VAD</strong></td>
+    <td>連続するPCMストリームから発話区間を検出し、無音で区切って「1発話 = 1 Utterance」として下流に流す。</td>
+  </tr>
+  <tr>
+    <td><strong>ASR</strong></td>
+    <td>発話単位の音声を入力言語のテキストに書き起こす。出力先言語の指定はしない(=翻訳しない)。</td>
+  </tr>
+  <tr>
+    <td><strong>Translator</strong></td>
+    <td>書き起こしテキストを src言語 → tgt言語 に翻訳する。</td>
+  </tr>
+  <tr>
+    <td><strong>TTS</strong></td>
+    <td>翻訳テキストを音声(PCM)に合成する。</td>
+  </tr>
+  <tr>
+    <td><strong>AudioOutput</strong></td>
+    <td>合成音声を、入力とは別の出力デバイスで再生する。</td>
+  </tr>
+</table>
+
+<h3>横断機能</h3>
+<table>
+  <tr><th>機能</th><th>役割</th></tr>
+  <tr><td><strong>PipelineCoordinator</strong></td><td>各レイヤを直列に接続し、Utterance を流す。開始/停止のライフサイクルを管理。</td></tr>
+  <tr><td><strong>ConfigStore</strong></td><td>選択中のバックエンド、デバイス、言語ペア、ログ出力先などの設定を YAML で永続化。</td></tr>
+  <tr><td><strong>Logger</strong></td><td>アプリ全般のログ + 翻訳履歴の jsonl 出力。出力先と ON/OFF は設定から取得。</td></tr>
+  <tr><td><strong>ErrorHandler</strong></td><td>例外を 致命 / 回復可能 / スキップ可能 / 警告 の4分類で振り分ける。詳細は <code>ErrorCatalog.md</code>(未作成) 参照予定。</td></tr>
+  <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態の可視化を提供する(customtkinter)。</td></tr>
+</table>
+
+<!-- =================================================== -->
+<h2>3. レイヤ間でやり取りする情報 (I/F)</h2>
+<p>レイヤ間は <code>Utterance</code> という発話単位データを介して受け渡す。各ステージで該当フィールドを追記していく形にし、計測用に <code>timeline</code> に各時点のタイムスタンプを打つ。</p>
+
+<table>
+  <tr>
+    <th>境界</th>
+    <th>流れるデータ</th>
+    <th>形式 / 仕様</th>
+  </tr>
+  <tr>
+    <td>AudioCapture → VAD</td>
+    <td>PCMチャンクの連続ストリーム</td>
+    <td>16kHz / mono / float32 [-1.0, 1.0]、固定サイズチャンク(例: 20〜30ms)</td>
+  </tr>
+  <tr>
+    <td>VAD → ASR</td>
+    <td>発話単位PCM (Utterance に格納)</td>
+    <td><code>Utterance.pcm</code>(可変長), <code>timeline: t_capture, t_vad_end</code></td>
+  </tr>
+  <tr>
+    <td>ASR → Translator</td>
+    <td>書き起こしテキスト + 言語情報</td>
+    <td><code>Utterance.src_text: str</code>, <code>src_lang: str</code>, <code>timeline.t_asr</code></td>
+  </tr>
+  <tr>
+    <td>Translator → TTS</td>
+    <td>翻訳済みテキスト + 言語情報</td>
+    <td><code>Utterance.tgt_text: str</code>, <code>tgt_lang: str</code>, <code>timeline.t_translate</code></td>
+  </tr>
+  <tr>
+    <td>TTS → AudioOutput</td>
+    <td>合成済み PCM</td>
+    <td><code>Utterance.tts_pcm</code>(エンジン依存レート/形式), <code>timeline.t_tts</code></td>
+  </tr>
+  <tr>
+    <td>AudioOutput → デバイス</td>
+    <td>再生されたチャンク</td>
+    <td>出力デバイスのネイティブ形式(必要なら出力レイヤで変換)、<code>timeline.t_playback</code></td>
+  </tr>
+  <tr>
+    <td>(終端) → Logger</td>
+    <td>翻訳1件のログ</td>
+    <td>jsonl 1行: <code>{ts, src_text, tgt_text, src_lang, tgt_lang, latency_ms, ...}</code></td>
+  </tr>
+</table>
+
+<div class="callout">
+<strong>Utterance(発話単位データ)について</strong><br>
+各ステージで追記される共通データクラス。タイムスタンプは <code>timeline.mark(stage_name)</code> で <code>monotonic()</code> を打つ。<br>
+詳細フィールド定義は <a href="Class.md">Class.md</a> を参照。
+</div>
+
+<!-- =================================================== -->
+<h2>4. データフロー(発話1件あたり)</h2>
+<ol>
+  <li><strong>AudioCapture</strong>: PCMチャンクを連続取得し、内部標準形式に正規化。</li>
+  <li><strong>VAD</strong>: 無音で区切り、<code>Utterance</code> として確定(<code>t_capture</code>, <code>t_vad_end</code>)。</li>
+  <li><strong>ASR</strong>: 書き起こして <code>src_text</code> を付与(<code>t_asr</code>)。</li>
+  <li><strong>Translator</strong>: 翻訳して <code>tgt_text</code> を付与(<code>t_translate</code>)。</li>
+  <li><strong>TTS</strong>: 合成PCMを生成(<code>t_tts</code>)。</li>
+  <li><strong>AudioOutput</strong>: 出力デバイスで再生(<code>t_playback</code>)。</li>
+  <li><strong>Logger</strong>: jsonl に1行記録(レイテンシ算出)。</li>
+</ol>
+
+<!-- =================================================== -->
+<h2>5. 拡張ポイント</h2>
+<ul>
+  <li>新しいバックエンドを追加するときは、対応する抽象I/Fを実装し <code>BackendRegistry</code> に登録するだけでGUIに出現する。</li>
+  <li>OS別の音声取得は <code>AudioCapture</code> の差し替えで対応(Windows = soundcard、Linux = GStreamer 等)。</li>
+  <li>per-app 音声取得は OS別バックエンドの一部として将来追加(pendList参照)。</li>
+  <li>ローカルLLM翻訳は <code>Translator</code> の追加実装で対応(例: Ollama)。</li>
+</ul>
+
+<!-- =================================================== -->
+<h2>6. 横断方針</h2>
+<ul>
+  <li><strong>役割の表明</strong>: 各クラスのコメント/Docstring 冒頭に1〜2行で役割を明記する(CLAUDE.md 準拠)。</li>
+  <li><strong>エラー</strong>: 各バックエンドは内部例外を <code>AppError</code>(severity 付き) に包んで送出。中央で <code>ErrorHandler</code> が4分類に振り分ける。</li>
+  <li><strong>計測</strong>: 全ステージで <code>Utterance.timeline.mark()</code> を呼ぶ。</li>
+  <li><strong>デバイス分離</strong>: 起動時に入力デバイス ≠ 出力デバイスを保証(同一なら起動拒否)。AEC は将来オプション。</li>
+</ul>
+
+<p class="small">
+詳細(クラス名/メソッド/バックエンド一覧/GUIクラス階層 等)は <a href="Class.md">Class.md</a> を参照。
+</p>
+
+</body>
+</html>
