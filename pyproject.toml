@@ -15,8 +15,8 @@ dependencies = [
     "torch>=2.2",
     "sentencepiece>=0.2",
     "pyttsx3>=2.90",
-    # GUI(Step 5)で追加予定:
-    # customtkinter
+    # GUI(Step 5):
+    "customtkinter>=5.2",
 ]
 
 [dependency-groups]

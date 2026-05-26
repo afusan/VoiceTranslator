@@ -1,0 +1,222 @@
+"""SettingsPanel: 設定操作UI(customtkinter)。
+
+役割: バックエンド/デバイス/言語ペア/ログ出力先 のプルダウン+入力欄と、
+設定の保存/読込ボタンを提供する。すべての操作は AppController に委譲する。
+"""
+
+from __future__ import annotations
+
+import customtkinter as ctk
+
+from voice_translator.common.app_controller import AppController
+from voice_translator.common.types import LayerKind
+
+# GUIで切替対象とするレイヤと表示ラベル
+_LAYER_LABELS: list[tuple[LayerKind, str]] = [
+    (LayerKind.CAPTURE, "音声取得"),
+    (LayerKind.VAD, "VAD"),
+    (LayerKind.ASR, "ASR(書き起こし)"),
+    (LayerKind.TRANSLATOR, "翻訳"),
+    (LayerKind.TTS, "TTS(音声合成)"),
+    (LayerKind.OUTPUT, "音声出力"),
+]
+
+# GUIに出す代表的な言語コード(NLLB対応分の主要なもの)
+_LANG_CHOICES: list[str] = [
+    "auto", "en", "ja", "zh", "ko", "es", "fr", "de", "it", "pt", "ru", "ar",
+    "hi", "th", "vi", "id", "tr",
+]
+
+
+class SettingsPanel(ctk.CTkFrame):
+    """設定操作のパネル。
+
+    役割: 各種プルダウンと「保存/再読込」ボタンを表示。
+    値変更時には AppController.set_setting() を呼ぶ。
+    """
+
+    def __init__(self, master, controller: AppController) -> None:
+        super().__init__(master)
+        self._controller = controller
+
+        self._backend_vars: dict[LayerKind, ctk.StringVar] = {}
+        self._capture_var = ctk.StringVar(value="(未選択)")
+        self._output_var = ctk.StringVar(value="(未選択)")
+        self._src_var = ctk.StringVar(value=str(controller.get_setting("languages", "src", default="auto")))
+        self._tgt_var = ctk.StringVar(value=str(controller.get_setting("languages", "tgt", default="ja")))
+        self._log_dir_var = ctk.StringVar(value=str(controller.get_setting("log", "directory", default="./logs")))
+
+        self._build_widgets()
+        self._populate_devices_into_dropdowns()
+
+    # ============================================================
+    def _build_widgets(self) -> None:
+        ctk.CTkLabel(self, text="設定", font=("", 16, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 4)
+        )
+
+        row = 1
+
+        # バックエンド選択(レイヤ別)
+        for layer, label in _LAYER_LABELS:
+            ctk.CTkLabel(self, text=f"{label} バックエンド:").grid(
+                row=row, column=0, sticky="w", padx=10, pady=2
+            )
+            names = self._controller.list_backends(layer) or ["(未登録)"]
+            current = str(self._controller.get_setting("backends", layer.value, default=names[0]))
+            var = ctk.StringVar(value=current)
+            option = ctk.CTkOptionMenu(
+                self,
+                values=names,
+                variable=var,
+                command=lambda v, lyr=layer: self._controller.set_setting("backends", lyr.value, v),
+            )
+            option.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+            self._backend_vars[layer] = var
+            row += 1
+
+        # 入力デバイス
+        ctk.CTkLabel(self, text="入力デバイス:").grid(
+            row=row, column=0, sticky="w", padx=10, pady=2
+        )
+        self._capture_dropdown = ctk.CTkOptionMenu(
+            self, values=["(列挙中)"], variable=self._capture_var, command=self._on_capture_changed
+        )
+        self._capture_dropdown.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        row += 1
+
+        # 出力デバイス
+        ctk.CTkLabel(self, text="出力デバイス:").grid(
+            row=row, column=0, sticky="w", padx=10, pady=2
+        )
+        self._output_dropdown = ctk.CTkOptionMenu(
+            self, values=["(列挙中)"], variable=self._output_var, command=self._on_output_changed
+        )
+        self._output_dropdown.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        row += 1
+
+        # src 言語
+        ctk.CTkLabel(self, text="入力言語 (src):").grid(
+            row=row, column=0, sticky="w", padx=10, pady=2
+        )
+        ctk.CTkOptionMenu(
+            self, values=_LANG_CHOICES, variable=self._src_var,
+            command=lambda v: self._controller.set_setting("languages", "src", v),
+        ).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        row += 1
+
+        # tgt 言語
+        ctk.CTkLabel(self, text="出力言語 (tgt):").grid(
+            row=row, column=0, sticky="w", padx=10, pady=2
+        )
+        ctk.CTkOptionMenu(
+            self,
+            values=[c for c in _LANG_CHOICES if c != "auto"],
+            variable=self._tgt_var,
+            command=lambda v: self._controller.set_setting("languages", "tgt", v),
+        ).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        row += 1
+
+        # ログ出力先
+        ctk.CTkLabel(self, text="ログ出力先:").grid(
+            row=row, column=0, sticky="w", padx=10, pady=2
+        )
+        log_frame = ctk.CTkFrame(self)
+        log_frame.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+        log_frame.columnconfigure(0, weight=1)
+        log_entry = ctk.CTkEntry(log_frame, textvariable=self._log_dir_var)
+        log_entry.grid(row=0, column=0, sticky="ew")
+        log_entry.bind(
+            "<FocusOut>",
+            lambda _e: self._controller.set_setting("log", "directory", self._log_dir_var.get()),
+        )
+        row += 1
+
+        # 保存/再読込
+        btn_frame = ctk.CTkFrame(self)
+        btn_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=10, pady=(8, 8))
+        ctk.CTkButton(btn_frame, text="設定を保存", command=self._on_save).pack(
+            side="left", padx=4
+        )
+        ctk.CTkButton(btn_frame, text="設定を再読込", command=self._on_reload).pack(
+            side="left", padx=4
+        )
+        ctk.CTkButton(btn_frame, text="デバイス再列挙", command=self._populate_devices_into_dropdowns).pack(
+            side="left", padx=4
+        )
+
+        self.columnconfigure(1, weight=1)
+
+    # ============================================================
+    def _populate_devices_into_dropdowns(self) -> None:
+        """capture/output のプルダウンに最新のデバイス一覧を反映する。"""
+        try:
+            sources = self._controller.list_capture_sources()
+        except Exception as e:  # noqa: BLE001 - 取得失敗でもUIは動かす
+            sources = []
+            self._capture_dropdown.configure(values=[f"(取得失敗: {e})"])
+        try:
+            devices = self._controller.list_output_devices()
+        except Exception as e:  # noqa: BLE001
+            devices = []
+            self._output_dropdown.configure(values=[f"(取得失敗: {e})"])
+
+        if sources:
+            self._capture_dropdown.configure(values=[s.display_name for s in sources])
+            self._capture_id_map = {s.display_name: s.source_id for s in sources}
+            # 設定値が一致するものを優先選択
+            current_id = self._controller.get_setting("devices", "input")
+            for s in sources:
+                if s.source_id == current_id:
+                    self._capture_var.set(s.display_name)
+                    break
+            else:
+                self._capture_var.set(sources[0].display_name)
+                self._controller.set_setting("devices", "input", sources[0].source_id)
+        else:
+            self._capture_id_map = {}
+
+        if devices:
+            self._output_dropdown.configure(values=[d.display_name for d in devices])
+            self._output_id_map = {d.display_name: d.device_id for d in devices}
+            current_id = self._controller.get_setting("devices", "output")
+            for d in devices:
+                if d.device_id == current_id:
+                    self._output_var.set(d.display_name)
+                    break
+            else:
+                self._output_var.set(devices[0].display_name)
+                self._controller.set_setting("devices", "output", devices[0].device_id)
+        else:
+            self._output_id_map = {}
+
+    def _on_capture_changed(self, display_name: str) -> None:
+        device_id = self._capture_id_map.get(display_name)
+        if device_id:
+            self._controller.set_setting("devices", "input", device_id)
+
+    def _on_output_changed(self, display_name: str) -> None:
+        device_id = self._output_id_map.get(display_name)
+        if device_id:
+            self._controller.set_setting("devices", "output", device_id)
+
+    def _on_save(self) -> None:
+        try:
+            self._controller.save_settings()
+        except Exception as e:  # noqa: BLE001
+            self._show_message(f"保存失敗: {e}")
+        else:
+            self._show_message("設定を保存しました")
+
+    def _on_reload(self) -> None:
+        try:
+            self._controller.load_settings()
+        except Exception as e:  # noqa: BLE001
+            self._show_message(f"読込失敗: {e}")
+        else:
+            self._populate_devices_into_dropdowns()
+            self._show_message("設定を再読込しました")
+
+    def _show_message(self, msg: str) -> None:
+        # 簡易: コンソール+トースト的にラベル更新したいところだが、MVPでは print のみ
+        print(f"[SettingsPanel] {msg}")
