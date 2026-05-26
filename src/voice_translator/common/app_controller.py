@@ -22,7 +22,7 @@ from .backend_registry import BackendRegistry
 from .config_store import ConfigStore
 from .device_validator import DeviceValidator
 from .error_handler import ErrorHandler
-from .logger import TranslationLogger
+from .logger import TextLogger, TranslationLogger
 from .pipeline import PipelineCoordinator
 from .types import CaptureSource, LayerKind, ModelStatus, OutputDevice
 from .utterance import Utterance
@@ -56,6 +56,7 @@ class AppController:
 
         self._coord: PipelineCoordinator | None = None
         self._translation_logger: TranslationLogger | None = None
+        self._text_logger: TextLogger | None = None
         self._loader_thread: threading.Thread | None = None
 
         # UI コールバック(既定は no-op)
@@ -223,11 +224,19 @@ class AppController:
         output = self._create(LayerKind.OUTPUT)
         self._set_status(LayerKind.OUTPUT, ModelStatus.LOADED)
 
-        # 翻訳jsonl
+        # 翻訳jsonl + 個別テキストログ
         log_dir = Path(self._config.get("log", "directory", default="./logs"))
         jsonl_enabled = bool(self._config.get("log", "jsonl_enabled", default=True))
+        src_text_enabled = bool(self._config.get("log", "src_text_enabled", default=False))
+        tgt_text_enabled = bool(self._config.get("log", "tgt_text_enabled", default=False))
         self._translation_logger = TranslationLogger(
             log_dir / "translations.jsonl", enabled=jsonl_enabled
+        )
+        self._text_logger = TextLogger(
+            src_path=log_dir / "soundsrc.txt",
+            tgt_path=log_dir / "translated.txt",
+            src_enabled=src_text_enabled,
+            tgt_enabled=tgt_text_enabled,
         )
 
         error_handler = ErrorHandler(
@@ -282,7 +291,12 @@ class AppController:
             if self._translation_logger is not None:
                 self._translation_logger.write(utterance)
         except Exception:  # noqa: BLE001
-            self._logger.exception("翻訳ログ書き出しに失敗")
+            self._logger.exception("翻訳ログ(jsonl)書き出しに失敗")
+        try:
+            if self._text_logger is not None:
+                self._text_logger.write(utterance)
+        except Exception:  # noqa: BLE001
+            self._logger.exception("テキストログ書き出しに失敗")
         try:
             self._on_utterance_done(utterance)
         except Exception:  # noqa: BLE001

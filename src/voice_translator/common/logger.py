@@ -1,6 +1,9 @@
-"""アプリログ + 翻訳履歴 jsonl 出力。
+"""アプリログ + 翻訳履歴 jsonl 出力 + デバッグ用テキストログ。
 
-役割: 標準ロガーの初期化(stdout + ファイル)と、翻訳1件あたりの jsonl 追記を担う。
+役割:
+- 標準ロガーの初期化(stdout + ファイル)
+- 翻訳1件 = jsonl 1行(機械処理向け、`TranslationLogger`)
+- 翻訳前/翻訳後テキストの個別追記(人間用デバッグ、`TextLogger`)
 出力先と各 ON/OFF は `ConfigStore` から取得する想定。
 詳細は docs/design/Class.md を参照。
 """
@@ -95,3 +98,66 @@ class TranslationLogger:
             "latency_ms": latency_ms,
             "timeline": timeline,
         }
+
+
+class TextLogger:
+    """翻訳前後テキストを人間用に追記するロガー(デバッグ用)。
+
+    役割: 1発話につき
+    - 翻訳前テキスト(src_text)を `soundsrc.txt` に
+    - 翻訳後テキスト(tgt_text)を `translated.txt` に
+    それぞれ追記する。出力 ON/OFF は src/tgt 個別に設定可能。
+    既存 jsonl は機械処理用、本クラスは人間が斜め読みするのが目的。
+    """
+
+    def __init__(
+        self,
+        *,
+        src_path: Path | str,
+        tgt_path: Path | str,
+        src_enabled: bool = False,
+        tgt_enabled: bool = False,
+    ) -> None:
+        self._src_path = Path(src_path)
+        self._tgt_path = Path(tgt_path)
+        self._src_enabled = bool(src_enabled)
+        self._tgt_enabled = bool(tgt_enabled)
+        # 有効な側だけ親ディレクトリを作成しておく(無効側はファイルすら作らない)
+        if self._src_enabled:
+            self._src_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._tgt_enabled:
+            self._tgt_path.parent.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def src_enabled(self) -> bool:
+        """src 側(翻訳前)が有効かどうか。"""
+        return self._src_enabled
+
+    @property
+    def tgt_enabled(self) -> bool:
+        """tgt 側(翻訳後)が有効かどうか。"""
+        return self._tgt_enabled
+
+    def write(self, utt: Utterance) -> None:
+        """Utterance の src_text/tgt_text を各々のファイルに追記する。
+
+        - 空文字なら該当側はスキップ(無音や空応答のノイズを抑える)。
+        - 無効側はノーオペレーション。
+        """
+        if self._src_enabled:
+            text = (utt.src_text or "").strip()
+            if text:
+                self._append(self._src_path, text, utt.src_lang or "")
+        if self._tgt_enabled:
+            text = (utt.tgt_text or "").strip()
+            if text:
+                self._append(self._tgt_path, text, utt.tgt_lang or "")
+
+    @staticmethod
+    def _append(path: Path, text: str, lang: str) -> None:
+        """1行を UTF-8 / LF で追記する。書式: `[YYYY-MM-DD HH:MM:SS] [lang] text\\n`"""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lang_part = f"[{lang}] " if lang else ""
+        # newline="" で Python の自動改行変換を無効化し、明示的に \n を書く
+        with path.open("a", encoding="utf-8", newline="") as f:
+            f.write(f"[{ts}] {lang_part}{text}\n")
