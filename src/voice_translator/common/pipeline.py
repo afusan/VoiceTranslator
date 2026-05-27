@@ -47,6 +47,7 @@ class PipelineCoordinator:
         src_lang: str = "auto",
         tgt_lang: str = "ja",
         on_utterance_done: Callable[[Utterance], None] | None = None,
+        on_dropped: Callable[[list[Utterance], str], None] | None = None,
         read_timeout: float = 0.1,
         queue_size: int = 3,
         logger: logging.Logger | None = None,
@@ -61,6 +62,7 @@ class PipelineCoordinator:
         self._src_lang = src_lang
         self._tgt_lang = tgt_lang
         self._on_utterance_done = on_utterance_done
+        self._on_dropped = on_dropped
         self._read_timeout = read_timeout
         self._logger = logger or logging.getLogger("voice_translator")
 
@@ -186,6 +188,9 @@ class PipelineCoordinator:
             try:
                 self._asr.transcribe(utt, self._src_lang)
                 utt.timeline.mark("t_asr")
+                # ASR 完了後は元音声(pcm)は不要。下流に渡らないようメモリ解放
+                # (q2 滞留中のメモリ占有を減らす)。shortcutList A-1 部分対処。
+                utt.pcm = None
 
                 self._translator.translate(utt, self._tgt_lang)
                 utt.timeline.mark("t_translate")
@@ -270,24 +275,30 @@ class PipelineCoordinator:
     def _put_with_drop(self, q: queue.Queue, item: object, stage_name: str) -> None:
         """満杯なら古いものから捨てて新しいものを入れる(リアルタイム性優先)。
 
-        捨てたら WARN ログを出して累計を更新する(案C: 完全並列化が必要かの判断材料)。
+        捨てた発話があれば WARN ログ + 累計更新 + `on_dropped` コールバック呼び出し。
+        on_dropped は呼び出し元(AppController) が TextLogger に渡すなどに使う。
         """
-        dropped = 0
+        dropped_items: list[Utterance] = []
         while True:
             try:
                 q.put_nowait(item)
-                if dropped > 0:
-                    total = self._drop_counts.get(stage_name, 0) + dropped
+                if dropped_items:
+                    count = len(dropped_items)
+                    total = self._drop_counts.get(stage_name, 0) + count
                     self._drop_counts[stage_name] = total
                     self._logger.warning(
                         "queue overflow in %s: dropped %d utterance(s), total=%d",
-                        stage_name, dropped, total,
+                        stage_name, count, total,
                     )
+                    if self._on_dropped is not None:
+                        try:
+                            self._on_dropped(dropped_items, stage_name)
+                        except Exception:  # noqa: BLE001 - コールバック失敗で停止しない
+                            self._logger.exception("on_dropped callback failed")
                 return
             except queue.Full:
                 try:
-                    q.get_nowait()
-                    dropped += 1
+                    dropped_items.append(q.get_nowait())
                 except queue.Empty:
                     pass
 

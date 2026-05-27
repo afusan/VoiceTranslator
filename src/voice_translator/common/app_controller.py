@@ -259,6 +259,7 @@ class AppController:
             src_lang=src_lang,
             tgt_lang=tgt_lang,
             on_utterance_done=self._handle_utterance_done,
+            on_dropped=self._handle_dropped,
         )
         self._coord.start(
             capture_source_id=input_id, output_device_id=output_id
@@ -301,3 +302,18 @@ class AppController:
             self._on_utterance_done(utterance)
         except Exception:  # noqa: BLE001
             self._logger.exception("UI 通知コールバックで例外")
+
+    def _handle_dropped(self, dropped_items: list[Utterance], stage_name: str) -> None:
+        """キューあふれで捨てられた発話のテキストだけはログに残す。
+
+        Output に届かなかったので jsonl(レイテンシ計測前提)には書かないが、
+        TextLogger には src_text/tgt_text が完成していれば追記する。
+        TextLogger 側で空テキストはスキップされるため、q1 ドロップ(src/tgt未確定)も無害。
+        """
+        if self._text_logger is None or not dropped_items:
+            return
+        for utt in dropped_items:
+            try:
+                self._text_logger.write(utt)
+            except Exception:  # noqa: BLE001
+                self._logger.exception("ドロップ発話のテキストログ書き出しに失敗")

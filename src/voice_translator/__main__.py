@@ -34,9 +34,9 @@ def main() -> None:
     logger = setup_app_logger(log_dir=log_dir)
     logger.info("voice_translator 起動")
 
-    # 3) バックエンド登録
+    # 3) バックエンド登録(config 連携で SAPI rate 等を反映)
     registry = BackendRegistry()
-    register_default_backends(registry)
+    register_default_backends(registry, config)
 
     # 4) AppController と MainWindow
     controller = AppController(registry=registry, config=config, app_logger=logger)

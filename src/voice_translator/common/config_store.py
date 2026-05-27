@@ -43,6 +43,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "latency": {
         "warn_threshold_sec": 5.0,  # これを超えたら WARN
     },
+    # 各バックエンド固有の設定値(GUI公開はまだ。手動で config.yaml 編集)
+    "backends_config": {
+        "sapi": {
+            "rate": 180,  # 読み上げ速度(WPM相当)。早口にするなら 220 等。
+        },
+    },
 }
 
 
