@@ -14,3 +14,8 @@ htmlcov/
 # アプリ実行時の出力
 /logs/
 /config.yaml
+
+# IDE
+.vs/
+.idea/
+.vscode/

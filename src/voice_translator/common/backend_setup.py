@@ -1,21 +1,28 @@
 """デフォルトのバックエンドを BackendRegistry に登録するヘルパ。
 
 役割: アプリ起動時に MVP の標準バックエンド(soundcard/silero/faster-whisper/
-NLLB-200/SAPI/soundcard)をレイヤごとに登録する。後で別実装を追加するときは
-ここを拡張する。
+NLLB-200/SAPI/soundcard)をレイヤごとに登録する。`config` を渡すと、各バックエンド
+固有のパラメータ(SAPI rate 等)を `config.yaml` から読み込んで反映する。
+後で別実装を追加するときはここを拡張する。
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 from .backend_registry import BackendRegistry
+from .config_store import ConfigStore
 from .types import LayerKind
 
 
-def register_default_backends(registry: BackendRegistry) -> None:
+def register_default_backends(
+    registry: BackendRegistry,
+    config: ConfigStore | None = None,
+) -> None:
     """MVP の標準バックエンドを一括登録する。
 
-    各クラスのコンストラクタは引数なしで呼べる(設定は外から渡さず既定値)。
-    実引数を渡したい場合はラッパファクトリで登録すること。
+    `config` を渡すと、SAPI rate などのバックエンド固有設定を反映する。
+    渡さない場合は各バックエンドのコンストラクタ既定値が使われる。
     """
     from voice_translator.asr.faster_whisper_backend import FasterWhisperAsrBackend
     from voice_translator.capture.soundcard_backend import SoundcardCaptureBackend
@@ -28,5 +35,22 @@ def register_default_backends(registry: BackendRegistry) -> None:
     registry.register(LayerKind.VAD, "silero", SileroVadBackend)
     registry.register(LayerKind.ASR, "faster_whisper", FasterWhisperAsrBackend)
     registry.register(LayerKind.TRANSLATOR, "nllb200", Nllb200TranslatorBackend)
-    registry.register(LayerKind.TTS, "sapi", SapiTtsBackend)
+
+    # SAPI は config から rate を取って渡す(設定なしなら既定 180)
+    sapi_rate = _read_int(config, ("backends_config", "sapi", "rate"), default=180)
+    registry.register(
+        LayerKind.TTS, "sapi", lambda: SapiTtsBackend(rate=sapi_rate)
+    )
+
     registry.register(LayerKind.OUTPUT, "soundcard", SoundcardOutputBackend)
+
+
+def _read_int(config: ConfigStore | None, keys: tuple[str, ...], *, default: int) -> int:
+    """config から int 値を取り出す。失敗時は default。"""
+    if config is None:
+        return default
+    value: Any = config.get(*keys, default=default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default

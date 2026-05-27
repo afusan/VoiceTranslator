@@ -64,3 +64,41 @@ class TestRegisterDefaultBackends:
 
         registry.create(LayerKind.ASR, "faster_whisper")
         patched_backend_setup["FasterWhisperAsrBackend"].assert_called_once()
+
+
+class TestSapiRateConfigIntegration:
+    """SAPI バックエンドの rate が config から読まれることを検証。"""
+
+    def test_default_rate_without_config(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)  # config なし
+        registry.create(LayerKind.TTS, "sapi")
+        # SapiTtsBackend が rate=180 で呼ばれる
+        patched_backend_setup["SapiTtsBackend"].assert_called_with(rate=180)
+
+    def test_rate_read_from_config(self, patched_backend_setup, tmp_path) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "sapi", "rate", 250)
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.TTS, "sapi")
+        patched_backend_setup["SapiTtsBackend"].assert_called_with(rate=250)
+
+    def test_invalid_rate_falls_back_to_default(self, patched_backend_setup, tmp_path) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "sapi", "rate", "not-a-number")
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.TTS, "sapi")
+        # 不正値は既定 180 にフォールバック
+        patched_backend_setup["SapiTtsBackend"].assert_called_with(rate=180)
