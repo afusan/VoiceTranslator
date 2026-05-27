@@ -325,3 +325,55 @@ class TestConfigDefaults:
         ctrl = AppController(registry=populated_registry, config=config)
         assert ctrl.get_setting("log", "src_text_enabled") is False
         assert ctrl.get_setting("log", "tgt_text_enabled") is False
+
+    def test_sapi_rate_default(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_setting("backends_config", "sapi", "rate") == 180
+
+
+class TestHandleDropped:
+    """AppController._handle_dropped が TextLogger に発話を流すことを検証。"""
+
+    def test_dropped_items_written_to_text_logger(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        from voice_translator.common.logger import TextLogger
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        ctrl._text_logger = TextLogger(
+            src_path=tmp_path / "logs" / "soundsrc.txt",
+            tgt_path=tmp_path / "logs" / "translated.txt",
+            src_enabled=True,
+            tgt_enabled=True,
+        )
+
+        utts = [
+            Utterance(src_text="hello", src_lang="en", tgt_text="こんにちは", tgt_lang="ja"),
+            Utterance(src_text="world", src_lang="en", tgt_text="世界", tgt_lang="ja"),
+        ]
+        ctrl._handle_dropped(utts, "q2(Process→Output)")
+
+        src_lines = (tmp_path / "logs" / "soundsrc.txt").read_text(encoding="utf-8").splitlines()
+        tgt_lines = (tmp_path / "logs" / "translated.txt").read_text(encoding="utf-8").splitlines()
+        assert len(src_lines) == 2
+        assert len(tgt_lines) == 2
+        assert "hello" in src_lines[0] and "world" in src_lines[1]
+        assert "こんにちは" in tgt_lines[0] and "世界" in tgt_lines[1]
+
+    def test_no_text_logger_is_safe(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl._text_logger = None
+        # 例外なく終わること
+        ctrl._handle_dropped([Utterance(src_text="x")], "q1")
+
+    def test_text_logger_exception_does_not_propagate(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        from unittest.mock import MagicMock
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl._text_logger = MagicMock()
+        ctrl._text_logger.write = MagicMock(side_effect=OSError("disk"))
+        # 例外を内部で握って継続できること
+        ctrl._handle_dropped([Utterance(src_text="x")], "q2")

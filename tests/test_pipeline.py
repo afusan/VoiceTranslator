@@ -247,6 +247,125 @@ class TestPipelineQueueOverflow:
         assert overflow_logs, "queue overflow ログが出ていない"
 
 
+class TestPipelineOnDroppedCallback:
+    """on_dropped コールバックの動作検証。"""
+
+    def test_callback_invoked_on_overflow(self) -> None:
+        seen: list[tuple[list[Utterance], str]] = []
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(20)]
+        output = FakeOutput()
+        coord = PipelineCoordinator(
+            capture=FakeCapture(chunks),
+            vad=FakeVad(every_n_chunks=1),
+            asr=FakeAsr(),
+            translator=FakeTranslator(),
+            tts=FakeTts(),
+            output=output,
+            error_handler=ErrorHandler(),
+            src_lang="en",
+            tgt_lang="ja",
+            read_timeout=0.01,
+            queue_size=1,
+            on_dropped=lambda items, stage: seen.append((items, stage)),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.2)
+        coord.stop()
+
+        assert seen, "on_dropped が一度も呼ばれていない"
+        for items, stage in seen:
+            assert isinstance(items, list)
+            assert all(isinstance(u, Utterance) for u in items)
+            assert stage.startswith("q")
+
+    def test_callback_not_invoked_without_overflow(self) -> None:
+        seen: list = []
+        coord, output = _build(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(3)],
+            queue_size=50,
+        )
+        # _build は on_dropped を渡していないので別途差し込む
+        coord._on_dropped = lambda items, stage: seen.append((items, stage))
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: len(output.played) >= 3)
+        coord.stop()
+        assert seen == [], "あふれていないのに on_dropped が呼ばれた"
+
+    def test_callback_exception_does_not_stop_pipeline(self, caplog) -> None:
+        import logging
+        caplog.set_level(logging.ERROR, logger="voice_translator")
+
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(20)]
+        output = FakeOutput()
+        coord = PipelineCoordinator(
+            capture=FakeCapture(chunks),
+            vad=FakeVad(every_n_chunks=1),
+            asr=FakeAsr(),
+            translator=FakeTranslator(),
+            tts=FakeTts(),
+            output=output,
+            error_handler=ErrorHandler(),
+            src_lang="en",
+            tgt_lang="ja",
+            read_timeout=0.01,
+            queue_size=1,
+            on_dropped=lambda items, stage: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.2)
+        # まだ動いていること(コールバック例外で死んでいない)
+        assert coord.is_running or sum(coord.get_drop_counts().values()) > 0
+        coord.stop()
+        # エラーログが記録される
+        assert any("on_dropped callback failed" in r.message for r in caplog.records)
+
+
+class TestProcessPcmRelease:
+    """ASR 完了後に utt.pcm が None になることを検証(shortcutList A-1 部分対処)。"""
+
+    def test_pcm_is_released_after_asr(self) -> None:
+        captured_pcm_in_asr: list = []
+        released_pcm_after: list = []
+
+        class PcmInspectorAsr(AsrBackend):
+            def transcribe(self, utterance: Utterance, src_lang: str = "auto") -> Utterance:
+                # ASR 中は pcm がある
+                captured_pcm_in_asr.append(utterance.pcm)
+                utterance.src_text = "x"
+                return utterance
+
+        class PcmCheckTranslator(TranslatorBackend):
+            def translate(self, utterance: Utterance, tgt_lang: str) -> Utterance:
+                # 翻訳ステージに来た時点で pcm は None になっているはず
+                released_pcm_after.append(utterance.pcm)
+                utterance.tgt_text = "y"
+                return utterance
+
+        chunks = [np.ones(160, dtype=np.float32)]
+        output = FakeOutput()
+        coord = PipelineCoordinator(
+            capture=FakeCapture(chunks),
+            vad=FakeVad(every_n_chunks=1),
+            asr=PcmInspectorAsr(),
+            translator=PcmCheckTranslator(),
+            tts=FakeTts(),
+            output=output,
+            error_handler=ErrorHandler(),
+            src_lang="en",
+            tgt_lang="ja",
+            read_timeout=0.01,
+            queue_size=50,
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: len(output.played) >= 1)
+        coord.stop()
+
+        assert captured_pcm_in_asr, "ASR が呼ばれていない"
+        assert captured_pcm_in_asr[0] is not None, "ASR時点でpcmがNoneになっている(早すぎる解放)"
+        assert released_pcm_after, "翻訳が呼ばれていない"
+        assert released_pcm_after[0] is None, "ASR後にpcmが解放されていない"
+
+
 class TestPipelineTimeline:
     def test_timeline_is_populated(self) -> None:
         seen: list[Utterance] = []
