@@ -864,3 +864,129 @@ class TestPipelineSeqIdConsistency:
         assert done_seq_ids == []
         # SKIP 後も他発話の処理は継続している(=ASR は複数回呼ばれた)
         assert len(coord.ledger) == 0
+
+
+# ============================================================
+# キューフル時の並行性: 消費者が処理中の発話が、生産者の put/drop で壊されないこと
+# ============================================================
+class TestPipelineQueueFullConcurrency:
+    """C/C++ 的な「list[0] を処理中に生産者が [0] を書き換える」懸念の検証。
+
+    Python の queue.Queue は get() した瞬間に内部から要素が消えるため、
+    消費者(翻訳スレッド)の処理中要素を生産者(ASRスレッド)が触ることは構造上できない。
+    さらに PipelineMessage / 各 *Payload は frozen dataclass なので、
+    参照が共有されていてもフィールド書き換えはできない。
+    本テストでは「翻訳ゆっくり化 → 後段キュー満杯 → ドロップ多数」の状況で、
+    翻訳中の発話が正しく完了することを実測で確認する。
+    """
+
+    def test_translator_in_progress_item_not_corrupted_by_overflow(self) -> None:
+        import threading as _t
+
+        gate_started = _t.Event()
+        gate_release = _t.Event()
+        translate_inputs: list[tuple[int, str]] = []  # (呼び出し回, src_text)
+        translate_outputs: list[str] = []
+
+        class SlowFirstTranslator(TranslatorBackend):
+            """1回目だけ意図的にブロックする翻訳。"""
+            def __init__(self) -> None:
+                self._count = 0
+                self._lock = _t.Lock()
+
+            def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:
+                with self._lock:
+                    self._count += 1
+                    n = self._count
+                translate_inputs.append((n, src_text))
+                if n == 1:
+                    # 翻訳中シグナル → 解放されるまで待機(その間 q_tr に後続が溜まる)
+                    gate_started.set()
+                    gate_release.wait(timeout=3.0)
+                # 結果は「入力文字列 + 呼び出し回」: 入力が途中で書き換わったら検出できる
+                out = f"{src_text}::call_{n}"
+                translate_outputs.append(out)
+                return out
+
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(20)]
+        slow_translator = SlowFirstTranslator()
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            translator=slow_translator,
+            # q_tr を最小化して、翻訳ブロック中に必ず満杯になるよう仕向ける
+        )
+        # q_tr_size を小さくして強制的にあふれさせる
+        # _build_with_backends は q_*_size=50 を渡すので、別途 PipelineCoordinator を組み直す
+        # ↑ シンプル化のため独自に構築する
+        capture = FakeCapture(chunks)
+        out2 = FakeOutput()
+        seen_dropped: list[tuple[list[int], str]] = []
+        coord2 = PipelineCoordinator(
+            capture=capture,
+            vad=FakeVad(every_n_chunks=1),
+            asr=FakeAsr(),
+            translator=slow_translator,
+            tts=FakeTts(),
+            output=out2,
+            error_handler=ErrorHandler(),
+            src_lang="en",
+            tgt_lang="ja",
+            on_dropped=lambda sids, stage: seen_dropped.append((sids, stage)),
+            read_timeout=0.01,
+            q_raw_size=1, q_tr_size=1, q_xl_size=50, q_syn_size=50,
+        )
+
+        coord2.start(capture_source_id="dummy", output_device_id="dummy_out")
+        try:
+            # 1) 翻訳1件目がブロック状態に入るのを待つ
+            assert gate_started.wait(timeout=2.0), "翻訳1件目に到達しない"
+
+            # 2) その間、ASR が後続発話を生産して q_tr (size=1) に push しまくる
+            #    満杯のため _put_with_drop で旧要素を捨てる動作が走る
+            time.sleep(0.3)
+
+            # 3) 翻訳を解放
+            gate_release.set()
+
+            # 4) ブロックされていた1件目を含め、流れた分の再生が落ち着くまで待つ
+            time.sleep(0.5)
+        finally:
+            coord2.stop()
+
+        # 検証1: 翻訳1件目は「入力 hello、呼び出し回 1」で完了している。
+        #        途中で別の発話に書き換えられていないこと。
+        assert translate_inputs[0] == (1, "hello"), (
+            f"翻訳1件目の入力が壊れている: {translate_inputs[0]}"
+        )
+        # 出力も整合(入力テキストがそのまま戻ってきている)
+        assert translate_outputs[0] == "hello::call_1", (
+            f"翻訳1件目の出力が壊れている: {translate_outputs[0]}"
+        )
+
+        # 検証2: ドロップは実際に起きている(=テストが「満杯状況」を再現できている)
+        assert sum(len(s) for s, _ in seen_dropped) > 0, (
+            "q が満杯になったケースを再現できていない(テスト前提が崩れている)"
+        )
+
+        # 検証3: 全ての翻訳呼び出しが、入力テキスト hello のまま終わっている。
+        #        (入力が並行更新で書き換わったら "hello" 以外になっているはず)
+        for (_, src_text) in translate_inputs:
+            assert src_text == "hello"
+
+    def test_payload_is_frozen_against_mutation(self) -> None:
+        """Payload が frozen であることの再確認(構造的に書き換え不能であること)。
+
+        これが満たされていれば、たとえキュー外で参照が共有されてもフィールド書き換えは起きない。
+        """
+        from voice_translator.common.messages import (
+            PipelineMessage,
+            TranscribedPayload,
+        )
+
+        msg = PipelineMessage(seq_id=1, payload=TranscribedPayload("hi", "en"))
+        # seq_id 書き換え不可
+        with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
+            msg.seq_id = 99  # type: ignore[misc]
+        # payload フィールド書き換え不可
+        with pytest.raises(Exception):
+            msg.payload.src_text = "rewritten"  # type: ignore[misc]
