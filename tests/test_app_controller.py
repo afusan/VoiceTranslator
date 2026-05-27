@@ -317,7 +317,7 @@ class TestHandleDropped:
         caplog.set_level(logging.INFO, logger="voice_translator")
 
         ctrl = AppController(registry=populated_registry, config=config)
-        ctrl._handle_dropped([10, 11, 12], "q_raw(Input→ASR)")
+        ctrl._handle_dropped([10, 11, 12], "captured_queue(Input→ASR)")
 
         info_logs = [r for r in caplog.records if "dropped seq_ids" in r.message]
         assert info_logs, "ドロップログが出ていない"
@@ -325,4 +325,4 @@ class TestHandleDropped:
     def test_empty_seq_ids_is_noop(self, populated_registry, config) -> None:
         ctrl = AppController(registry=populated_registry, config=config)
         # 例外なく終わること
-        ctrl._handle_dropped([], "q_raw")
+        ctrl._handle_dropped([], "captured_queue")

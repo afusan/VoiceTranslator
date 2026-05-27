@@ -4,21 +4,15 @@
 
 ---
 
-## [2026-05-27] PipelineCoordinator のキュー変数名を意味のある名前にリネーム
-- **対象**: `PipelineCoordinator` 内のキュー変数とコンストラクタ引数。
-  - 現状の名前: `q_raw` / `q_tr` / `q_xl` / `q_syn`
-  - 対応する引数: `q_raw_size` / `q_tr_size` / `q_xl_size` / `q_syn_size`
-  - ステージ間対応: `q_raw`=Input→ASR、`q_tr`=ASR→Translator(transcribed)、`q_xl`=Translator→TTS(translated)、`q_syn`=TTS→Output(synthesized)
-- **背景**: 5スレッド版への書き換え時(`refactor/pipeline-5thread`)に、ループ内で頻出するため短縮形を採用した。Python では PEP 8 的に descriptive な名前が推奨される一方、ローカル変数で頻出する場合は短縮形も許容範囲。ただし C#/C++ 出身のレビュアーから「もう少し意味を持たせたい」との指摘あり。
-- **対応の見送り理由**: 動作には影響しないため、5スレッド構成の安定確認(実機検証)を優先。リネーム自体は機械的だが、テスト・ドキュメント・コミット履歴を横断するため、独立したリファクタブランチで一気にやる方が安全。
-- **解消候補(リネーム案)**:
-  - `q_raw` → `pcm_queue` (Input → ASR)
-  - `q_tr` → `transcript_queue` (ASR → Translator)
-  - `q_xl` → `translation_queue` (Translator → TTS)
-  - `q_syn` → `synthesized_queue` (TTS → Output)
-  - サイズ引数も同様に `pcm_queue_size` 等に追従。
-- **再検討トリガ**: 別件で `PipelineCoordinator` を触る作業が出た時にまとめて実施 / GUI からキューサイズを公開するタイミング(B-2 と合流)。
-- **備考**: リネーム時は Architecture.html(セクション 3 と 4-1)、Class.md、testPlan.md、shortcutList も連動更新が必要。
+## [✅完了 2026-05-27] PipelineCoordinator のキュー変数名を意味のある名前にリネーム
+- **対応ブランチ**: `refactor/queue-rename`
+- **対応内容**: 過去分詞ベースの命名で統一(命名規則の対称性 + 視認性):
+  - `q_raw` → `captured_queue`(Input → ASR)
+  - `q_tr` → `recognized_queue`(ASR → Translator。`translated_queue` との見間違い回避のため `transcribed_queue` ではなく `recognized` を採用)
+  - `q_xl` → `translated_queue`(Translator → TTS)
+  - `q_syn` → `synthesized_queue`(TTS → Output)
+  - サイズ引数も `captured_queue_size` 等に連動。pipeline.py / tests / Architecture.html / Class.md / Plan.md を同時更新。
+- **元の背景**: 5スレッド版への書き換え時(`refactor/pipeline-5thread`)に、ループ内で頻出するため短縮形を採用した。Python では PEP 8 的に descriptive な名前が推奨される一方、ローカル変数で頻出する場合は短縮形も許容範囲。C#/C++ 出身のレビュアーから「もう少し意味を持たせたい」との指摘で本作業に至る。
 
 ---
 
@@ -69,7 +63,7 @@
 
 ## [✅完了 2026-05-27] パイプラインの完全並列化(案C)
 - **対応ブランチ**: `refactor/pipeline-5thread`
-- **対応内容**: `PipelineCoordinator` を 5 スレッド(Input / ASR / Translator / TTS / Output)・4 キュー(q_raw=5 / q_tr=10 / q_xl=10 / q_syn=5)構成に書き換え。各段は `PipelineMessage`(seq_id + 最小ペイロード)を流し、横断メタは `UtteranceLedger` に集約。あわせて shortcutList A-1(Utterance 構造の本格分割)も同時に解消。
+- **対応内容**: `PipelineCoordinator` を 5 スレッド(Input / ASR / Translator / TTS / Output)・4 キュー(captured_queue=5 / recognized_queue=10 / translated_queue=10 / synthesized_queue=5)構成に書き換え。各段は `PipelineMessage`(seq_id + 最小ペイロード)を流し、横断メタは `UtteranceLedger` に集約。あわせて shortcutList A-1(Utterance 構造の本格分割)も同時に解消。
 - **元の内容**: 現状の B+案(Input/Process/Output の3スレッド) をさらに分割し、ASR / 翻訳 / TTS を**個別スレッド**にする(計5パイプラインスレッド)。各段がキュー越しに非同期で動く。
 - **背景**: 連続発話(映画/ポッドキャスト等で沈黙が少ない素材)で Process 段が詰まり、`_put_with_drop` で発話が捨てられるケースに有効。スループット2〜3倍が見込める。
 - **当時の見送り理由(参考)**: 単一発話のレイテンシは変わらない。会話用途や通常視聴では B+ で十分。スレッド/キュー数増による停止シーケンス・エラー伝播・テストの複雑化コストが先に立つ。
