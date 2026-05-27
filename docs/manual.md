@@ -9,9 +9,11 @@
   別言語に翻訳した音声を**別の出力デバイス**から再生する。
 - 自分のマイクから話した内容を翻訳して、スピーカ/仮想マイクから再生する。
 
-主な処理の流れ:
+主な処理の流れ(各段は独立したスレッドで動作):
 ```
 [入力デバイス] → VAD → ASR → 翻訳 → TTS → [出力デバイス]
+                 Input    ASR  Translator TTS   Output
+                       (5スレッド・4キュー構成)
 ```
 
 ---
@@ -118,11 +120,16 @@ MVP では各レイヤ1実装のみ:
 ## 8. ログ・履歴の場所
 - アプリ全般ログ: `<ログ出力先>/app.log`
 - 翻訳履歴(jsonl): `<ログ出力先>/translations.jsonl`
-  - 1行 = 1発話、`{ts, src_text, tgt_text, src_lang, tgt_lang, latency_ms, timeline}` を含む。
+  - 1行 = 1発話、`{ts, seq_id, src_text, tgt_text, src_lang, tgt_lang, latency_ms, timeline}` を含む。
 - (任意) 翻訳前テキスト: `<ログ出力先>/soundsrc.txt`
 - (任意) 翻訳後テキスト: `<ログ出力先>/translated.txt`
   - 既定は OFF。`config.yaml` で個別に ON 可能(下記参照)。
-  - 書式: `[YYYY-MM-DD HH:MM:SS] [lang] text`
+  - 書式: `[YYYY-MM-DD HH:MM:SS] #SEQ [lang] text`
+
+### seq_id で各種ログを突き合わせる
+発話ごとに一意な連番 (`seq_id`) が振られ、`app.log` / `soundsrc.txt` / `translated.txt` / `translations.jsonl` のすべてに載る。
+特定の発話を追いたいときは `grep "#42"`(テキストログ)や `jq 'select(.seq_id == 42)' translations.jsonl` のように突き合わせると、その発話が
+どの段まで到達したか・どこでドロップしたかが判別できる。
 
 ### 翻訳前後テキストの個別ログ(デバッグ用)
 翻訳品質を斜め読みでチェックしたいときに使う。`config.yaml` を編集して有効化:
@@ -136,7 +143,7 @@ log:
 - src/tgt 個別に ON/OFF 可能
 - 空テキストの発話はスキップされる(無音応答ノイズを抑える)
 - 追記モード(起動ごとに継続)、ローテーションなし
-- **キューあふれで再生されなかった発話も** src/tgt は記録される(翻訳結果は失われない)
+- **キューあふれで再生されなかった発話も** src/tgt は記録される(各段で直接書かれるため、再生されなくても翻訳結果は失われない)
 
 ### TTS の読み上げ速度を変える
 SAPI(pyttsx3) の rate を `config.yaml` で変更可能:

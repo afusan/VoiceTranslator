@@ -9,25 +9,25 @@
 ### messages.py
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | `PipelineMessage` のシリアライズ可否 / フィールド | seq_id, payload を持つ |
-| ☐ | 各 payload 型のフィールド | 必要最小フィールドのみ |
+| ☑ | `PipelineMessage` のシリアライズ可否 / フィールド | seq_id, payload を持つ |
+| ☑ | 各 payload 型のフィールド | 必要最小フィールドのみ |
 
 ### UtteranceLedger
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | init(seq_id) で空レコード生成 | |
-| ☐ | mark_time(seq_id, stage) で timeline 追加 | |
-| ☐ | record(seq_id, **fields) で任意フィールド追加(merge) | |
-| ☐ | pop(seq_id) で全情報取得 + ledger からは削除 | メモリリーク防止 |
-| ☐ | 並行アクセス(複数スレッド)でデータ破損なし | Lock 検証(threading で並行 mark) |
-| ☐ | 未登録 seq_id への mark は安全(自動初期化) | |
-| ☐ | 未登録 seq_id への pop は空dict | KeyError しない |
+| ☑ | init(seq_id) で空レコード生成 | |
+| ☑ | mark_time(seq_id, stage) で timeline 追加 | |
+| ☑ | record(seq_id, **fields) で任意フィールド追加(merge) | |
+| ☑ | pop(seq_id) で全情報取得 + ledger からは削除 | メモリリーク防止 |
+| ☑ | 並行アクセス(複数スレッド)でデータ破損なし | Lock 検証(threading で並行 mark) |
+| ☑ | 未登録 seq_id への mark は安全(自動初期化) | |
+| ☑ | 未登録 seq_id への pop は空dict | KeyError しない |
 
 ### SequenceGenerator
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | next() が単調増加 | 1, 2, 3... |
-| ☐ | 並行 next() でも重複なし | スレッドセーフ |
+| ☑ | next() が単調増加 | 1, 2, 3... |
+| ☑ | 並行 next() でも重複なし | スレッドセーフ |
 
 ---
 
@@ -38,28 +38,28 @@
 ### AsrBackend
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | transcribe(pcm, hint) が (text, lang) を返す | 戻り値型 |
-| ☐ | FasterWhisper 実装の引数受け渡し | 既存テストの新I/F版 |
-| ☐ | 空pcm入力で SkipError | |
+| ☑ | transcribe(pcm, hint) が (text, lang) を返す | 戻り値型 |
+| ☑ | FasterWhisper 実装の引数受け渡し | 既存テストの新I/F版 |
+| ☑ | 空pcm入力で SkipError | |
 
 ### TranslatorBackend
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | translate(src_text, src_lang, tgt_lang) が str を返す | |
-| ☐ | NLLB 実装の言語マッピング | 既存テストの新I/F版 |
-| ☐ | 空テキストで passthrough or SkipError | 仕様確定要 |
+| ☑ | translate(src_text, src_lang, tgt_lang) が str を返す | |
+| ☑ | NLLB 実装の言語マッピング | 既存テストの新I/F版 |
+| ☑ | 空テキストで passthrough | 仕様: 空文字を返す(SKIP は呼び出し側で判定) |
 
 ### TtsBackend
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | synthesize(text, lang) が (pcm, samplerate) を返す | |
-| ☐ | SAPI 実装 + flush_delay 動作維持 | |
+| ☑ | synthesize(text, lang) が (pcm, samplerate) を返す | |
+| ☑ | SAPI 実装 + flush_delay 動作維持 | |
 
 ### AudioOutputBackend
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | play(pcm, samplerate) が呼ばれる | |
-| ☐ | Soundcard 実装の動作維持 | |
+| ☑ | play(pcm, samplerate) が呼ばれる | |
+| ☑ | Soundcard 実装の動作維持 | |
 
 ---
 
@@ -68,33 +68,33 @@
 ### ライフサイクル
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | start() で5スレッド起動、全キュー drain、ledger クリア | |
-| ☐ | stop() で stop_event セット → 各スレッドが順次終了 | センチネル順序 |
-| ☐ | 再 start() で前回の残骸を引きずらない | |
-| ☐ | is_running が全スレッド状態を反映 | |
+| ☑ | start() で5スレッド起動、全キュー drain、ledger クリア | |
+| ☑ | stop() で stop_event セット → 各スレッドが順次終了 | センチネル順序 |
+| ☑ | 再 start() で前回の残骸を引きずらない | |
+| ☑ | is_running が全スレッド状態を反映 | |
 
 ### データフロー
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | 1発話を流して各段が呼ばれる(モック) | seq_id 一貫 |
-| ☐ | ledger に各段のタイムスタンプが記録される | |
-| ☐ | 最終段で ledger.pop → jsonl に書かれる | |
-| ☐ | TextLogger.write_src は ASR 段で呼ばれる | |
-| ☐ | TextLogger.write_tgt は Translator 段で呼ばれる | |
+| ☑ | 1発話を流して各段が呼ばれる(モック) | seq_id 一貫 |
+| ☑ | ledger に各段のタイムスタンプが記録される | |
+| ☑ | 最終段で ledger.pop → jsonl に書かれる | |
+| ☑ | TextLogger.write_src は ASR 段で呼ばれる | |
+| ☑ | TextLogger.write_tgt は Translator 段で呼ばれる | |
 
 ### キューあふれ
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | 各キューの drop で on_dropped(seq_id付き)が呼ばれる | |
-| ☐ | drop 累計が stage 別に取れる | get_drop_counts |
-| ☐ | drop 時にも text-log は残る(現状機能の継承) | |
+| ☑ | 各キューの drop で on_dropped(seq_id付き)が呼ばれる | |
+| ☑ | drop 累計が stage 別に取れる | get_drop_counts |
+| ☑ | drop 時にも text-log は残る(現状機能の継承) | ASR/Translator 段で直接書くため自然継承 |
 
 ### エラー処理
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | FATAL なら全スレッド停止 | stop_event |
-| ☐ | SKIP は当該発話破棄、他は継続 | |
-| ☐ | コールバック失敗で停止しない | |
+| ☑ | FATAL なら全スレッド停止 | stop_event |
+| ☑ | SKIP は当該発話破棄、他は継続 | |
+| ☑ | コールバック失敗で停止しない | |
 
 ---
 
@@ -102,10 +102,10 @@
 
 | 状態 | 項目 | 期待 |
 |---|---|---|
-| ☐ | Class.md が5スレッド + ledger 構成を反映 | |
-| ☐ | manual.md の動作説明が更新 | |
-| ☐ | shortcutList A-1 が「解消済」マーク | |
-| ☐ | pendList の「案C」が解消マーク | |
+| ☑ | Class.md が5スレッド + ledger 構成を反映 | |
+| ☑ | manual.md の動作説明が更新 | |
+| ☑ | shortcutList A-1 が「解消済」マーク | |
+| ☑ | pendList の「案C」が解消マーク | |
 
 ---
 
