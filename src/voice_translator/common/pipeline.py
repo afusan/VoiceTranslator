@@ -216,6 +216,8 @@ class PipelineCoordinator:
                 chunk = self._capture.read_chunk(timeout=self._read_timeout)
             except Exception as exc:  # noqa: BLE001
                 if self._dispatch_error(exc) == ErrorAction.STOP:
+                    # FATAL: 他スレッドにも停止を伝える(自分だけ break すると他が回り続ける)
+                    self._stop_event.set()
                     break
                 continue
 
@@ -226,6 +228,7 @@ class PipelineCoordinator:
                 segments = self._vad.process(chunk)
             except Exception as exc:  # noqa: BLE001
                 if self._dispatch_error(exc) == ErrorAction.STOP:
+                    self._stop_event.set()
                     break
                 continue
 

@@ -80,19 +80,38 @@ class FakeAsr(AsrBackend):
 
 
 class FakeTranslator(TranslatorBackend):
+    def __init__(
+        self,
+        *,
+        raise_exc: BaseException | None = None,
+        result: str | None = None,  # None=src_text+"->ja", ""=passthrough,それ以外は固定
+    ) -> None:
+        self._raise = raise_exc
+        self._result = result
+
     def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:
-        return src_text + "->ja"
+        if self._raise is not None:
+            raise self._raise
+        if self._result is None:
+            return src_text + "->ja"
+        return self._result
 
 
 class FakeTts(TtsBackend):
+    def __init__(self, *, raise_exc: BaseException | None = None) -> None:
+        self._raise = raise_exc
+
     def synthesize(self, text: str, tgt_lang: str) -> tuple:
+        if self._raise is not None:
+            raise self._raise
         return b"audio", 16000
 
 
 class FakeOutput(AudioOutputBackend):
-    def __init__(self) -> None:
+    def __init__(self, *, raise_exc: BaseException | None = None) -> None:
         self.played: list[tuple] = []  # (pcm, samplerate)
         self._started = False
+        self._raise = raise_exc
 
     def list_devices(self) -> list[OutputDevice]:
         return [OutputDevice("dummy_out", "Dummy")]
@@ -101,10 +120,62 @@ class FakeOutput(AudioOutputBackend):
         self._started = True
 
     def play(self, pcm, samplerate: int) -> None:
+        if self._raise is not None:
+            raise self._raise
         self.played.append((pcm, samplerate))
 
     def stop(self) -> None:
         self._started = False
+
+
+class RaisingVad(VadBackend):
+    """process() で常に例外を吐く VAD。"""
+
+    def __init__(self, exc: BaseException, *, raise_after_n: int = 0) -> None:
+        self._exc = exc
+        self._count = 0
+        self._raise_after = raise_after_n
+
+    def reset(self) -> None:
+        self._count = 0
+
+    def process(self, chunk: PcmChunk) -> list[VadSegment]:
+        self._count += 1
+        if self._count > self._raise_after:
+            raise self._exc
+        return []
+
+
+class RaisingCapture(AudioCaptureBackend):
+    """read_chunk() で常に例外を吐く Capture。"""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+        self._started = False
+
+    def list_sources(self) -> list[CaptureSource]:
+        return [CaptureSource("dummy", "Dummy")]
+
+    def start(self, source_id: str) -> None:
+        self._started = True
+
+    def stop(self) -> None:
+        self._started = False
+
+    def read_chunk(self, timeout: float = 0.1) -> PcmChunk | None:
+        raise self._exc
+
+
+class SpyingAsr(AsrBackend):
+    """seq_id を観測するための専用 Fake。
+    transcribe で呼ばれた pcm の id (簡易) を seen に記録する。"""
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []  # pcm.shape[0] を記録(seq_id 自体は受け取らないため)
+
+    def transcribe(self, pcm, src_lang_hint: str = "auto") -> tuple[str, str]:
+        self.calls.append(int(pcm.shape[0]))
+        return "hello", "en"
 
 
 # ============================================================
@@ -460,3 +531,336 @@ class TestPipelineThreadCount:
         assert coord._translator_thread is None
         assert coord._tts_thread is None
         assert coord._output_thread is None
+
+
+# ============================================================
+# 各段の error path(SKIP は継続+ledger リークなし / FATAL は停止)
+# ============================================================
+def _build_with_backends(
+    *,
+    chunks: list[PcmChunk] | None = None,
+    capture: AudioCaptureBackend | None = None,
+    vad: VadBackend | None = None,
+    asr: AsrBackend | None = None,
+    translator: TranslatorBackend | None = None,
+    tts: TtsBackend | None = None,
+    output: AudioOutputBackend | None = None,
+    on_done: Callable[[dict], None] | None = None,
+    text_logger: TextLogger | None = None,
+    on_fatal: Callable[[str], None] | None = None,
+) -> tuple[PipelineCoordinator, FakeOutput | AudioOutputBackend]:
+    if chunks is None:
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(5)]
+    capture = capture or FakeCapture(chunks)
+    output = output if output is not None else FakeOutput()
+    handler = ErrorHandler(on_fatal=on_fatal) if on_fatal else ErrorHandler()
+    coord = PipelineCoordinator(
+        capture=capture,
+        vad=vad or FakeVad(every_n_chunks=1),
+        asr=asr or FakeAsr(),
+        translator=translator or FakeTranslator(),
+        tts=tts or FakeTts(),
+        output=output,
+        error_handler=handler,
+        text_logger=text_logger,
+        src_lang="en",
+        tgt_lang="ja",
+        on_utterance_done=on_done,
+        read_timeout=0.01,
+        q_raw_size=50, q_tr_size=50, q_xl_size=50, q_syn_size=50,
+    )
+    return coord, output
+
+
+class TestPipelineErrorAtTranslatorStage:
+    def test_skip_continues_and_no_ledger_leak(self) -> None:
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(3)]
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            translator=FakeTranslator(raise_exc=SkipError("bad")),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.3)
+        coord.stop()
+        assert len(output.played) == 0  # 再生まで来ない
+        assert len(coord.ledger) == 0   # ledger に残骸なし
+        # ASR は呼ばれている = SKIP 後も新規発話が流れている
+        assert coord.is_running is False
+
+    def test_fatal_stops_pipeline(self) -> None:
+        called: list[str] = []
+        coord, output = _build_with_backends(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(10)],
+            translator=FakeTranslator(raise_exc=FatalError("translator dead")),
+            on_fatal=lambda m: called.append(m),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: not coord.is_running, timeout=2.0)
+        coord.stop()
+        assert called == ["translator dead"]
+        assert len(output.played) == 0
+
+
+class TestPipelineErrorAtTtsStage:
+    def test_skip_continues_and_no_ledger_leak(self) -> None:
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(3)]
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            tts=FakeTts(raise_exc=SkipError("empty synth")),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.3)
+        coord.stop()
+        assert len(output.played) == 0
+        assert len(coord.ledger) == 0
+
+    def test_fatal_stops_pipeline(self) -> None:
+        called: list[str] = []
+        coord, output = _build_with_backends(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(10)],
+            tts=FakeTts(raise_exc=FatalError("tts dead")),
+            on_fatal=lambda m: called.append(m),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: not coord.is_running, timeout=2.0)
+        coord.stop()
+        assert called == ["tts dead"]
+
+
+class TestPipelineErrorAtOutputStage:
+    def test_skip_continues_and_no_ledger_leak(self) -> None:
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(3)]
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            output=FakeOutput(raise_exc=SkipError("device busy")),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.3)
+        coord.stop()
+        # Output が SKIP を出すので played は 0
+        assert len(output.played) == 0
+        # ledger は失敗パスで pop されているはず
+        assert len(coord.ledger) == 0
+
+    def test_fatal_stops_pipeline(self) -> None:
+        called: list[str] = []
+        coord, output = _build_with_backends(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(10)],
+            output=FakeOutput(raise_exc=FatalError("speaker gone")),
+            on_fatal=lambda m: called.append(m),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: not coord.is_running, timeout=2.0)
+        coord.stop()
+        assert called == ["speaker gone"]
+
+
+class TestPipelineErrorAtInputStage:
+    def test_vad_skip_does_not_stop_pipeline(self) -> None:
+        """VAD が SKIP を出してもループは継続する(発話は確定しない)。"""
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(5)]
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            vad=RaisingVad(SkipError("noisy")),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.2)
+        # 動作継続中(FATAL ではないので生存)
+        assert coord.is_running
+        coord.stop()
+        assert len(output.played) == 0
+        assert len(coord.ledger) == 0
+
+    def test_vad_fatal_stops_pipeline(self) -> None:
+        called: list[str] = []
+        coord, output = _build_with_backends(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(10)],
+            vad=RaisingVad(FatalError("vad model dead")),
+            on_fatal=lambda m: called.append(m),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: not coord.is_running, timeout=2.0)
+        coord.stop()
+        assert called == ["vad model dead"]
+
+    def test_capture_fatal_stops_pipeline(self) -> None:
+        called: list[str] = []
+        coord, output = _build_with_backends(
+            capture=RaisingCapture(FatalError("device gone")),
+            on_fatal=lambda m: called.append(m),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: not coord.is_running, timeout=2.0)
+        coord.stop()
+        assert called == ["device gone"]
+
+
+class TestPipelineEmptyTranslationSkip:
+    """Translator が空文字を返した場合の passthrough。
+
+    Coordinator は次段に流さず ledger を pop してリークさせない。
+    """
+
+    def test_empty_translation_skipped_and_no_ledger_leak(self) -> None:
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(3)]
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            translator=FakeTranslator(result=""),  # 常に空文字
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.3)
+        coord.stop()
+        assert len(output.played) == 0  # 空翻訳は TTS に流れない
+        assert len(coord.ledger) == 0   # リークなし
+
+
+# ============================================================
+# コールバック例外耐性(pipeline は止まらない)
+# ============================================================
+class TestPipelineCallbackResilience:
+    """callback / TextLogger が例外を出してもパイプラインは止まらない。
+
+    テスト戦略: チャンク数 N を決めて N 件すべて再生まで待ってから停止し、
+    ledger が空であること(=callback 失敗でも内部状態はクリーン)を確認する。
+    """
+
+    N_CHUNKS = 3
+
+    def test_on_utterance_done_exception_does_not_stop(self, caplog) -> None:
+        import logging
+        caplog.set_level(logging.ERROR, logger="voice_translator")
+
+        def boom(record: dict) -> None:
+            raise RuntimeError("ui broken")
+
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(self.N_CHUNKS)]
+        coord, output = _build_with_backends(chunks=chunks, on_done=boom)
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        # 全 N 件再生まで待つ(callback 例外でも処理は止まらない)
+        assert _wait_until(lambda: len(output.played) >= self.N_CHUNKS, timeout=2.0)
+        coord.stop()
+        assert any("on_utterance_done callback failed" in r.message for r in caplog.records)
+        # callback 失敗でも ledger.pop は callback の前に済んでいるのでリークなし
+        assert len(coord.ledger) == 0
+
+    def test_text_logger_write_src_exception_does_not_stop(self, caplog) -> None:
+        import logging
+        caplog.set_level(logging.ERROR, logger="voice_translator")
+
+        class BrokenTextLogger:
+            src_enabled = True
+            tgt_enabled = True
+
+            def write_src(self, seq_id, text, lang):
+                raise OSError("disk full")
+
+            def write_tgt(self, seq_id, text, lang):
+                pass
+
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(self.N_CHUNKS)]
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            text_logger=BrokenTextLogger(),  # type: ignore[arg-type]
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        # write_src が例外を出しても、それ以降の段(translate/tts/play)は進む
+        assert _wait_until(lambda: len(output.played) >= self.N_CHUNKS, timeout=2.0)
+        coord.stop()
+        assert any("write_src failed" in r.message for r in caplog.records)
+        assert len(coord.ledger) == 0
+
+    def test_text_logger_write_tgt_exception_does_not_stop(self, caplog) -> None:
+        import logging
+        caplog.set_level(logging.ERROR, logger="voice_translator")
+
+        class BrokenTextLogger:
+            src_enabled = True
+            tgt_enabled = True
+
+            def write_src(self, seq_id, text, lang):
+                pass
+
+            def write_tgt(self, seq_id, text, lang):
+                raise OSError("disk full")
+
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(self.N_CHUNKS)]
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            text_logger=BrokenTextLogger(),  # type: ignore[arg-type]
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: len(output.played) >= self.N_CHUNKS, timeout=2.0)
+        coord.stop()
+        assert any("write_tgt failed" in r.message for r in caplog.records)
+        assert len(coord.ledger) == 0
+
+
+# ============================================================
+# 同一 seq_id が全段で一貫していること(段間の取り違いを防ぐ)
+# ============================================================
+class TestPipelineSeqIdConsistency:
+    """ASR/Translator/TTS/Output の各段で、同一発話に同じ seq_id が使われる。
+
+    観測戦略: TextLogger をスパイし、write_src(ASR段) と write_tgt(Translator段) の
+    seq_id 並びを取得 → on_utterance_done(Output段) の seq_id 並びと一致することを検証。
+    """
+
+    def test_seq_id_consistent_across_all_stages(self) -> None:
+        src_seq_ids: list[int] = []
+        tgt_seq_ids: list[int] = []
+
+        class SpyTextLogger:
+            src_enabled = True
+            tgt_enabled = True
+
+            def write_src(self, seq_id, text, lang):
+                src_seq_ids.append(seq_id)
+
+            def write_tgt(self, seq_id, text, lang):
+                tgt_seq_ids.append(seq_id)
+
+        done_seq_ids: list[int] = []
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(5)]
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            text_logger=SpyTextLogger(),  # type: ignore[arg-type]
+            on_done=lambda r: done_seq_ids.append(r["seq_id"]),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: len(done_seq_ids) >= 5)
+        coord.stop()
+
+        # 3 つのリストが同じ集合・同じ順序(ASR → Translator → Output の順で進行)
+        assert src_seq_ids == tgt_seq_ids == done_seq_ids
+        assert len(set(src_seq_ids)) == len(src_seq_ids)  # 重複なし
+        assert src_seq_ids == sorted(src_seq_ids)         # 単調増加
+
+    def test_seq_id_consistent_under_skip_at_translator(self) -> None:
+        """Translator が SKIP した発話の seq_id は Output に到達しない(全段一貫)。"""
+        src_seq_ids: list[int] = []
+        done_seq_ids: list[int] = []
+
+        class SpyTextLogger:
+            src_enabled = True
+            tgt_enabled = True
+            def write_src(self, seq_id, text, lang):
+                src_seq_ids.append(seq_id)
+            def write_tgt(self, seq_id, text, lang):
+                pass
+
+        chunks = [np.zeros(160, dtype=np.float32) for _ in range(3)]
+        coord, output = _build_with_backends(
+            chunks=chunks,
+            translator=FakeTranslator(raise_exc=SkipError("nope")),
+            text_logger=SpyTextLogger(),  # type: ignore[arg-type]
+            on_done=lambda r: done_seq_ids.append(r["seq_id"]),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.3)
+        coord.stop()
+
+        # ASR には到達しているが Output には届かない
+        assert len(src_seq_ids) > 0
+        assert done_seq_ids == []
+        # SKIP 後も他発話の処理は継続している(=ASR は複数回呼ばれた)
+        assert len(coord.ledger) == 0
