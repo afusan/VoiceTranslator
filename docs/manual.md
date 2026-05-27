@@ -145,6 +145,17 @@ log:
 - 追記モード(起動ごとに継続)、ローテーションなし
 - **キューあふれで再生されなかった発話も** src/tgt は記録される(各段で直接書かれるため、再生されなくても翻訳結果は失われない)
 
+### ログレベルを変える(SKIP のノイズを抑えたい等)
+`config.yaml` で app.log に出すしきい値を制御できる:
+```yaml
+log:
+  directory: ./logs
+  level: WARNING   # 既定 INFO。SKIP(無音/空入力等)を抑えたければ WARNING に上げる
+```
+- 値: `DEBUG` / `INFO`(既定) / `WARNING` / `ERROR`
+- severity 別の対応: FATAL → ERROR、RECOVERABLE → WARNING、WARN → WARNING、SKIP → INFO
+- 設定変更後は再起動で反映
+
 ### TTS の読み上げ速度を変える
 SAPI(pyttsx3) の rate を `config.yaml` で変更可能:
 ```yaml

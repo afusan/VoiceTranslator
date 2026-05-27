@@ -69,9 +69,11 @@ class AppController:
 
         # UI コールバック(既定は no-op)
         # record は UtteranceLedger.pop() の戻り値 dict(seq_id, timeline, src/tgt 各種)。
+        # on_fatal/on_warn は (message, *, exc, stage, seq_id) を受ける。
+        # GUI 側で stage / seq_id を使わなければ **kwargs で吸収可。
         self._on_utterance_done: Callable[[dict], None] = lambda r: None
-        self._on_fatal: Callable[[str], None] = lambda m: None
-        self._on_warn: Callable[[str], None] = lambda m: None
+        self._on_fatal: Callable[..., None] = lambda m, **_kw: None
+        self._on_warn: Callable[..., None] = lambda m, **_kw: None
         self._on_status_change: Callable[[LayerKind, ModelStatus], None] = lambda l, s: None
 
         # モデル状態の初期化(キャッシュチェック)
@@ -85,8 +87,8 @@ class AppController:
         self,
         *,
         on_utterance_done: Callable[[dict], None] | None = None,
-        on_fatal: Callable[[str], None] | None = None,
-        on_warn: Callable[[str], None] | None = None,
+        on_fatal: Callable[..., None] | None = None,
+        on_warn: Callable[..., None] | None = None,
         on_status_change: Callable[[LayerKind, ModelStatus], None] | None = None,
     ) -> None:
         if on_utterance_done is not None:

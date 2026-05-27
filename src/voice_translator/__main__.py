@@ -29,10 +29,11 @@ def main() -> None:
     except Exception as e:  # noqa: BLE001 - 起動時は既定値で続行
         print(f"[起動] 設定読込で例外。既定値で続行: {e}")
 
-    # 2) ロガー
+    # 2) ロガー(level は config から)
     log_dir = Path(str(config.get("log", "directory", default="./logs")))
-    logger = setup_app_logger(log_dir=log_dir)
-    logger.info("voice_translator 起動")
+    log_level = str(config.get("log", "level", default="INFO"))
+    logger = setup_app_logger(log_dir=log_dir, level=log_level)
+    logger.info("voice_translator 起動 (log level=%s)", log_level)
 
     # 3) バックエンド登録(config 連携で SAPI rate 等を反映)
     registry = BackendRegistry()

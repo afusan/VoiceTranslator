@@ -215,7 +215,7 @@ class PipelineCoordinator:
             try:
                 chunk = self._capture.read_chunk(timeout=self._read_timeout)
             except Exception as exc:  # noqa: BLE001
-                if self._dispatch_error(exc) == ErrorAction.STOP:
+                if self._dispatch_error(exc, stage="Capture") == ErrorAction.STOP:
                     # FATAL: 他スレッドにも停止を伝える(自分だけ break すると他が回り続ける)
                     self._stop_event.set()
                     break
@@ -227,7 +227,7 @@ class PipelineCoordinator:
             try:
                 segments = self._vad.process(chunk)
             except Exception as exc:  # noqa: BLE001
-                if self._dispatch_error(exc) == ErrorAction.STOP:
+                if self._dispatch_error(exc, stage="VAD") == ErrorAction.STOP:
                     self._stop_event.set()
                     break
                 continue
@@ -264,7 +264,7 @@ class PipelineCoordinator:
             try:
                 text, lang = self._asr.transcribe(payload.pcm, payload.src_lang_hint)
             except Exception as exc:  # noqa: BLE001
-                action = self._dispatch_error(exc)
+                action = self._dispatch_error(exc, stage="ASR", seq_id=msg.seq_id)
                 if action == ErrorAction.STOP:
                     self._stop_event.set()
                     break
@@ -305,7 +305,7 @@ class PipelineCoordinator:
                     payload.src_text, payload.src_lang, self._tgt_lang
                 )
             except Exception as exc:  # noqa: BLE001
-                action = self._dispatch_error(exc)
+                action = self._dispatch_error(exc, stage="Translator", seq_id=msg.seq_id)
                 if action == ErrorAction.STOP:
                     self._stop_event.set()
                     break
@@ -347,7 +347,7 @@ class PipelineCoordinator:
             try:
                 pcm, samplerate = self._tts.synthesize(payload.tgt_text, payload.tgt_lang)
             except Exception as exc:  # noqa: BLE001
-                action = self._dispatch_error(exc)
+                action = self._dispatch_error(exc, stage="TTS", seq_id=msg.seq_id)
                 if action == ErrorAction.STOP:
                     self._stop_event.set()
                     break
@@ -376,7 +376,7 @@ class PipelineCoordinator:
             try:
                 self._output.play(payload.tts_pcm, payload.tts_samplerate)
             except Exception as exc:  # noqa: BLE001
-                action = self._dispatch_error(exc)
+                action = self._dispatch_error(exc, stage="Output", seq_id=msg.seq_id)
                 if action == ErrorAction.STOP:
                     self._stop_event.set()
                     break
@@ -396,8 +396,14 @@ class PipelineCoordinator:
     # ============================================================
     # ユーティリティ
     # ============================================================
-    def _dispatch_error(self, exc: BaseException) -> str:
-        return self._error_handler.handle(exc)
+    def _dispatch_error(
+        self,
+        exc: BaseException,
+        *,
+        stage: str | None = None,
+        seq_id: int | None = None,
+    ) -> str:
+        return self._error_handler.handle(exc, stage=stage, seq_id=seq_id)
 
     @staticmethod
     def _join_quietly(thread: threading.Thread | None, timeout: float) -> None:

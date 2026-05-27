@@ -27,22 +27,29 @@ def setup_app_logger(
     *,
     name: str = "voice_translator",
     log_dir: Path | str | None = None,
-    level: int = logging.INFO,
+    level: int | str = logging.INFO,
 ) -> logging.Logger:
     """アプリの基本ロガーを構築して返す。
 
     - stdout に常時出力。
     - log_dir 指定時は `<log_dir>/app.log` にもファイル出力(append)。
+    - level は logging 定数(int)または文字列("INFO"/"WARNING" 等)。
+      文字列で未知の値が来た場合は INFO にフォールバック。
     """
+    resolved_level = _resolve_level(level)
+
     logger = logging.getLogger(name)
-    logger.setLevel(level)
+    logger.setLevel(resolved_level)
     logger.propagate = False
 
-    if logger.handlers:
-        # 既に初期化済みならハンドラ重複を避ける
-        return logger
-
     fmt = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s")
+
+    if logger.handlers:
+        # 既に初期化済みならハンドラ重複を避ける。レベルだけは更新する
+        # (config 再読込で level が変わった場合などへの追従)。
+        for h in logger.handlers:
+            h.setLevel(resolved_level)
+        return logger
 
     stream = logging.StreamHandler()
     stream.setFormatter(fmt)
@@ -56,6 +63,26 @@ def setup_app_logger(
         logger.addHandler(file_handler)
 
     return logger
+
+
+def _resolve_level(level: int | str) -> int:
+    """level を logging の int 定数に解決。文字列は大文字小文字を無視して名前解決。"""
+    if isinstance(level, int):
+        return level
+    if isinstance(level, str):
+        normalized = level.strip().upper()
+        # logging.getLevelName(str) は未知名で文字列 "Level XX" を返す挙動なので、
+        # known table を自前で見る
+        known = {
+            "CRITICAL": logging.CRITICAL,
+            "ERROR": logging.ERROR,
+            "WARNING": logging.WARNING,
+            "WARN": logging.WARNING,
+            "INFO": logging.INFO,
+            "DEBUG": logging.DEBUG,
+        }
+        return known.get(normalized, logging.INFO)
+    return logging.INFO
 
 
 class TranslationLogger:
