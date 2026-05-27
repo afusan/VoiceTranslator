@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import wave
 from typing import Any
 
@@ -29,7 +30,13 @@ class SapiTtsBackend(TtsBackend):
     エンジンを毎回作り直すのは pyttsx3 の既知の問題(save_to_file の状態が残る)対策。
     """
 
-    def __init__(self, *, rate: int = 180, voice_lang_hint: str = "ja") -> None:
+    def __init__(
+        self,
+        *,
+        rate: int = 180,
+        voice_lang_hint: str = "ja",
+        flush_delay_sec: float = 0.1,
+    ) -> None:
         # init はテストのために遅延もしない(失敗を即時 FATAL にしたい)
         try:
             import pyttsx3  # type: ignore  # noqa: F401
@@ -37,6 +44,12 @@ class SapiTtsBackend(TtsBackend):
             raise FatalError(f"pyttsx3 のロードに失敗: {e}", cause=e) from e
         self._rate = rate
         self._voice_lang_hint = voice_lang_hint
+        # 暫定対処: pyttsx3/SAPI の flush 不整合で WAV 末尾が壊れ、
+        # 特定音節が長時間繰り返される現象が低頻度で発生する。
+        # `runAndWait()` 直後に短時間 sleep を挟むことで再現頻度が下がる。
+        # 詳細は docs/design/pendList.md [2026-05-27] SAPI 音節繰り返し を参照。
+        # 将来 TTS バックエンドを差し替えたら本パラメータごと削除する。
+        self._flush_delay_sec = max(0.0, float(flush_delay_sec))
 
     # ----------------------------------------------------------
     def synthesize(self, utterance: Utterance) -> Utterance:
@@ -64,6 +77,11 @@ class SapiTtsBackend(TtsBackend):
                 except Exception:  # noqa: BLE001
                     pass
 
+            # 暫定対処(pendList [2026-05-27] SAPI 音節繰り返し):
+            # runAndWait 直後に少し待って WAV のフラッシュを確実にする。
+            if self._flush_delay_sec > 0:
+                time.sleep(self._flush_delay_sec)
+
             pcm, samplerate = _read_wav_as_float32(wav_path)
         except Exception as e:  # noqa: BLE001
             raise FatalError(f"SAPI/TTS 合成失敗: {e}", cause=e) from e
@@ -81,7 +99,10 @@ class SapiTtsBackend(TtsBackend):
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
             supported_languages=(),  # SAPI 側にインストールされた声に依存
-            notes="Windows SAPI(pyttsx3)。Mac/Linux では別TTS推奨。WAV経由でPCM取得。",
+            notes=(
+                "Windows SAPI(pyttsx3)。Mac/Linux では別TTS推奨。WAV経由でPCM取得。"
+                f" flush_delay_sec={self._flush_delay_sec} で暫定 flush 待機中。"
+            ),
         )
 
     # ---- 内部 ----

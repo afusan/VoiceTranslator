@@ -66,14 +66,14 @@ class TestSynthesize:
     def test_empty_text_raises_skip(self, fake_pyttsx3) -> None:
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend()
+        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
         with pytest.raises(SkipError):
             backend.synthesize(Utterance(tgt_text=""))
 
     def test_synthesize_fills_pcm_and_samplerate(self, fake_pyttsx3) -> None:
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend()
+        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
         utt = Utterance(tgt_text="こんにちは", tgt_lang="ja")
         result = backend.synthesize(utt)
         assert result is utt
@@ -86,7 +86,7 @@ class TestSynthesize:
         _, fake_engine = fake_pyttsx3
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend()
+        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
         backend.synthesize(Utterance(tgt_text="hello", tgt_lang="ja"))
         # setProperty が voice 引数で呼ばれたか
         voice_calls = [
@@ -99,7 +99,7 @@ class TestSynthesize:
         fake_engine.save_to_file = MagicMock(side_effect=OSError("disk"))
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend()
+        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
         with pytest.raises(FatalError, match="SAPI/TTS"):
             backend.synthesize(Utterance(tgt_text="hi"))
 
@@ -107,6 +107,49 @@ class TestSynthesize:
         # 通常の synthesize 後、tempfile が残らないことを確認
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend()
+        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
         backend.synthesize(Utterance(tgt_text="hello"))
         # 一時ファイルが片付くこと(細かい検証は省略)
+
+
+class TestFlushDelayWorkaround:
+    """SAPI 音節繰り返しバグへの暫定対処(pendList [2026-05-27])。"""
+
+    def test_default_flush_delay_is_positive(self, fake_pyttsx3) -> None:
+        from voice_translator.tts.sapi_backend import SapiTtsBackend
+
+        backend = SapiTtsBackend()
+        # 既定で sleep が入る(0.1 秒)
+        assert backend._flush_delay_sec > 0
+
+    def test_flush_delay_can_be_disabled(self, fake_pyttsx3) -> None:
+        from voice_translator.tts.sapi_backend import SapiTtsBackend
+
+        backend = SapiTtsBackend(flush_delay_sec=0)
+        assert backend._flush_delay_sec == 0
+
+    def test_synthesize_calls_time_sleep_when_delay_set(
+        self, fake_pyttsx3, monkeypatch
+    ) -> None:
+        """flush_delay_sec > 0 のとき time.sleep が呼ばれる。"""
+        from voice_translator.tts import sapi_backend
+
+        calls: list[float] = []
+        monkeypatch.setattr(sapi_backend.time, "sleep", lambda s: calls.append(s))
+
+        backend = sapi_backend.SapiTtsBackend(flush_delay_sec=0.05)
+        backend.synthesize(Utterance(tgt_text="hello"))
+        assert 0.05 in calls, f"flush sleep が呼ばれていない: {calls}"
+
+    def test_synthesize_skips_sleep_when_delay_zero(
+        self, fake_pyttsx3, monkeypatch
+    ) -> None:
+        """flush_delay_sec=0 のとき time.sleep は呼ばれない(0ms スキップ)。"""
+        from voice_translator.tts import sapi_backend
+
+        calls: list[float] = []
+        monkeypatch.setattr(sapi_backend.time, "sleep", lambda s: calls.append(s))
+
+        backend = sapi_backend.SapiTtsBackend(flush_delay_sec=0)
+        backend.synthesize(Utterance(tgt_text="hello"))
+        assert calls == [], f"sleep が呼ばれてしまった: {calls}"
