@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from voice_translator.common.errors import FatalError, SkipError
 from voice_translator.common.types import BackendCapabilities
-from voice_translator.common.utterance import Utterance
 
 from .backend import TranslatorBackend
 
@@ -50,8 +49,8 @@ def _to_nllb_code(iso: str, *, fallback: str) -> str:
 class Nllb200TranslatorBackend(TranslatorBackend):
     """NLLB-200 (Hugging Face transformers) ベースの翻訳バックエンド。
 
-    役割: 初期化時にモデル+トークナイザをロードし、translate() で
-    src_text → tgt_text を埋める。初回は約2GBのモデルDLが走るため時間がかかる。
+    役割: 初期化時にモデル+トークナイザをロードし、translate(src_text, src_lang, tgt_lang) で
+    翻訳テキストを返す。初回は約2GBのモデルDLが走るため時間がかかる。
     """
 
     def __init__(
@@ -77,16 +76,14 @@ class Nllb200TranslatorBackend(TranslatorBackend):
         self._max_length = max_length
 
     # ----------------------------------------------------------
-    def translate(self, utterance: Utterance, tgt_lang: str) -> Utterance:
-        """utterance.src_text を tgt_lang に翻訳して tgt_text/tgt_lang を埋める。"""
-        text = (utterance.src_text or "").strip()
+    def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:
+        """src_text を tgt_lang に翻訳した文字列を返す。"""
+        text = (src_text or "").strip()
         if not text:
-            # 空入力は翻訳せずそのまま返す(下流で SKIP 判定される)
-            utterance.tgt_text = ""
-            utterance.tgt_lang = tgt_lang
-            return utterance
+            # 空入力は翻訳せず空文字を返す(呼び出し側で SKIP 判定)
+            return ""
 
-        src_nllb = _to_nllb_code(utterance.src_lang, fallback="eng_Latn")
+        src_nllb = _to_nllb_code(src_lang, fallback="eng_Latn")
         tgt_nllb = _to_nllb_code(tgt_lang, fallback="jpn_Jpan")
 
         try:
@@ -106,10 +103,7 @@ class Nllb200TranslatorBackend(TranslatorBackend):
         result = (result or "").strip()
         if not result:
             raise SkipError("翻訳結果が空です")
-
-        utterance.tgt_text = result
-        utterance.tgt_lang = tgt_lang
-        return utterance
+        return result
 
     # ----------------------------------------------------------
     def capabilities(self) -> BackendCapabilities:

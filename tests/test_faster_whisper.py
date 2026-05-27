@@ -1,4 +1,7 @@
-"""FasterWhisperAsrBackend の単体テスト。faster-whisper を完全モック化。"""
+"""FasterWhisperAsrBackend の単体テスト。faster-whisper を完全モック化。
+
+R-2 でプリミティブ I/F に変更: transcribe(pcm, hint) -> (text, lang)。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +12,6 @@ import numpy as np
 import pytest
 
 from voice_translator.common.errors import FatalError, SkipError
-from voice_translator.common.utterance import Utterance
 
 
 @pytest.fixture()
@@ -63,9 +65,8 @@ class TestTranscribe:
         )
 
         backend = FasterWhisperAsrBackend()
-        utt = Utterance(pcm=np.zeros(0, dtype=np.float32))
         with pytest.raises(SkipError):
-            backend.transcribe(utt)
+            backend.transcribe(np.zeros(0, dtype=np.float32))
 
     def test_none_pcm_raises_skip(self, fake_faster_whisper) -> None:
         from voice_translator.asr.faster_whisper_backend import (
@@ -74,19 +75,17 @@ class TestTranscribe:
 
         backend = FasterWhisperAsrBackend()
         with pytest.raises(SkipError):
-            backend.transcribe(Utterance(pcm=None))
+            backend.transcribe(None)
 
-    def test_transcribe_fills_src_text(self, fake_faster_whisper) -> None:
+    def test_transcribe_returns_text_and_lang(self, fake_faster_whisper) -> None:
         from voice_translator.asr.faster_whisper_backend import (
             FasterWhisperAsrBackend,
         )
 
         backend = FasterWhisperAsrBackend()
-        utt = Utterance(pcm=np.ones(16000, dtype=np.float32), src_lang="auto")
-        result = backend.transcribe(utt, "auto")
-        assert result is utt  # 参照同一
-        assert utt.src_text == "hello world"
-        assert utt.src_lang == "en"  # 自動検出が反映
+        text, lang = backend.transcribe(np.ones(16000, dtype=np.float32), "auto")
+        assert text == "hello world"
+        assert lang == "en"  # 自動検出を採用
 
     def test_explicit_lang_passed_to_model(self, fake_faster_whisper) -> None:
         _, fake_model = fake_faster_whisper
@@ -95,10 +94,12 @@ class TestTranscribe:
         )
 
         backend = FasterWhisperAsrBackend()
-        backend.transcribe(Utterance(pcm=np.ones(160, dtype=np.float32)), "en")
+        text, lang = backend.transcribe(np.ones(160, dtype=np.float32), "en")
         kwargs = fake_model.transcribe.call_args.kwargs
         assert kwargs["language"] == "en"
         assert kwargs["task"] == "transcribe"
+        # 明示指定があれば検出結果ではなく指定を返す
+        assert lang == "en"
 
     def test_auto_lang_passes_none(self, fake_faster_whisper) -> None:
         _, fake_model = fake_faster_whisper
@@ -107,7 +108,7 @@ class TestTranscribe:
         )
 
         backend = FasterWhisperAsrBackend()
-        backend.transcribe(Utterance(pcm=np.ones(160, dtype=np.float32)), "auto")
+        backend.transcribe(np.ones(160, dtype=np.float32), "auto")
         assert fake_model.transcribe.call_args.kwargs["language"] is None
 
     def test_inference_exception_wrapped_fatal(self, fake_faster_whisper) -> None:
@@ -119,4 +120,4 @@ class TestTranscribe:
 
         backend = FasterWhisperAsrBackend()
         with pytest.raises(FatalError, match="推論失敗"):
-            backend.transcribe(Utterance(pcm=np.ones(160, dtype=np.float32)))
+            backend.transcribe(np.ones(160, dtype=np.float32))

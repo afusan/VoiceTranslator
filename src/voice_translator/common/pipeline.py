@@ -186,16 +186,28 @@ class PipelineCoordinator:
             utt.tgt_lang = self._tgt_lang
 
             try:
-                self._asr.transcribe(utt, self._src_lang)
+                # ASR: primitive I/F (R-2)。戻り値 (text, lang) を Utterance に積む。
+                text, lang = self._asr.transcribe(utt.pcm, self._src_lang)
+                utt.src_text = text
+                if self._src_lang in ("auto", "", None) and lang:
+                    utt.src_lang = lang
                 utt.timeline.mark("t_asr")
                 # ASR 完了後は元音声(pcm)は不要。下流に渡らないようメモリ解放
                 # (q2 滞留中のメモリ占有を減らす)。shortcutList A-1 部分対処。
                 utt.pcm = None
 
-                self._translator.translate(utt, self._tgt_lang)
+                # Translator: primitive I/F (R-2)。戻り値 str を Utterance に積む。
+                tgt_text = self._translator.translate(
+                    utt.src_text, utt.src_lang, self._tgt_lang
+                )
+                utt.tgt_text = tgt_text
+                utt.tgt_lang = self._tgt_lang
                 utt.timeline.mark("t_translate")
 
-                self._tts.synthesize(utt)
+                # TTS: primitive I/F (R-2)。戻り値 (pcm, sr) を Utterance に積む。
+                tts_pcm, tts_sr = self._tts.synthesize(utt.tgt_text, utt.tgt_lang)
+                utt.tts_pcm = tts_pcm
+                utt.tts_samplerate = tts_sr
                 utt.timeline.mark("t_tts")
             except Exception as exc:  # noqa: BLE001
                 action = self._dispatch_error(exc)
@@ -218,7 +230,8 @@ class PipelineCoordinator:
 
             utt: Utterance = item
             try:
-                self._output.play(utt)
+                # Output: primitive I/F (R-2)。Utterance から pcm/samplerate を取って渡す。
+                self._output.play(utt.tts_pcm, utt.tts_samplerate)
                 utt.timeline.mark("t_playback")
             except Exception as exc:  # noqa: BLE001
                 action = self._dispatch_error(exc)

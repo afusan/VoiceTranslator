@@ -1,14 +1,17 @@
 """TtsBackend 抽象基底。
 
 役割: 翻訳済みテキストを音声(PCM)に合成する I/F。
+
+R-2 でプリミティブ I/F に変更: Utterance 依存をやめ、(text, lang) を受けて
+(pcm, samplerate) を返す。
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from voice_translator.common.types import BackendCapabilities
-from voice_translator.common.utterance import Utterance
 
 
 class TtsBackend(ABC):
@@ -18,13 +21,14 @@ class TtsBackend(ABC):
     """
 
     @abstractmethod
-    def synthesize(self, utterance: Utterance) -> Utterance:
-        """utterance.tgt_text を音声に合成し、tts_pcm を埋めて返す。
+    def synthesize(self, text: str, tgt_lang: str) -> tuple[Any, int]:
+        """`text` を音声に合成し、(pcm, samplerate) を返す。
 
-        - 同じ Utterance を mutate して返す。
-        - tts_pcm のサンプリングレート/形式はエンジン依存。
-          出力デバイス側でリサンプル/変換する想定。
-        - tgt_text が空ならそのまま返す。
+        - text: 翻訳済みテキスト。空なら SkipError。
+        - tgt_lang: 声選択のヒント(ISO 639-1)。
+        - 戻り値:
+            - pcm: np.ndarray(1次元 mono もしくは (N, ch))、dtype=float32 推奨。
+            - samplerate: PCM のサンプルレート(Hz)。Output 側で参照する。
         """
 
     def capabilities(self) -> BackendCapabilities:

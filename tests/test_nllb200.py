@@ -1,4 +1,7 @@
-"""Nllb200TranslatorBackend の単体テスト。transformers を完全モック化。"""
+"""Nllb200TranslatorBackend の単体テスト。transformers を完全モック化。
+
+R-2 でプリミティブ I/F に変更: translate(src_text, src_lang, tgt_lang) -> str。
+"""
 
 from __future__ import annotations
 
@@ -8,7 +11,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from voice_translator.common.errors import FatalError, SkipError
-from voice_translator.common.utterance import Utterance
 
 
 @pytest.fixture()
@@ -66,21 +68,16 @@ class TestTranslate:
         )
 
         backend = Nllb200TranslatorBackend()
-        utt = Utterance(src_text="   ", src_lang="en")
-        result = backend.translate(utt, "ja")
-        assert result.tgt_text == ""
-        assert result.tgt_lang == "ja"
+        # 空白のみ入力 → 空文字を返す(SKIP は呼び出し側で判定)
+        assert backend.translate("   ", "en", "ja") == ""
 
-    def test_translate_sets_tgt_fields(self, fake_transformers) -> None:
+    def test_translate_returns_string(self, fake_transformers) -> None:
         from voice_translator.translator.nllb200_backend import (
             Nllb200TranslatorBackend,
         )
 
         backend = Nllb200TranslatorBackend()
-        utt = Utterance(src_text="Hello", src_lang="en")
-        result = backend.translate(utt, "ja")
-        assert result.tgt_text == "こんにちは"
-        assert result.tgt_lang == "ja"
+        assert backend.translate("Hello", "en", "ja") == "こんにちは"
 
     def test_iso_to_nllb_mapping(self, fake_transformers) -> None:
         _, fake_tokenizer, _ = fake_transformers
@@ -89,7 +86,7 @@ class TestTranslate:
         )
 
         backend = Nllb200TranslatorBackend()
-        backend.translate(Utterance(src_text="hi", src_lang="en"), "ja")
+        backend.translate("hi", "en", "ja")
         # src_lang として eng_Latn が設定されているはず
         assert fake_tokenizer.src_lang == "eng_Latn"
         # tgt の forced_bos_token_id 取得時に jpn_Jpan が渡される
@@ -102,7 +99,7 @@ class TestTranslate:
         )
 
         backend = Nllb200TranslatorBackend()
-        backend.translate(Utterance(src_text="x", src_lang="auto"), "ja")
+        backend.translate("x", "auto", "ja")
         assert fake_tokenizer.src_lang == "eng_Latn"  # fallback
 
     def test_empty_translation_raises_skip(self, fake_transformers) -> None:
@@ -114,7 +111,7 @@ class TestTranslate:
 
         backend = Nllb200TranslatorBackend()
         with pytest.raises(SkipError):
-            backend.translate(Utterance(src_text="hi", src_lang="en"), "ja")
+            backend.translate("hi", "en", "ja")
 
     def test_inference_exception_wrapped_fatal(self, fake_transformers) -> None:
         _, _, fake_model = fake_transformers
@@ -125,4 +122,4 @@ class TestTranslate:
 
         backend = Nllb200TranslatorBackend()
         with pytest.raises(FatalError, match="翻訳失敗"):
-            backend.translate(Utterance(src_text="hi", src_lang="en"), "ja")
+            backend.translate("hi", "en", "ja")

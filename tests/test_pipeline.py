@@ -74,29 +74,27 @@ class FakeAsr(AsrBackend):
     def __init__(self, *, raise_exc: BaseException | None = None) -> None:
         self._raise = raise_exc
 
-    def transcribe(self, utterance: Utterance, src_lang: str = "auto") -> Utterance:
+    def transcribe(self, pcm, src_lang_hint: str = "auto") -> tuple[str, str]:
         if self._raise is not None:
             raise self._raise
-        utterance.src_text = "hello"
-        return utterance
+        return "hello", "en"
 
 
 class FakeTranslator(TranslatorBackend):
-    def translate(self, utterance: Utterance, tgt_lang: str) -> Utterance:
-        utterance.tgt_text = utterance.src_text + "->ja"
-        utterance.tgt_lang = tgt_lang
-        return utterance
+    def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:
+        return src_text + "->ja"
 
 
 class FakeTts(TtsBackend):
-    def synthesize(self, utterance: Utterance) -> Utterance:
-        utterance.tts_pcm = b"audio"
-        return utterance
+    def synthesize(self, text: str, tgt_lang: str) -> tuple:
+        # tests では bytes でも問題ない箇所がある(再生まではいかないモック)
+        return b"audio", 16000
 
 
 class FakeOutput(AudioOutputBackend):
     def __init__(self) -> None:
-        self.played: list[Utterance] = []
+        # (pcm, samplerate) のタプルで保持
+        self.played: list[tuple] = []
         self._started = False
 
     def list_devices(self) -> list[OutputDevice]:
@@ -105,8 +103,8 @@ class FakeOutput(AudioOutputBackend):
     def start(self, device_id: str) -> None:
         self._started = True
 
-    def play(self, utterance: Utterance) -> None:
-        self.played.append(utterance)
+    def play(self, pcm, samplerate: int) -> None:
+        self.played.append((pcm, samplerate))
 
     def stop(self) -> None:
         self._started = False
@@ -153,16 +151,24 @@ def _wait_until(predicate: Callable[[], bool], timeout: float = 2.0) -> bool:
 
 class TestPipelineLifecycle:
     def test_start_runs_loop_and_processes_utterances(self) -> None:
-        coord, output = _build()
+        done: list[Utterance] = []
+        coord, output = _build(on_done=lambda u: done.append(u))
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         assert _wait_until(lambda: len(output.played) >= 5)
         coord.stop()
         assert not coord.is_running
         assert len(output.played) == 5
-        for u in output.played:
+        # output.played は (pcm, samplerate) のタプル
+        for pcm, sr in output.played:
+            assert pcm == b"audio"
+            assert sr == 16000
+        # 内部 Utterance は on_done で取れる
+        assert len(done) == 5
+        for u in done:
             assert u.src_text == "hello"
             assert u.tgt_text == "hello->ja"
             assert u.tts_pcm == b"audio"
+            assert u.tts_samplerate == 16000
 
     def test_double_start_raises(self) -> None:
         coord, _ = _build()
@@ -325,21 +331,21 @@ class TestProcessPcmRelease:
 
     def test_pcm_is_released_after_asr(self) -> None:
         captured_pcm_in_asr: list = []
-        released_pcm_after: list = []
+        released_utts_in_translate: list = []
 
         class PcmInspectorAsr(AsrBackend):
-            def transcribe(self, utterance: Utterance, src_lang: str = "auto") -> Utterance:
-                # ASR 中は pcm がある
-                captured_pcm_in_asr.append(utterance.pcm)
-                utterance.src_text = "x"
-                return utterance
+            def transcribe(self, pcm, src_lang_hint: str = "auto") -> tuple[str, str]:
+                # ASR には pcm が渡ってくる
+                captured_pcm_in_asr.append(pcm)
+                return "x", "en"
 
-        class PcmCheckTranslator(TranslatorBackend):
-            def translate(self, utterance: Utterance, tgt_lang: str) -> Utterance:
-                # 翻訳ステージに来た時点で pcm は None になっているはず
-                released_pcm_after.append(utterance.pcm)
-                utterance.tgt_text = "y"
-                return utterance
+        # 翻訳は Coordinator が Utterance.src_text を渡してくるだけなので、
+        # pcm 解放確認は Translator I/F では取れない。代わりに on_done で見る。
+        done: list[Utterance] = []
+
+        class PassTranslator(TranslatorBackend):
+            def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:
+                return "y"
 
         chunks = [np.ones(160, dtype=np.float32)]
         output = FakeOutput()
@@ -347,12 +353,13 @@ class TestProcessPcmRelease:
             capture=FakeCapture(chunks),
             vad=FakeVad(every_n_chunks=1),
             asr=PcmInspectorAsr(),
-            translator=PcmCheckTranslator(),
+            translator=PassTranslator(),
             tts=FakeTts(),
             output=output,
             error_handler=ErrorHandler(),
             src_lang="en",
             tgt_lang="ja",
+            on_utterance_done=lambda u: done.append(u),
             read_timeout=0.01,
             queue_size=50,
         )
@@ -362,8 +369,9 @@ class TestProcessPcmRelease:
 
         assert captured_pcm_in_asr, "ASR が呼ばれていない"
         assert captured_pcm_in_asr[0] is not None, "ASR時点でpcmがNoneになっている(早すぎる解放)"
-        assert released_pcm_after, "翻訳が呼ばれていない"
-        assert released_pcm_after[0] is None, "ASR後にpcmが解放されていない"
+        # ASR 完了後に utt.pcm が None にされていることを on_done 経由で確認
+        assert done, "再生まで到達していない"
+        assert done[0].pcm is None, "ASR後にpcmが解放されていない"
 
 
 class TestPipelineTimeline:

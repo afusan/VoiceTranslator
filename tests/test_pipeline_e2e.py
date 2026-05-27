@@ -56,29 +56,24 @@ class VadEveryN(VadBackend):
 
 
 class EchoAsr(AsrBackend):
-    def transcribe(self, utterance: Utterance, src_lang: str = "auto") -> Utterance:
-        utterance.src_text = f"text({utterance.pcm.shape[0]} samples)"
-        return utterance
+    def transcribe(self, pcm, src_lang_hint: str = "auto") -> tuple[str, str]:
+        return f"text({pcm.shape[0]} samples)", "en"
 
 
 class SuffixTranslator(TranslatorBackend):
-    def translate(self, utterance: Utterance, tgt_lang: str) -> Utterance:
-        utterance.tgt_text = f"{utterance.src_text} -> {tgt_lang}"
-        utterance.tgt_lang = tgt_lang
-        return utterance
+    def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:
+        return f"{src_text} -> {tgt_lang}"
 
 
 class SilentTts(TtsBackend):
-    def synthesize(self, utterance: Utterance) -> Utterance:
+    def synthesize(self, text: str, tgt_lang: str) -> tuple[np.ndarray, int]:
         # 0.01秒分の無音を合成したことにする
-        utterance.tts_pcm = np.zeros(160, dtype=np.float32)
-        utterance.tts_samplerate = 16000
-        return utterance
+        return np.zeros(160, dtype=np.float32), 16000
 
 
 class RecordingOutput(AudioOutputBackend):
     def __init__(self) -> None:
-        self.played: list[Utterance] = []
+        self.played: list[tuple] = []  # (pcm, samplerate)
         self._started = False
 
     def list_devices(self) -> list[OutputDevice]:
@@ -87,8 +82,8 @@ class RecordingOutput(AudioOutputBackend):
     def start(self, device_id: str) -> None:
         self._started = True
 
-    def play(self, utterance: Utterance) -> None:
-        self.played.append(utterance)
+    def play(self, pcm, samplerate: int) -> None:
+        self.played.append((pcm, samplerate))
 
     def stop(self) -> None:
         self._started = False
@@ -113,6 +108,7 @@ class TestPipelineE2EWithSynthPcm:
 
         capture = WavReplayCapture(pcm, chunk_size=512)
         output = RecordingOutput()
+        done_utts: list[Utterance] = []
 
         coord = PipelineCoordinator(
             capture=capture,
@@ -124,6 +120,7 @@ class TestPipelineE2EWithSynthPcm:
             error_handler=ErrorHandler(),
             src_lang="en",
             tgt_lang="ja",
+            on_utterance_done=lambda u: done_utts.append(u),
             read_timeout=0.01,
             queue_size=100,  # テストでは取りこぼし防止のため大きめ
         )
@@ -134,7 +131,8 @@ class TestPipelineE2EWithSynthPcm:
         coord.stop()
 
         assert len(output.played) > 0
-        for u in output.played:
+        assert len(done_utts) > 0
+        for u in done_utts:
             assert u.src_text.startswith("text(")
             assert u.tgt_text.endswith("-> ja")
             for key in ("t_capture", "t_vad_end", "t_asr", "t_translate", "t_tts", "t_playback"):
