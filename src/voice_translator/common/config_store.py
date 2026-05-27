@@ -35,6 +35,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "log": {
         "directory": "./logs",        # ログ・jsonl・テキスト の出力先
+        "level": "INFO",              # app.log のしきい値(DEBUG/INFO/WARNING/ERROR)。
+                                       # SKIP は INFO レベルで出るため、ノイズを抑えたい場合は WARNING に上げる。
         "jsonl_enabled": True,        # 翻訳履歴 jsonl の出力 ON/OFF(機械処理向け)
         "src_text_enabled": False,    # 翻訳前テキスト soundsrc.txt の出力 ON/OFF(デバッグ用)
         "tgt_text_enabled": False,    # 翻訳後テキスト translated.txt の出力 ON/OFF(デバッグ用)

@@ -150,7 +150,7 @@
   <tr><td><strong>Logger</strong></td><td>アプリ全般のログを stdout とファイルに出力する。</td></tr>
   <tr><td><strong>TextLogger</strong></td><td>翻訳前 / 翻訳後 テキストの個別ファイル追記。ON/OFF は src/tgt 個別に切り替え可能。</td></tr>
   <tr><td><strong>JsonlLogger</strong></td><td>翻訳1件を1行のJSONとして履歴ファイルに追記する(機械処理向け)。</td></tr>
-  <tr><td><strong>ErrorHandler</strong></td><td>例外を 致命 / 回復可能 / スキップ可能 / 警告 の4分類で振り分ける。</td></tr>
+  <tr><td><strong>ErrorHandler</strong></td><td>例外を 致命 / 回復可能 / スキップ可能 / 警告 の4分類で振り分ける。<code>handle(exc, *, stage, seq_id)</code> で「どの段で・どの発話で」起きたかをログとコールバックに伝える。詳細は <code>ErrorCatalog.md</code> を参照。</td></tr>
   <tr><td><strong>DeviceValidator</strong></td><td>入力デバイスと出力デバイスが同一でないことを起動時に保証する。フィードバック防止のため。</td></tr>
   <tr><td><strong>cache_check</strong></td><td>各バックエンドのモデルがローカルキャッシュにあるかを軽量に判定する。GUI の初期状態表示に使う。</td></tr>
   <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態・モデルステータスを可視化する。</td></tr>

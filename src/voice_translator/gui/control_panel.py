@@ -121,11 +121,29 @@ class ControlPanel(ctk.CTkFrame):
     def _on_utterance_from_thread(self, record: dict) -> None:
         self.after(0, lambda: self._apply_utterance(record))
 
-    def _on_fatal_from_thread(self, message: str) -> None:
-        self.after(0, lambda: self._apply_fatal(message))
+    def _on_fatal_from_thread(
+        self, message: str, *, exc=None, stage=None, seq_id=None
+    ) -> None:
+        formatted = self._format_with_context(message, stage=stage, seq_id=seq_id)
+        self.after(0, lambda: self._apply_fatal(formatted))
 
-    def _on_warn_from_thread(self, message: str) -> None:
-        self.after(0, lambda: self._apply_warn(message))
+    def _on_warn_from_thread(
+        self, message: str, *, exc=None, stage=None, seq_id=None
+    ) -> None:
+        formatted = self._format_with_context(message, stage=stage, seq_id=seq_id)
+        self.after(0, lambda: self._apply_warn(formatted))
+
+    @staticmethod
+    def _format_with_context(message: str, *, stage, seq_id) -> str:
+        """UI 表示用に "[stage] #seq message" 形式に整形(None は省略)。"""
+        prefix_parts: list[str] = []
+        if stage is not None:
+            prefix_parts.append(f"[{stage}]")
+        if seq_id is not None:
+            prefix_parts.append(f"#{seq_id}")
+        if not prefix_parts:
+            return message
+        return " ".join(prefix_parts) + " " + message
 
     def _on_status_from_thread(self, layer: LayerKind, status: ModelStatus) -> None:
         # SettingsPanel に転送(UI 表示)

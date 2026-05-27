@@ -302,7 +302,7 @@ class TestPipelineErrorHandling:
     def test_fatal_error_stops_pipeline(self) -> None:
         chunks = [np.zeros(160, dtype=np.float32) for _ in range(10)]
         called: list[str] = []
-        handler = ErrorHandler(on_fatal=lambda m: called.append(m))
+        handler = ErrorHandler(on_fatal=lambda m, **_kw: called.append(m))
         output = FakeOutput()
         coord = PipelineCoordinator(
             capture=FakeCapture(chunks),
@@ -592,7 +592,7 @@ class TestPipelineErrorAtTranslatorStage:
         coord, output = _build_with_backends(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(10)],
             translator=FakeTranslator(raise_exc=FatalError("translator dead")),
-            on_fatal=lambda m: called.append(m),
+            on_fatal=lambda m, **_kw: called.append(m),
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         assert _wait_until(lambda: not coord.is_running, timeout=2.0)
@@ -619,7 +619,7 @@ class TestPipelineErrorAtTtsStage:
         coord, output = _build_with_backends(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(10)],
             tts=FakeTts(raise_exc=FatalError("tts dead")),
-            on_fatal=lambda m: called.append(m),
+            on_fatal=lambda m, **_kw: called.append(m),
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         assert _wait_until(lambda: not coord.is_running, timeout=2.0)
@@ -647,7 +647,7 @@ class TestPipelineErrorAtOutputStage:
         coord, output = _build_with_backends(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(10)],
             output=FakeOutput(raise_exc=FatalError("speaker gone")),
-            on_fatal=lambda m: called.append(m),
+            on_fatal=lambda m, **_kw: called.append(m),
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         assert _wait_until(lambda: not coord.is_running, timeout=2.0)
@@ -676,7 +676,7 @@ class TestPipelineErrorAtInputStage:
         coord, output = _build_with_backends(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(10)],
             vad=RaisingVad(FatalError("vad model dead")),
-            on_fatal=lambda m: called.append(m),
+            on_fatal=lambda m, **_kw: called.append(m),
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         assert _wait_until(lambda: not coord.is_running, timeout=2.0)
@@ -687,7 +687,7 @@ class TestPipelineErrorAtInputStage:
         called: list[str] = []
         coord, output = _build_with_backends(
             capture=RaisingCapture(FatalError("device gone")),
-            on_fatal=lambda m: called.append(m),
+            on_fatal=lambda m, **_kw: called.append(m),
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         assert _wait_until(lambda: not coord.is_running, timeout=2.0)
@@ -990,3 +990,76 @@ class TestPipelineQueueFullConcurrency:
         # payload フィールド書き換え不可
         with pytest.raises(Exception):
             msg.payload.src_text = "rewritten"  # type: ignore[misc]
+
+
+# ============================================================
+# エラー context(stage/seq_id)が callback とログに反映される
+# ============================================================
+class TestPipelineErrorContext:
+    """例外時に callback とログに stage/seq_id が含まれることを Coordinator 経由で検証。"""
+
+    def test_fatal_callback_receives_stage_and_seq_id(self) -> None:
+        """Translator FATAL 時、on_fatal に stage='Translator' と seq_id が渡る。"""
+        received: list[dict] = []
+
+        def on_fatal(message, *, exc=None, stage=None, seq_id=None):
+            received.append({
+                "message": message, "exc": exc, "stage": stage, "seq_id": seq_id
+            })
+
+        coord, _ = _build_with_backends(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(5)],
+            translator=FakeTranslator(raise_exc=FatalError("translator broke")),
+            on_fatal=on_fatal,
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: not coord.is_running, timeout=2.0)
+        coord.stop()
+
+        assert received, "on_fatal が呼ばれていない"
+        first = received[0]
+        assert first["message"] == "translator broke"
+        assert first["stage"] == "Translator"
+        assert isinstance(first["seq_id"], int) and first["seq_id"] >= 1
+        assert isinstance(first["exc"], FatalError)
+
+    def test_asr_skip_log_contains_stage_and_seq_id(self, caplog) -> None:
+        """ASR SKIP のログに seq= と stage=ASR が含まれる。"""
+        import logging
+        caplog.set_level(logging.INFO, logger="voice_translator")
+
+        coord, _ = _build_with_backends(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(3)],
+            asr=FakeAsr(raise_exc=SkipError("empty pcm")),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.3)
+        coord.stop()
+
+        # ログメッセージに seq= と stage=ASR と [SKIP] と本文が同時に含まれる
+        target = [
+            r for r in caplog.records
+            if "stage=ASR" in r.message and "seq=" in r.message
+            and "[SKIP]" in r.message and "empty pcm" in r.message
+        ]
+        assert target, f"ASR の SKIP ログに context が含まれていない: {[r.message for r in caplog.records]}"
+
+    def test_capture_fatal_log_has_stage_but_no_seq_id(self, caplog) -> None:
+        """Capture 段は seq_id 発行前なので seq= は出ない(stage= だけ)。"""
+        import logging
+        caplog.set_level(logging.ERROR, logger="voice_translator")
+
+        coord, _ = _build_with_backends(
+            capture=RaisingCapture(FatalError("device gone")),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: not coord.is_running, timeout=2.0)
+        coord.stop()
+
+        target = [
+            r for r in caplog.records
+            if "stage=Capture" in r.message and "device gone" in r.message
+        ]
+        assert target
+        for r in target:
+            assert "seq=" not in r.message  # 発行前なので付かない

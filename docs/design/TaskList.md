@@ -15,7 +15,7 @@
 | ☑ | Class.md 作成 | 完了(AppController/ModelStatus含む) |
 | ☑ | UserSinario.md 作成 | 完了 |
 | ☑ | TaskList.md 作成 | 完了(=本ファイル) |
-| ☐ | ErrorCatalog.md 雛形作成 | エラー方針集約用。実装と並行で埋める(Phase 2予定) |
+| ☑ | ErrorCatalog.md 雛形作成 | feature/error-context で完了。現状の raise 点と severity 判定を整理。 |
 | ☑ | manual.md 雛形作成 → 肉付け | 完了(Step6で肉付け済み) |
 
 ---
