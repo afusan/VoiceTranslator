@@ -1,7 +1,7 @@
 """SileroVadBackend: silero-vad ベースの発話区切り検出。
 
 役割: 16kHz/mono/float32 のチャンクストリームを受け、silero-vad で
-発話の開始/終了を検出し、確定した発話を Utterance として返す。
+発話の開始/終了を検出し、確定した発話を `VadSegment` として返す。
 silero-vad は 512サンプル単位の入力を要するため、内部バッファで合わせる。
 """
 
@@ -18,9 +18,8 @@ from voice_translator.common.types import (
     BackendCapabilities,
     PcmChunk,
 )
-from voice_translator.common.utterance import Utterance
 
-from .backend import VadBackend
+from .backend import VadBackend, VadSegment
 
 
 # silero-vad が要求するチャンクサイズ(16kHzのとき)
@@ -32,7 +31,7 @@ class SileroVadBackend(VadBackend):
 
     役割: process(chunk) を呼ぶたびに内部バッファに溜め、512サンプル単位で
     silero-vad に流す。speech start → speech end の間のサンプルを集めて
-    Utterance を生成する。
+    VadSegment(pcm, started_at_monotonic) を生成する。
     """
 
     def __init__(
@@ -79,13 +78,13 @@ class SileroVadBackend(VadBackend):
         self._speech_started_at = None
 
     # ----------------------------------------------------------
-    def process(self, chunk: PcmChunk) -> list[Utterance]:
+    def process(self, chunk: PcmChunk) -> list[VadSegment]:
         """チャンクを投入し、確定した発話を返す。"""
         if chunk.size == 0:
             return []
         self._buffer = np.concatenate([self._buffer, chunk.astype(np.float32, copy=False)])
 
-        completed: list[Utterance] = []
+        completed: list[VadSegment] = []
         while self._buffer.size >= SILERO_CHUNK_SAMPLES:
             window = self._buffer[:SILERO_CHUNK_SAMPLES]
             self._buffer = self._buffer[SILERO_CHUNK_SAMPLES:]
@@ -112,7 +111,7 @@ class SileroVadBackend(VadBackend):
             raise FatalError(f"silero-vad 推論失敗: {e}", cause=e) from e
 
     def _handle_event(
-        self, event: dict[str, Any], window: np.ndarray, completed: list[Utterance]
+        self, event: dict[str, Any], window: np.ndarray, completed: list[VadSegment]
     ) -> None:
         """speech start / end の合図を受けて状態を更新する。"""
         if "start" in event:
@@ -121,17 +120,11 @@ class SileroVadBackend(VadBackend):
             self._speech_samples = [window.copy()]
             self._speech_started_at = monotonic()
         elif "end" in event and self._in_speech:
-            # 発話終了 → Utterance を生成
+            # 発話終了 → VadSegment を生成
             self._speech_samples.append(window.copy())
             pcm = np.concatenate(self._speech_samples).astype(np.float32, copy=False)
-            utt = Utterance(pcm=pcm)
-            # t_capture は発話開始時点(VAD検知時刻)を採用
-            if self._speech_started_at is not None:
-                utt.timeline._times["t_capture"] = self._speech_started_at  # 直接代入(再mark回避)
-            else:
-                utt.timeline.mark("t_capture")
-            utt.timeline.mark("t_vad_end")
-            completed.append(utt)
+            started_at = self._speech_started_at if self._speech_started_at is not None else monotonic()
+            completed.append(VadSegment(pcm=pcm, started_at_monotonic=started_at))
 
             self._in_speech = False
             self._speech_samples = []

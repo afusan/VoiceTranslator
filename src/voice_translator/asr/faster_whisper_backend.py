@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from voice_translator.common.errors import FatalError, SkipError
 from voice_translator.common.types import BackendCapabilities
-from voice_translator.common.utterance import Utterance
 
 from .backend import AsrBackend
 
@@ -16,8 +17,8 @@ from .backend import AsrBackend
 class FasterWhisperAsrBackend(AsrBackend):
     """faster-whisper を使った書き起こしバックエンド。
 
-    役割: 初期化時にモデルをロードし、transcribe で utterance.pcm を
-    src_text に変換する。初回は大きなモデルDLが走るので時間がかかる。
+    役割: 初期化時にモデルをロードし、transcribe(pcm, hint) で
+    (text, lang) を返す。初回は大きなモデルDLが走るので時間がかかる。
     """
 
     def __init__(
@@ -47,15 +48,15 @@ class FasterWhisperAsrBackend(AsrBackend):
         self._beam_size = beam_size
 
     # ----------------------------------------------------------
-    def transcribe(self, utterance: Utterance, src_lang: str = "auto") -> Utterance:
-        """utterance.pcm を書き起こし、src_text/src_lang を埋めて返す。"""
-        if utterance.pcm is None or (hasattr(utterance.pcm, "size") and utterance.pcm.size == 0):
+    def transcribe(self, pcm: Any, src_lang_hint: str = "auto") -> tuple[str, str]:
+        """pcm を書き起こし (text, lang) を返す。"""
+        if pcm is None or (hasattr(pcm, "size") and pcm.size == 0):
             raise SkipError("ASR入力PCMが空です")
 
-        language = None if src_lang in ("auto", "", None) else src_lang
+        language = None if src_lang_hint in ("auto", "", None) else src_lang_hint
         try:
             segments_iter, info = self._model.transcribe(
-                utterance.pcm,
+                pcm,
                 language=language,
                 task="transcribe",
                 beam_size=self._beam_size,
@@ -65,12 +66,13 @@ class FasterWhisperAsrBackend(AsrBackend):
         except Exception as e:  # noqa: BLE001
             raise FatalError(f"faster-whisper 推論失敗: {e}", cause=e) from e
 
-        utterance.src_text = text.strip()
-        if src_lang in ("auto", "", None):
-            detected = getattr(info, "language", None)
-            if detected:
-                utterance.src_lang = detected
-        return utterance
+        text = text.strip()
+        if src_lang_hint in ("auto", "", None):
+            detected = getattr(info, "language", None) or ""
+            lang_out = detected or "auto"
+        else:
+            lang_out = src_lang_hint
+        return text, lang_out
 
     # ----------------------------------------------------------
     def capabilities(self) -> BackendCapabilities:

@@ -13,12 +13,14 @@
   th { background: #e0e7ff; }
   tr:nth-child(even) td { background: #f8fafc; }
   code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-family: "Cascadia Code", Consolas, monospace; font-size: 0.92em; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 12px 16px; border-radius: 6px; overflow-x: auto; font-size: 0.88em; }
   .callout { background: #eff6ff; border-left: 4px solid #2563eb; padding: 0.8em 1em; margin: 1em 0; }
+  .callout.warn { background: #fef3c7; border-left-color: #d97706; }
   .small { font-size: 0.88em; color: #475569; }
   a { color: #1d4ed8; }
 
-  /* Layer diagram */
-  .pipeline { display: flex; flex-direction: column; align-items: stretch; margin: 1.5em 0; gap: 0; }
+  /* layer diagram */
+  .pipeline { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin: 1.5em 0; }
   .row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0; }
   .stage {
     display: inline-flex; flex-direction: column; align-items: center;
@@ -29,167 +31,99 @@
   }
   .stage .name { font-weight: 700; color: #1e3a8a; font-size: 1.0em; }
   .stage .sub { font-size: 0.78em; color: #1e40af; margin-top: 2px; }
-  .arrow {
+  .queue {
     display: inline-flex; flex-direction: column; align-items: center;
-    margin: 0 4px; min-width: 90px;
+    background: #fef3c7; border: 2px dashed #d97706; border-radius: 4px;
+    padding: 6px 10px; margin: 0 8px; min-width: 80px;
   }
-  .arrow .label {
-    font-size: 0.78em; color: #475569; background: #fff;
-    padding: 2px 6px; border-radius: 4px; white-space: nowrap;
-    border: 1px dashed #94a3b8;
+  .queue .name { font-weight: 700; color: #92400e; font-size: 0.82em; }
+  .queue .sub { font-size: 0.72em; color: #78350f; }
+  .arrow {
+    color: #2563eb; font-weight: bold; font-size: 1.3em;
   }
-  .arrow .line {
-    font-size: 1.4em; color: #2563eb; line-height: 1; margin-top: 2px;
+  .ctrl-band {
+    margin: 1.2em auto 0; background: #ecfeff; border: 2px dashed #0e7490;
+    border-radius: 8px; padding: 6px 12px; text-align: center; max-width: 80%;
+    color: #155e75; font-weight: 600;
   }
   .cross-row {
     display: flex; gap: 1em; justify-content: center; margin-top: 1.8em;
     flex-wrap: wrap;
   }
   .cross {
-    background: #fef3c7; border: 2px solid #d97706; border-radius: 8px;
+    background: #fae8ff; border: 2px solid #a21caf; border-radius: 8px;
     padding: 8px 14px; min-width: 130px; text-align: center;
   }
-  .cross .name { font-weight: 700; color: #92400e; }
-  .cross .sub { font-size: 0.78em; color: #78350f; margin-top: 2px; }
-  .ctrl-band {
-    margin: 1.2em auto 0; background: #ecfeff; border: 2px dashed #0e7490;
-    border-radius: 8px; padding: 6px 12px; text-align: center; max-width: 80%;
-    color: #155e75; font-weight: 600;
-  }
+  .cross .name { font-weight: 700; color: #6b21a8; }
+  .cross .sub { font-size: 0.78em; color: #581c87; margin-top: 2px; }
+  .cross.gui { background:#fef3c7; border-color:#d97706; }
+  .cross.gui .name { color: #92400e; }
+  .cross.gui .sub { color: #78350f; }
 </style>
 </head>
 <body>
 
 <h1>Architecture (アーキテクチャ)</h1>
 <p class="small">
-本ドキュメントは <strong>レイヤ構成 / 各レイヤの役割 / レイヤ間でやり取りするデータ(I/F)</strong> を定義する。<br>
+本ドキュメントは <strong>レイヤ構成 / 各レイヤの役割 / スレッド構成 / レイヤ間でやり取りするデータ</strong> を定義する。<br>
 クラス・モジュール単位の詳細は <a href="Class.md">Class.md</a> を参照。
 </p>
 
 <!-- =================================================== -->
 <h2>1. 全体レイヤ図</h2>
 
+<p>
+本アプリは「音声を取り込み → 翻訳して → 別デバイスに再生する」までを、
+役割ごとに分割した6つのレイヤで構成する。各レイヤは抽象I/Fと1つの具象実装で構成し、後から差し替え可能とする(MVPでは各1実装のみ)。
+</p>
+
 <div class="pipeline">
-
-  <!-- main pipeline row -->
   <div class="row">
-    <div class="stage"><div class="name">AudioCapture</div><div class="sub">入力</div></div>
-    <div class="arrow"><div class="label">PCMストリーム<br>(16k/mono/f32)</div><div class="line">→</div></div>
-    <div class="stage"><div class="name">VAD</div><div class="sub">発話区切り</div></div>
-    <div class="arrow"><div class="label">発話単位PCM</div><div class="line">→</div></div>
-    <div class="stage"><div class="name">ASR</div><div class="sub">書き起こし</div></div>
-    <div class="arrow"><div class="label">srcテキスト</div><div class="line">→</div></div>
-    <div class="stage"><div class="name">Translator</div><div class="sub">翻訳</div></div>
-    <div class="arrow"><div class="label">tgtテキスト</div><div class="line">→</div></div>
-    <div class="stage"><div class="name">TTS</div><div class="sub">音声合成</div></div>
-    <div class="arrow"><div class="label">合成PCM</div><div class="line">→</div></div>
-    <div class="stage"><div class="name">AudioOutput</div><div class="sub">出力</div></div>
+    <div class="stage"><div class="name">音声取得</div><div class="sub">AudioCapture</div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="name">発話区切り</div><div class="sub">VAD</div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="name">書き起こし</div><div class="sub">ASR</div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="name">翻訳</div><div class="sub">Translator</div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="name">音声合成</div><div class="sub">TTS</div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="name">音声出力</div><div class="sub">AudioOutput</div></div>
   </div>
-
-  <div class="ctrl-band">PipelineCoordinator(発話単位 Utterance を 3スレッドに流し、開始/停止を制御)</div>
 
   <div class="cross-row">
-    <div class="cross"><div class="name">AppController</div><div class="sub">GUIと内部の仲介</div></div>
-    <div class="cross"><div class="name">ConfigStore</div><div class="sub">設定保存/読込</div></div>
-    <div class="cross"><div class="name">Logger</div><div class="sub">画面 + jsonl</div></div>
-    <div class="cross"><div class="name">ErrorHandler</div><div class="sub">致命/回復/スキップ/警告</div></div>
-    <div class="cross"><div class="name">GUI</div><div class="sub">設定 + 動作操作 + ステータス表示</div></div>
-  </div>
-
-</div>
-
-<p class="small">
-青ブロック: パイプラインステージ(3スレッドに分散)。 黄ブロック: 横断機能。 シアン帯: パイプライン制御。<br>
-全ステージは「抽象I/F + 1つの具象実装」で構成し、後で差し替え可能にする(MVPは各1実装のみ)。
-</p>
-
-<!-- =================================================== -->
-<h2>1-2. スレッド構成(B+案)</h2>
-<p>UI フリーズ防止と取得ラグ抑制のため、以下の 5 スレッド構成で動かす。</p>
-
-<div class="thread-band">
-  <div class="thread-row">
-    <div class="thread ui">
-      <div class="name">UI (main)</div>
-      <div class="sub">tkinter mainloop / 設定操作</div>
-    </div>
-  </div>
-  <div class="thread-row"><span class="arrow">↓ start ボタン押下</span></div>
-  <div class="thread-row">
-    <div class="thread loader">
-      <div class="name">Loader (1回限り)</div>
-      <div class="sub">各バックエンドのモデルロード</div>
-    </div>
-  </div>
-  <div class="thread-row"><span class="arrow">↓ ロード完了で3スレッド起動</span></div>
-  <div class="thread-row">
-    <div class="thread bg">
-      <div class="name">Input thread</div>
-      <div class="sub">capture → VAD → q1</div>
-    </div>
-    <span class="qlabel">q1 (max 3)<br>あふれ=最古を捨てる</span>
-    <div class="thread bg">
-      <div class="name">Process thread</div>
-      <div class="sub">ASR → 翻訳 → TTS → q2</div>
-    </div>
-    <span class="qlabel">q2 (max 3)<br>あふれ=最古を捨てる</span>
-    <div class="thread bg">
-      <div class="name">Output thread</div>
-      <div class="sub">再生 + UI通知</div>
-    </div>
+    <div class="cross"><div class="name">AppController</div><div class="sub">GUI と内部の仲介</div></div>
+    <div class="cross"><div class="name">PipelineCoordinator</div><div class="sub">各レイヤの起動/停止と連携</div></div>
+    <div class="cross"><div class="name">UtteranceLedger</div><div class="sub">発話メタ情報の中央管理</div></div>
+    <div class="cross"><div class="name">SequenceGenerator</div><div class="sub">発話への一意IDの発行</div></div>
+    <div class="cross"><div class="name">ConfigStore</div><div class="sub">設定の永続化</div></div>
+    <div class="cross"><div class="name">Logger / TextLogger</div><div class="sub">各種ログの出力</div></div>
+    <div class="cross"><div class="name">ErrorHandler</div><div class="sub">例外の重大度別分類</div></div>
+    <div class="cross gui"><div class="name">GUI</div><div class="sub">設定・動作操作・状態表示</div></div>
   </div>
 </div>
 
-<table>
-  <tr><th>スレッド</th><th>役割</th><th>備考</th></tr>
-  <tr><td>UI (main)</td><td>tkinter mainloop。ユーザ操作と画面更新のみ。</td><td>常に応答可能を維持</td></tr>
-  <tr><td>Loader</td><td>各レイヤのバックエンドを順にインスタンス化(モデルロード)。完了/失敗を UI に通知。</td><td>1回限り起動・終了</td></tr>
-  <tr><td>Input</td><td>capture.read_chunk → vad.process で Utterance を作って q1 に投入。</td><td>取りこぼし最小化</td></tr>
-  <tr><td>Process</td><td>q1 から取り出し、ASR → 翻訳 → TTS を直列実行して q2 に投入。</td><td>処理が重い段</td></tr>
-  <tr><td>Output</td><td>q2 から取り出して再生、on_utterance_done コールバックを発火。</td><td>処理中の発話と並行再生可</td></tr>
-</table>
-
 <p class="small">
-キューあふれ時は<strong>最古の発話を捨てて新しい発話を優先</strong>する(リアルタイム性確保)。
-発話の取りこぼしが続く場合は Process 側のレイテンシ過大のシグナルとしてログに記録する。
+青ブロック: パイプラインの各レイヤ。 紫: 横断機能。 黄: UI。
 </p>
-
-<h3>停止シーケンス</h3>
-<ol>
-  <li>stop_event をセット → Input スレッドが次の read_chunk 完了後に終了</li>
-  <li>q1 にセンチネルを投入 → Process スレッドが終了</li>
-  <li>q2 にセンチネルを投入 → Output スレッドが終了</li>
-  <li>各スレッドを join → capture.stop() / output.stop() を呼んでデバイス解放</li>
-</ol>
-
-<h3>モデル状態(UI公開)</h3>
-<p>各レイヤのバックエンドについて以下の 3 状態を AppController が保持し、GUI に色付きラベルで表示する(英語固定)。</p>
-<table>
-  <tr><th>状態</th><th>表示</th><th>意味</th></tr>
-  <tr><td>NOT_DOWNLOADED</td><td>"Not Downloaded"(赤)</td><td>ローカルキャッシュ無し。起動時にDLが走る。</td></tr>
-  <tr><td>LOADING</td><td>"Loading..."(オレンジ)</td><td>DL or メモリへロード中。</td></tr>
-  <tr><td>LOADED</td><td>"Loaded"(緑)</td><td>メモリにロード済み or キャッシュ済み(即ロード可)。</td></tr>
-</table>
 
 <!-- =================================================== -->
 <h2>2. 各レイヤの役割</h2>
 
 <table>
-  <tr>
-    <th>レイヤ</th>
-    <th>役割</th>
-  </tr>
+  <tr><th>レイヤ</th><th>役割</th></tr>
   <tr>
     <td><strong>AudioCapture</strong></td>
     <td>選択された入力デバイスから音声を取得し、内部標準フォーマット(16kHz/mono/float32)に正規化してパイプラインに供給する。</td>
   </tr>
   <tr>
     <td><strong>VAD</strong></td>
-    <td>連続するPCMストリームから発話区間を検出し、無音で区切って「1発話 = 1 Utterance」として下流に流す。</td>
+    <td>連続するPCMストリームから発話区間を検出し、無音で区切って「1発話分のPCM」として下流に流す。</td>
   </tr>
   <tr>
     <td><strong>ASR</strong></td>
-    <td>発話単位の音声を入力言語のテキストに書き起こす。出力先言語の指定はしない(=翻訳しない)。</td>
+    <td>発話単位の PCM を入力言語のテキストに書き起こす。翻訳は行わない。</td>
   </tr>
   <tr>
     <td><strong>Translator</strong></td>
@@ -208,96 +142,212 @@
 <h3>横断機能</h3>
 <table>
   <tr><th>機能</th><th>役割</th></tr>
-  <tr><td><strong>AppController</strong></td><td>GUI と内部モジュールの仲介。Loader スレッド起動 / バックエンド生成 / モデル状態の発信 / 設定操作の窓口。</td></tr>
-  <tr><td><strong>PipelineCoordinator</strong></td><td>Input/Process/Output の 3 スレッドを起動・停止し、上限付きキューで連携。</td></tr>
-  <tr><td><strong>ConfigStore</strong></td><td>選択中のバックエンド、デバイス、言語ペア、ログ出力先などの設定を YAML で永続化。</td></tr>
-  <tr><td><strong>Logger</strong></td><td>アプリ全般のログ + 翻訳履歴の jsonl 出力。出力先と ON/OFF は設定から取得。</td></tr>
-  <tr><td><strong>ErrorHandler</strong></td><td>例外を 致命 / 回復可能 / スキップ可能 / 警告 の4分類で振り分ける。詳細は <code>ErrorCatalog.md</code>(未作成) 参照予定。</td></tr>
-  <tr><td><strong>cache_check</strong></td><td>各バックエンドのモデルがローカルキャッシュにあるかを軽量判定。GUI の初期ステータス表示に使う。</td></tr>
-  <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態 + モデルステータスの可視化を提供する(customtkinter)。</td></tr>
+  <tr><td><strong>AppController</strong></td><td>GUI と内部モジュールの仲介。バックエンド初期化、モデル状態の発信、設定操作の窓口、ドロップ通知の受け口を担う。</td></tr>
+  <tr><td><strong>PipelineCoordinator</strong></td><td>各レイヤの起動・停止と、レイヤ間キューの管理を担う。</td></tr>
+  <tr><td><strong>UtteranceLedger</strong></td><td>発話ごとのメタ情報(タイミング・言語・テキスト・状態)を中央で集約する。最終段で取り出して履歴ログに書く。スレッドセーフ。</td></tr>
+  <tr><td><strong>SequenceGenerator</strong></td><td>発話ごとに一意の通し番号を発行する。各ログにこの番号が載り、レコード間の対応を取れる。</td></tr>
+  <tr><td><strong>ConfigStore</strong></td><td>選択中のバックエンド、デバイス、言語ペア、ログ出力先などの設定値を YAML で永続化する。</td></tr>
+  <tr><td><strong>Logger</strong></td><td>アプリ全般のログを stdout とファイルに出力する。</td></tr>
+  <tr><td><strong>TextLogger</strong></td><td>翻訳前 / 翻訳後 テキストの個別ファイル追記。ON/OFF は src/tgt 個別に切り替え可能。</td></tr>
+  <tr><td><strong>JsonlLogger</strong></td><td>翻訳1件を1行のJSONとして履歴ファイルに追記する(機械処理向け)。</td></tr>
+  <tr><td><strong>ErrorHandler</strong></td><td>例外を 致命 / 回復可能 / スキップ可能 / 警告 の4分類で振り分ける。</td></tr>
+  <tr><td><strong>DeviceValidator</strong></td><td>入力デバイスと出力デバイスが同一でないことを起動時に保証する。フィードバック防止のため。</td></tr>
+  <tr><td><strong>cache_check</strong></td><td>各バックエンドのモデルがローカルキャッシュにあるかを軽量に判定する。GUI の初期状態表示に使う。</td></tr>
+  <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態・モデルステータスを可視化する。</td></tr>
 </table>
 
 <!-- =================================================== -->
-<h2>3. レイヤ間でやり取りする情報 (I/F)</h2>
-<p>レイヤ間は <code>Utterance</code> という発話単位データを介して受け渡す。各ステージで該当フィールドを追記していく形にし、計測用に <code>timeline</code> に各時点のタイムスタンプを打つ。</p>
+<h2>3. スレッド構成</h2>
+
+<p>
+各レイヤを独立スレッドで動かし、UI と取得・処理・再生を分離する。各スレッドはキューで連結し、後段が詰まっても前段が止まらない。
+</p>
 
 <table>
+  <tr><th>スレッド</th><th>役割</th><th>該当クラス/関数</th></tr>
   <tr>
-    <th>境界</th>
-    <th>流れるデータ</th>
-    <th>形式 / 仕様</th>
+    <td><strong>UI</strong></td>
+    <td>画面更新とユーザ操作を受け付ける。常に応答可能を維持する。</td>
+    <td>tkinter mainloop / MainWindow</td>
   </tr>
   <tr>
-    <td>AudioCapture → VAD</td>
-    <td>PCMチャンクの連続ストリーム</td>
-    <td>16kHz / mono / float32 [-1.0, 1.0]、固定サイズチャンク(例: 20〜30ms)</td>
+    <td><strong>Loader</strong></td>
+    <td>各レイヤのバックエンドを順次初期化する。完了/失敗を UI に通知する。1回限り起動。</td>
+    <td>AppController._loader_body</td>
   </tr>
   <tr>
-    <td>VAD → ASR</td>
-    <td>発話単位PCM (Utterance に格納)</td>
-    <td><code>Utterance.pcm</code>(可変長), <code>timeline: t_capture, t_vad_end</code></td>
+    <td><strong>Input</strong></td>
+    <td>入力音声を取り込み、発話単位に切り分けて下流に渡す。</td>
+    <td>PipelineCoordinator._input_loop</td>
   </tr>
   <tr>
-    <td>ASR → Translator</td>
-    <td>書き起こしテキスト + 言語情報</td>
-    <td><code>Utterance.src_text: str</code>, <code>src_lang: str</code>, <code>timeline.t_asr</code></td>
+    <td><strong>ASR</strong></td>
+    <td>発話を書き起こす。</td>
+    <td>PipelineCoordinator._asr_loop</td>
   </tr>
   <tr>
-    <td>Translator → TTS</td>
-    <td>翻訳済みテキスト + 言語情報</td>
-    <td><code>Utterance.tgt_text: str</code>, <code>tgt_lang: str</code>, <code>timeline.t_translate</code></td>
+    <td><strong>Translator</strong></td>
+    <td>書き起こしを翻訳する。</td>
+    <td>PipelineCoordinator._translator_loop</td>
   </tr>
   <tr>
-    <td>TTS → AudioOutput</td>
-    <td>合成済み PCM</td>
-    <td><code>Utterance.tts_pcm</code>(エンジン依存レート/形式), <code>timeline.t_tts</code></td>
+    <td><strong>TTS</strong></td>
+    <td>翻訳結果を音声に合成する。</td>
+    <td>PipelineCoordinator._tts_loop</td>
   </tr>
   <tr>
-    <td>AudioOutput → デバイス</td>
-    <td>再生されたチャンク</td>
-    <td>出力デバイスのネイティブ形式(必要なら出力レイヤで変換)、<code>timeline.t_playback</code></td>
-  </tr>
-  <tr>
-    <td>(終端) → Logger</td>
-    <td>翻訳1件のログ</td>
-    <td>jsonl 1行: <code>{ts, src_text, tgt_text, src_lang, tgt_lang, latency_ms, ...}</code></td>
+    <td><strong>Output</strong></td>
+    <td>合成音声を再生し、発話の完了を通知する。</td>
+    <td>PipelineCoordinator._output_loop</td>
   </tr>
 </table>
 
-<div class="callout">
-<strong>Utterance(発話単位データ)について</strong><br>
-各ステージで追記される共通データクラス。タイムスタンプは <code>timeline.mark(stage_name)</code> で <code>monotonic()</code> を打つ。<br>
-詳細フィールド定義は <a href="Class.md">Class.md</a> を参照。
-</div>
+<h3>キューあふれ時の挙動</h3>
+<ul>
+  <li>キューが上限に達した状態で put すると、<strong>最古の要素を捨てて</strong>新しいものを優先する。リアルタイム性を確保するため。</li>
+  <li>捨てられた発話は <code>on_dropped(seq_ids, stage_name)</code> コールバック + WARN ログで通知する。</li>
+  <li>テキストログは各段で直書きされるため、再生されなくても src/tgt テキストは残る。</li>
+</ul>
 
-<!-- =================================================== -->
-<h2>4. データフロー(発話1件あたり)</h2>
+<h3>停止シーケンス</h3>
 <ol>
-  <li><strong>AudioCapture</strong>: PCMチャンクを連続取得し、内部標準形式に正規化。</li>
-  <li><strong>VAD</strong>: 無音で区切り、<code>Utterance</code> として確定(<code>t_capture</code>, <code>t_vad_end</code>)。</li>
-  <li><strong>ASR</strong>: 書き起こして <code>src_text</code> を付与(<code>t_asr</code>)。</li>
-  <li><strong>Translator</strong>: 翻訳して <code>tgt_text</code> を付与(<code>t_translate</code>)。</li>
-  <li><strong>TTS</strong>: 合成PCMを生成(<code>t_tts</code>)。</li>
-  <li><strong>AudioOutput</strong>: 出力デバイスで再生(<code>t_playback</code>)。</li>
-  <li><strong>Logger</strong>: jsonl に1行記録(レイテンシ算出)。</li>
+  <li>UI 停止ボタン → AppController.stop_pipeline()</li>
+  <li>PipelineCoordinator が <code>stop_event</code> をセット</li>
+  <li>各スレッドのループ先頭で <code>stop_event.is_set()</code> をチェック → True なら<strong>新規 get せずに抜ける</strong>。処理中の発話は完了させてから終了。</li>
+  <li>各キューにセンチネルを順序投入 → 全スレッド join</li>
+  <li>capture.stop() / output.stop() を呼んでデバイス解放</li>
+  <li>再 start() 時は全キュー drain + ledger.clear() で残骸を引きずらない</li>
 </ol>
 
 <!-- =================================================== -->
-<h2>5. 拡張ポイント</h2>
+<h2>4. レイヤ間でやり取りする情報</h2>
+
+<p>キューを流れるのは <strong>seq_id + 次段に必須な最小データ</strong>。メタ情報(timeline / lang / text 等)は <code>UtteranceLedger</code> に中央保管され、各スレッドが seq_id をキーに書き込み / 読み出しを行う。</p>
+
+<h3>4-1. キューを流れる payload(各段)</h3>
+<table>
+  <tr>
+    <th>キュー</th>
+    <th>送信元 → 受信先</th>
+    <th>payload 型</th>
+    <th>含まれる情報</th>
+  </tr>
+  <tr>
+    <td><code>q_raw</code></td>
+    <td>Input → ASR</td>
+    <td><code>RawPayload</code></td>
+    <td>seq_id, pcm(np.ndarray 16kHz/mono/float32), src_lang_hint("auto" or 言語コード)</td>
+  </tr>
+  <tr>
+    <td><code>q_tr</code></td>
+    <td>ASR → Translator</td>
+    <td><code>TranscribedPayload</code></td>
+    <td>seq_id, src_text(str), src_lang(検出済み)<br><strong>pcm は載せない</strong>(ASR後不要)</td>
+  </tr>
+  <tr>
+    <td><code>q_xl</code></td>
+    <td>Translator → TTS</td>
+    <td><code>TranslatedPayload</code></td>
+    <td>seq_id, tgt_text(str), tgt_lang<br><strong>src_text は載せない</strong>(ledger に保管済み)</td>
+  </tr>
+  <tr>
+    <td><code>q_syn</code></td>
+    <td>TTS → Output</td>
+    <td><code>SynthesizedPayload</code></td>
+    <td>seq_id, tts_pcm(np.ndarray), tts_samplerate</td>
+  </tr>
+</table>
+
+<h3>4-2. UtteranceLedger に蓄積されるメタ情報</h3>
+<p>seq_id をキーに、以下の情報を発話単位で1つのレコードに集約する。</p>
+<table>
+  <tr><th>カテゴリ</th><th>内容</th><th>用途</th></tr>
+  <tr>
+    <td>進行タイミング</td>
+    <td>t_capture, t_vad_end, t_asr, t_translate, t_tts, t_playback(各ステージの完了時刻)</td>
+    <td>レイテンシ計算、jsonl の <code>timeline</code></td>
+  </tr>
+  <tr>
+    <td>言語</td>
+    <td>src_lang(ASR検出 or hint)、tgt_lang(設定値)</td>
+    <td>text-log の <code>[lang]</code> 表示、jsonl</td>
+  </tr>
+  <tr>
+    <td>テキスト</td>
+    <td>src_text(ASR出力)、tgt_text(Translator出力)</td>
+    <td>jsonl 本文(text-log は各段で直書き)</td>
+  </tr>
+  <tr>
+    <td>状態</td>
+    <td>completed / skipped / dropped / failed の遷移と該当ステージ</td>
+    <td>診断、jsonl への状態記録、UI 通知</td>
+  </tr>
+  <tr>
+    <td>(任意)メタ</td>
+    <td>使用バックエンド名、入力音声秒数 等</td>
+    <td>切替テスト時の比較。MVPでは省略可</td>
+  </tr>
+</table>
+
+<h3>4-3. バックエンドI/F</h3>
+<p>バックエンドは内部標準データ型を知らず、入出力はプリミティブのみで扱う。</p>
+<table>
+  <tr><th>レイヤ</th><th>抽象 I/F シグネチャ</th></tr>
+  <tr><td>AudioCapture</td><td><code>list_sources() / start(source_id) / read_chunk(timeout) -> np.ndarray | None / stop()</code></td></tr>
+  <tr><td>VAD</td><td><code>process(chunk: np.ndarray) -> list[VadSegment] / reset()</code></td></tr>
+  <tr><td>ASR</td><td><code>transcribe(pcm: np.ndarray, src_lang_hint: str) -> tuple[str, str]</code></td></tr>
+  <tr><td>Translator</td><td><code>translate(src_text: str, src_lang: str, tgt_lang: str) -> str</code></td></tr>
+  <tr><td>TTS</td><td><code>synthesize(text: str, lang: str) -> tuple[np.ndarray, int]</code></td></tr>
+  <tr><td>AudioOutput</td><td><code>list_devices() / start(device_id) / play(pcm: np.ndarray, samplerate: int) / stop()</code></td></tr>
+</table>
+
+<!-- =================================================== -->
+<h2>5. データフロー(発話1件あたり)</h2>
+
+<ol>
+  <li><strong>Input</strong>: PCMチャンク連続取得 → VAD が無音で区切り → <code>seq_id = SequenceGenerator.next()</code> → <code>ledger.init(seq_id, t_capture, t_vad_end, src_lang_hint)</code> → <code>q_raw.put(RawPayload(seq_id, pcm, hint))</code></li>
+  <li><strong>ASR</strong>: q_raw から取出 → <code>(src_text, src_lang) = asr.transcribe(pcm, hint)</code> → <code>ledger.record(seq_id, t_asr=now, src_text, src_lang)</code> → (任意) <code>text_logger.write_src(seq_id, src_text, src_lang)</code> → <code>q_tr.put(TranscribedPayload(seq_id, src_text, src_lang))</code></li>
+  <li><strong>Translator</strong>: q_tr から取出 → <code>tgt_text = translator.translate(src_text, src_lang, tgt_lang)</code> → <code>ledger.record(seq_id, t_translate, tgt_text, tgt_lang)</code> → (任意) <code>text_logger.write_tgt(seq_id, tgt_text, tgt_lang)</code> → <code>q_xl.put(TranslatedPayload(seq_id, tgt_text, tgt_lang))</code></li>
+  <li><strong>TTS</strong>: q_xl から取出 → <code>(pcm, sr) = tts.synthesize(tgt_text, tgt_lang)</code> → <code>ledger.record(seq_id, t_tts)</code> → <code>q_syn.put(SynthesizedPayload(seq_id, pcm, sr))</code></li>
+  <li><strong>Output</strong>: q_syn から取出 → <code>output.play(pcm, sr)</code> → <code>ledger.record(seq_id, t_playback)</code> → <code>record = ledger.pop(seq_id)</code> → <code>jsonl.write(record)</code> → <code>on_utterance_done(seq_id, record)</code></li>
+</ol>
+
+<!-- =================================================== -->
+<h2>6. ログとの対応(seq_id による横断追跡)</h2>
+
+<p>全ログレコードに <code>seq_id=N</code> を含める。grep で対応が取れる。</p>
+<pre>app.log:
+[2026-05-27 12:34:56] [INFO] seq=42 ASR完了 src="hello world"
+[2026-05-27 12:34:57] [WARNING] seq=42 queue overflow in q_syn (dropped)
+
+soundsrc.txt:
+[2026-05-27 12:34:56] [seq=42] [en] hello world
+
+translated.txt:
+[2026-05-27 12:34:56] [seq=42] [ja] こんにちは世界
+
+translations.jsonl:
+{"seq_id": 42, "src_text": "hello world", "tgt_text": "こんにちは世界", "src_lang": "en", "tgt_lang": "ja", "latency_ms": 850, "timeline": {...}}</pre>
+
+<!-- =================================================== -->
+<h2>7. 拡張ポイント</h2>
 <ul>
   <li>新しいバックエンドを追加するときは、対応する抽象I/Fを実装し <code>BackendRegistry</code> に登録するだけでGUIに出現する。</li>
   <li>OS別の音声取得は <code>AudioCapture</code> の差し替えで対応(Windows = soundcard、Linux = GStreamer 等)。</li>
   <li>per-app 音声取得は OS別バックエンドの一部として将来追加(pendList参照)。</li>
   <li>ローカルLLM翻訳は <code>Translator</code> の追加実装で対応(例: Ollama)。</li>
+  <li>バックエンド固有パラメータは <code>backends_config.&lt;name&gt;.*</code> 名前空間で <code>config.yaml</code> から渡す(SAPI rate 等が既に実装済)。</li>
 </ul>
 
 <!-- =================================================== -->
-<h2>6. 横断方針</h2>
+<h2>8. 横断方針</h2>
 <ul>
   <li><strong>役割の表明</strong>: 各クラスのコメント/Docstring 冒頭に1〜2行で役割を明記する(CLAUDE.md 準拠)。</li>
   <li><strong>エラー</strong>: 各バックエンドは内部例外を <code>AppError</code>(severity 付き) に包んで送出。中央で <code>ErrorHandler</code> が4分類に振り分ける。</li>
-  <li><strong>計測</strong>: 全ステージで <code>Utterance.timeline.mark()</code> を呼ぶ。</li>
+  <li><strong>計測</strong>: 全ステージで <code>ledger.mark_time(seq_id, stage)</code> を呼ぶ。</li>
   <li><strong>デバイス分離</strong>: 起動時に入力デバイス ≠ 出力デバイスを保証(同一なら起動拒否)。AEC は将来オプション。</li>
+  <li><strong>シーケンスID</strong>: 全発話に一意IDを発行し、すべてのログに付与してレコード間追跡を可能にする。</li>
+  <li><strong>停止/再開のクリーンさ</strong>: stop_event ベースの協調停止、再start時にキュー + ledger を drain。</li>
 </ul>
 
 <p class="small">

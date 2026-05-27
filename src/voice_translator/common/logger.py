@@ -5,6 +5,12 @@
 - 翻訳1件 = jsonl 1行(機械処理向け、`TranslationLogger`)
 - 翻訳前/翻訳後テキストの個別追記(人間用デバッグ、`TextLogger`)
 出力先と各 ON/OFF は `ConfigStore` から取得する想定。
+
+R-3 で I/F 更新:
+- TextLogger.write_src(seq_id, text, lang) / write_tgt(seq_id, text, lang) に分離。
+  各ステージから直接呼べるように粒度を細かくし、seq_id を付与してログ間対応を取れるようにする。
+- TranslationLogger.write_record(record: dict) で UtteranceLedger.pop() の戻り値を直接書ける。
+
 詳細は docs/design/Class.md を参照。
 """
 
@@ -15,8 +21,6 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-from .utterance import Utterance
 
 
 def setup_app_logger(
@@ -57,8 +61,8 @@ def setup_app_logger(
 class TranslationLogger:
     """翻訳1件を jsonl に追記するロガー。
 
-    役割: パイプライン終端で Utterance を1行 JSON にして履歴ファイルに追記する。
-    `enabled=False` のときは no-op。出力先は ConfigStore から渡される想定。
+    役割: パイプライン終端で UtteranceLedger.pop() の戻り値(dict)を
+    1行 JSON にして履歴ファイルに追記する。`enabled=False` のときは no-op。
     """
 
     def __init__(self, jsonl_path: Path | str, *, enabled: bool = True) -> None:
@@ -72,29 +76,38 @@ class TranslationLogger:
         """jsonl 書き出しが有効かどうか。"""
         return self._enabled
 
-    def write(self, utt: Utterance) -> None:
-        """Utterance 1件を1行JSONとして追記する。"""
+    def write_record(self, record: dict[str, Any]) -> None:
+        """ledger record(dict) を 1行 JSON として追記する。
+
+        期待されるキー:
+          - seq_id: int
+          - timeline: {stage_name: float, ...}
+          - src_text / src_lang / tgt_text / tgt_lang(各任意)
+        latency_ms は timeline["t_capture"] と timeline["t_playback"] から自動算出する。
+        """
         if not self._enabled:
             return
-        record = self._build_record(utt)
+        line = self._build_line(record)
         with self._path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
     @staticmethod
-    def _build_record(utt: Utterance) -> dict[str, Any]:
-        """Utterance からログ行用 dict を組み立てる。"""
-        timeline = utt.timeline.as_dict()
+    def _build_line(record: dict[str, Any]) -> dict[str, Any]:
+        """ledger record からログ行用 dict を組み立てる。"""
+        timeline = record.get("timeline", {}) or {}
         latency_ms: float | None = None
-        elapsed = utt.timeline.elapsed("t_capture", "t_playback")
-        if elapsed is not None:
-            latency_ms = round(elapsed * 1000.0, 2)
+        t_cap = timeline.get("t_capture")
+        t_play = timeline.get("t_playback")
+        if t_cap is not None and t_play is not None:
+            latency_ms = round((t_play - t_cap) * 1000.0, 2)
 
         return {
             "ts": datetime.now(timezone.utc).isoformat(),
-            "src_lang": utt.src_lang,
-            "src_text": utt.src_text,
-            "tgt_lang": utt.tgt_lang,
-            "tgt_text": utt.tgt_text,
+            "seq_id": record.get("seq_id"),
+            "src_lang": record.get("src_lang", ""),
+            "src_text": record.get("src_text", ""),
+            "tgt_lang": record.get("tgt_lang", ""),
+            "tgt_text": record.get("tgt_text", ""),
             "latency_ms": latency_ms,
             "timeline": timeline,
         }
@@ -103,11 +116,11 @@ class TranslationLogger:
 class TextLogger:
     """翻訳前後テキストを人間用に追記するロガー(デバッグ用)。
 
-    役割: 1発話につき
-    - 翻訳前テキスト(src_text)を `soundsrc.txt` に
-    - 翻訳後テキスト(tgt_text)を `translated.txt` に
-    それぞれ追記する。出力 ON/OFF は src/tgt 個別に設定可能。
-    既存 jsonl は機械処理用、本クラスは人間が斜め読みするのが目的。
+    役割: 各ステージから直接呼べるよう src/tgt を分離。
+    - write_src(seq_id, text, lang) で ASR 直後に `soundsrc.txt` に追記
+    - write_tgt(seq_id, text, lang) で Translator 直後に `translated.txt` に追記
+
+    出力 ON/OFF は src/tgt 個別に設定可能。jsonl は機械処理用、本クラスは人間が斜め読みするのが目的。
     """
 
     def __init__(
@@ -138,26 +151,29 @@ class TextLogger:
         """tgt 側(翻訳後)が有効かどうか。"""
         return self._tgt_enabled
 
-    def write(self, utt: Utterance) -> None:
-        """Utterance の src_text/tgt_text を各々のファイルに追記する。
+    def write_src(self, seq_id: int, text: str, lang: str = "") -> None:
+        """翻訳前テキスト(src)を soundsrc.txt に追記する。"""
+        if not self._src_enabled:
+            return
+        text = (text or "").strip()
+        if not text:
+            return
+        self._append(self._src_path, seq_id, text, lang)
 
-        - 空文字なら該当側はスキップ(無音や空応答のノイズを抑える)。
-        - 無効側はノーオペレーション。
-        """
-        if self._src_enabled:
-            text = (utt.src_text or "").strip()
-            if text:
-                self._append(self._src_path, text, utt.src_lang or "")
-        if self._tgt_enabled:
-            text = (utt.tgt_text or "").strip()
-            if text:
-                self._append(self._tgt_path, text, utt.tgt_lang or "")
+    def write_tgt(self, seq_id: int, text: str, lang: str = "") -> None:
+        """翻訳後テキスト(tgt)を translated.txt に追記する。"""
+        if not self._tgt_enabled:
+            return
+        text = (text or "").strip()
+        if not text:
+            return
+        self._append(self._tgt_path, seq_id, text, lang)
 
     @staticmethod
-    def _append(path: Path, text: str, lang: str) -> None:
-        """1行を UTF-8 / LF で追記する。書式: `[YYYY-MM-DD HH:MM:SS] [lang] text\\n`"""
+    def _append(path: Path, seq_id: int, text: str, lang: str) -> None:
+        """1行を UTF-8 / LF で追記する。書式: `[YYYY-MM-DD HH:MM:SS] #SEQ [lang] text\\n`"""
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         lang_part = f"[{lang}] " if lang else ""
         # newline="" で Python の自動改行変換を無効化し、明示的に \n を書く
         with path.open("a", encoding="utf-8", newline="") as f:
-            f.write(f"[{ts}] {lang_part}{text}\n")
+            f.write(f"[{ts}] #{seq_id} {lang_part}{text}\n")

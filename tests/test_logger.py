@@ -1,4 +1,9 @@
-"""Logger / TranslationLogger / TextLogger の単体テスト。"""
+"""Logger / TranslationLogger / TextLogger の単体テスト。
+
+R-3 で I/F 更新:
+- TranslationLogger.write_record(record: dict)
+- TextLogger.write_src(seq_id, text, lang) / write_tgt(seq_id, text, lang)
+"""
 
 from __future__ import annotations
 
@@ -6,13 +11,13 @@ import json
 import logging
 import re
 from pathlib import Path
+from time import monotonic
 
 from voice_translator.common.logger import (
     TextLogger,
     TranslationLogger,
     setup_app_logger,
 )
-from voice_translator.common.utterance import Utterance
 
 
 class TestSetupAppLogger:
@@ -41,43 +46,55 @@ class TestSetupAppLogger:
 
 
 class TestTranslationLogger:
-    def _build_utterance(self) -> Utterance:
-        u = Utterance(src_lang="en")
-        u.timeline.mark("t_capture")
-        u.src_text = "hello"
-        u.timeline.mark("t_asr")
-        u.tgt_lang = "ja"
-        u.tgt_text = "こんにちは"
-        u.timeline.mark("t_translate")
-        u.timeline.mark("t_tts")
-        u.timeline.mark("t_playback")
-        return u
+    def _record(self, seq_id: int = 1) -> dict:
+        t0 = monotonic()
+        return {
+            "seq_id": seq_id,
+            "src_lang": "en",
+            "src_text": "hello",
+            "tgt_lang": "ja",
+            "tgt_text": "こんにちは",
+            "timeline": {
+                "t_capture": t0,
+                "t_asr": t0 + 0.1,
+                "t_translate": t0 + 0.2,
+                "t_tts": t0 + 0.3,
+                "t_playback": t0 + 0.5,
+            },
+        }
 
-    def test_write_appends_jsonl(self, tmp_jsonl_path: Path) -> None:
+    def test_write_record_appends_jsonl(self, tmp_jsonl_path: Path) -> None:
         logger = TranslationLogger(tmp_jsonl_path, enabled=True)
-        logger.write(self._build_utterance())
-        logger.write(self._build_utterance())
+        logger.write_record(self._record(seq_id=1))
+        logger.write_record(self._record(seq_id=2))
 
         lines = tmp_jsonl_path.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 2
-        for line in lines:
+        for i, line in enumerate(lines, start=1):
             record = json.loads(line)
             assert record["src_text"] == "hello"
             assert record["tgt_text"] == "こんにちは"
             assert record["src_lang"] == "en"
             assert record["tgt_lang"] == "ja"
+            assert record["seq_id"] == i
             assert record["latency_ms"] is not None
+            assert record["latency_ms"] > 0
 
     def test_disabled_writes_nothing(self, tmp_jsonl_path: Path) -> None:
         logger = TranslationLogger(tmp_jsonl_path, enabled=False)
-        logger.write(self._build_utterance())
+        logger.write_record(self._record())
         assert not tmp_jsonl_path.exists()
         assert logger.enabled is False
 
     def test_latency_none_when_missing_timestamps(self, tmp_jsonl_path: Path) -> None:
-        u = Utterance(src_text="x", tgt_text="y")
-        # t_capture / t_playback を打たない
-        TranslationLogger(tmp_jsonl_path, enabled=True).write(u)
+        # timeline に t_capture / t_playback がない
+        rec = {
+            "seq_id": 1,
+            "src_text": "x",
+            "tgt_text": "y",
+            "timeline": {},
+        }
+        TranslationLogger(tmp_jsonl_path, enabled=True).write_record(rec)
         record = json.loads(tmp_jsonl_path.read_text(encoding="utf-8").splitlines()[0])
         assert record["latency_ms"] is None
 
@@ -89,18 +106,11 @@ class TestTextLogger:
     def _paths(self, tmp_path: Path) -> tuple[Path, Path]:
         return tmp_path / "soundsrc.txt", tmp_path / "translated.txt"
 
-    def _utt(self) -> Utterance:
-        return Utterance(
-            src_text="hello world",
-            src_lang="en",
-            tgt_text="こんにちは 世界",
-            tgt_lang="ja",
-        )
-
     def test_both_disabled_writes_nothing(self, tmp_path: Path) -> None:
         src, tgt = self._paths(tmp_path)
         logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=False, tgt_enabled=False)
-        logger.write(self._utt())
+        logger.write_src(1, "hello", "en")
+        logger.write_tgt(1, "こんにちは", "ja")
         assert not src.exists()
         assert not tgt.exists()
         assert logger.src_enabled is False
@@ -109,40 +119,45 @@ class TestTextLogger:
     def test_only_src_enabled(self, tmp_path: Path) -> None:
         src, tgt = self._paths(tmp_path)
         logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=True, tgt_enabled=False)
-        logger.write(self._utt())
+        logger.write_src(1, "hello world", "en")
+        logger.write_tgt(1, "こんにちは 世界", "ja")  # 無効側は no-op
         assert src.exists()
         assert not tgt.exists()
         line = src.read_text(encoding="utf-8")
         assert "hello world" in line
         assert "[en]" in line
+        assert "#1" in line
 
     def test_only_tgt_enabled(self, tmp_path: Path) -> None:
         src, tgt = self._paths(tmp_path)
         logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=False, tgt_enabled=True)
-        logger.write(self._utt())
+        logger.write_src(2, "hello world", "en")
+        logger.write_tgt(2, "こんにちは 世界", "ja")
         assert not src.exists()
         assert tgt.exists()
         line = tgt.read_text(encoding="utf-8")
         assert "こんにちは 世界" in line
         assert "[ja]" in line
+        assert "#2" in line
 
     def test_both_enabled(self, tmp_path: Path) -> None:
         src, tgt = self._paths(tmp_path)
         logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=True, tgt_enabled=True)
-        logger.write(self._utt())
+        logger.write_src(3, "hi", "en")
+        logger.write_tgt(3, "やあ", "ja")
         assert src.exists()
         assert tgt.exists()
 
     def test_line_format(self, tmp_path: Path) -> None:
-        """`[YYYY-MM-DD HH:MM:SS] [lang] text` 形式であること。"""
+        """`[YYYY-MM-DD HH:MM:SS] #SEQ [lang] text` 形式であること。"""
         src, tgt = self._paths(tmp_path)
         logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=True, tgt_enabled=False)
-        logger.write(self._utt())
+        logger.write_src(42, "hello world", "en")
         content = src.read_text(encoding="utf-8")
         # 末尾は LF
         assert content.endswith("\n")
         m = re.match(
-            r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] \[en\] hello world\n$",
+            r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] #42 \[en\] hello world\n$",
             content,
         )
         assert m is not None, f"format mismatch: {content!r}"
@@ -150,9 +165,8 @@ class TestTextLogger:
     def test_append_mode(self, tmp_path: Path) -> None:
         src, tgt = self._paths(tmp_path)
         logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=True, tgt_enabled=False)
-        logger.write(self._utt())
-        logger.write(self._utt())
-        logger.write(self._utt())
+        for i in range(3):
+            logger.write_src(i + 1, "hello", "en")
         lines = src.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 3
 
@@ -160,11 +174,14 @@ class TestTextLogger:
         src, tgt = self._paths(tmp_path)
         logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=True, tgt_enabled=True)
         # src 空
-        logger.write(Utterance(src_text="", src_lang="en", tgt_text="あ", tgt_lang="ja"))
+        logger.write_src(1, "", "en")
+        logger.write_tgt(1, "あ", "ja")
         # tgt 空
-        logger.write(Utterance(src_text="hi", src_lang="en", tgt_text="", tgt_lang="ja"))
+        logger.write_src(2, "hi", "en")
+        logger.write_tgt(2, "", "ja")
         # 両方空白のみ
-        logger.write(Utterance(src_text="   ", tgt_text="\t"))
+        logger.write_src(3, "   ", "")
+        logger.write_tgt(3, "\t", "")
 
         src_content = src.read_text(encoding="utf-8") if src.exists() else ""
         tgt_content = tgt.read_text(encoding="utf-8") if tgt.exists() else ""
@@ -175,8 +192,7 @@ class TestTextLogger:
     def test_utf8_japanese(self, tmp_path: Path) -> None:
         src, tgt = self._paths(tmp_path)
         logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=False, tgt_enabled=True)
-        u = Utterance(tgt_text="日本語テスト🎌", tgt_lang="ja")
-        logger.write(u)
+        logger.write_tgt(1, "日本語テスト🎌", "ja")
         # 読み戻しできることを確認(化けてないこと)
         content = tgt.read_text(encoding="utf-8")
         assert "日本語テスト🎌" in content
@@ -185,7 +201,7 @@ class TestTextLogger:
         """書き出した内容に \\r\\n が混じらないこと(CRLF 変換を防止)。"""
         src, tgt = self._paths(tmp_path)
         logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=True, tgt_enabled=False)
-        logger.write(self._utt())
+        logger.write_src(1, "hello", "en")
         # バイナリで読んで CR が無いことを確認
         raw = src.read_bytes()
         assert b"\r" not in raw
@@ -207,3 +223,14 @@ class TestTextLogger:
         TextLogger(src_path=src, tgt_path=tgt, src_enabled=True, tgt_enabled=True)
         # ディレクトリだけは作られているはず(ファイルは write 時)
         assert nested.exists() and nested.is_dir()
+
+    def test_no_lang_omits_bracket(self, tmp_path: Path) -> None:
+        """lang が空なら [lang] は出ない。"""
+        src, tgt = self._paths(tmp_path)
+        logger = TextLogger(src_path=src, tgt_path=tgt, src_enabled=True, tgt_enabled=False)
+        logger.write_src(1, "hello", "")
+        content = src.read_text(encoding="utf-8")
+        assert "[en]" not in content
+        assert "[]" not in content
+        assert "hello" in content
+        assert "#1" in content

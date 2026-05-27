@@ -3,8 +3,13 @@
 役割: GUI のイベント(開始/停止/設定変更)を受け、BackendRegistry から
 バックエンドを取り出し、DeviceValidator でチェック、PipelineCoordinator を
 組み立てて起動・停止する。Loader スレッドでモデル初期化を非同期化し、
-UIをブロックしないようにする。モデルの状態は ModelStatus で公開し、
+UI をブロックしないようにする。モデルの状態は ModelStatus で公開し、
 GUI から listener 経由で受け取れる。
+
+R-3 でコールバックシグネチャを更新:
+- on_utterance_done(record: dict)  : UtteranceLedger.pop() の戻り値 dict を受ける
+- on_dropped(seq_ids: list[int], stage: str): 捨てられた発話の seq_id を受ける
+TextLogger / TranslationLogger も新 I/F (write_src/write_tgt/write_record) に追従。
 """
 
 from __future__ import annotations
@@ -22,10 +27,11 @@ from .backend_registry import BackendRegistry
 from .config_store import ConfigStore
 from .device_validator import DeviceValidator
 from .error_handler import ErrorHandler
+from .ledger import UtteranceLedger
 from .logger import TextLogger, TranslationLogger
 from .pipeline import PipelineCoordinator
+from .sequence import SequenceGenerator
 from .types import CaptureSource, LayerKind, ModelStatus, OutputDevice
-from .utterance import Utterance
 
 
 # レイヤ + 選択中バックエンド名 → cache_check モジュール内の関数名
@@ -57,10 +63,13 @@ class AppController:
         self._coord: PipelineCoordinator | None = None
         self._translation_logger: TranslationLogger | None = None
         self._text_logger: TextLogger | None = None
+        self._ledger: UtteranceLedger | None = None
+        self._sequence: SequenceGenerator | None = None
         self._loader_thread: threading.Thread | None = None
 
         # UI コールバック(既定は no-op)
-        self._on_utterance_done: Callable[[Utterance], None] = lambda u: None
+        # record は UtteranceLedger.pop() の戻り値 dict(seq_id, timeline, src/tgt 各種)。
+        self._on_utterance_done: Callable[[dict], None] = lambda r: None
         self._on_fatal: Callable[[str], None] = lambda m: None
         self._on_warn: Callable[[str], None] = lambda m: None
         self._on_status_change: Callable[[LayerKind, ModelStatus], None] = lambda l, s: None
@@ -75,7 +84,7 @@ class AppController:
     def set_callbacks(
         self,
         *,
-        on_utterance_done: Callable[[Utterance], None] | None = None,
+        on_utterance_done: Callable[[dict], None] | None = None,
         on_fatal: Callable[[str], None] | None = None,
         on_warn: Callable[[str], None] | None = None,
         on_status_change: Callable[[LayerKind, ModelStatus], None] | None = None,
@@ -248,6 +257,10 @@ class AppController:
         src_lang = self._config.get("languages", "src", default="auto")
         tgt_lang = self._config.get("languages", "tgt", default="ja")
 
+        # ledger + sequence は Coordinator にも保持されるが、AppController からも参照したいので持つ
+        self._ledger = UtteranceLedger()
+        self._sequence = SequenceGenerator()
+
         self._coord = PipelineCoordinator(
             capture=capture,
             vad=vad,
@@ -256,6 +269,9 @@ class AppController:
             tts=tts,
             output=output,
             error_handler=error_handler,
+            ledger=self._ledger,
+            sequence=self._sequence,
+            text_logger=self._text_logger,
             src_lang=src_lang,
             tgt_lang=tgt_lang,
             on_utterance_done=self._handle_utterance_done,
@@ -287,33 +303,30 @@ class AppController:
             raise KeyError(f"backends.{layer.value} が設定されていません")
         return self._registry.create(layer, name)
 
-    def _handle_utterance_done(self, utterance: Utterance) -> None:
+    def _handle_utterance_done(self, record: dict) -> None:
+        """Output 完了時に Coordinator から呼ばれる。
+
+        record は UtteranceLedger.pop() の戻り値 dict。
+        seq_id / timeline / src_text / src_lang / tgt_text / tgt_lang などを含む。
+        """
         try:
             if self._translation_logger is not None:
-                self._translation_logger.write(utterance)
+                self._translation_logger.write_record(record)
         except Exception:  # noqa: BLE001
             self._logger.exception("翻訳ログ(jsonl)書き出しに失敗")
         try:
-            if self._text_logger is not None:
-                self._text_logger.write(utterance)
-        except Exception:  # noqa: BLE001
-            self._logger.exception("テキストログ書き出しに失敗")
-        try:
-            self._on_utterance_done(utterance)
+            self._on_utterance_done(record)
         except Exception:  # noqa: BLE001
             self._logger.exception("UI 通知コールバックで例外")
 
-    def _handle_dropped(self, dropped_items: list[Utterance], stage_name: str) -> None:
-        """キューあふれで捨てられた発話のテキストだけはログに残す。
+    def _handle_dropped(self, seq_ids: list[int], stage_name: str) -> None:
+        """キューあふれで捨てられた発話の seq_id 通知。
 
-        Output に届かなかったので jsonl(レイテンシ計測前提)には書かないが、
-        TextLogger には src_text/tgt_text が完成していれば追記する。
-        TextLogger 側で空テキストはスキップされるため、q1 ドロップ(src/tgt未確定)も無害。
+        テキストログは各段で既に書かれているので、ここでは UI 通知やログのみ。
+        現状はログだけ。
         """
-        if self._text_logger is None or not dropped_items:
+        if not seq_ids:
             return
-        for utt in dropped_items:
-            try:
-                self._text_logger.write(utt)
-            except Exception:  # noqa: BLE001
-                self._logger.exception("ドロップ発話のテキストログ書き出しに失敗")
+        self._logger.info(
+            "dropped seq_ids=%s at %s", seq_ids, stage_name
+        )

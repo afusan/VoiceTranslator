@@ -2,14 +2,16 @@
 
 役割: 合成 PCM を指定された出力デバイスで再生する I/F。
 入力デバイスと異なるデバイスが選ばれている前提(DeviceValidator で保証)。
+
+R-2 でプリミティブ I/F に変更: Utterance 依存をやめ、(pcm, samplerate) を受ける。
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from voice_translator.common.types import BackendCapabilities, OutputDevice
-from voice_translator.common.utterance import Utterance
 
 
 class AudioOutputBackend(ABC):
@@ -27,8 +29,13 @@ class AudioOutputBackend(ABC):
         """指定デバイスへの再生セッションを開く。"""
 
     @abstractmethod
-    def play(self, utterance: Utterance) -> None:
-        """utterance.tts_pcm を再生する。同期/ブロッキングは実装依存。"""
+    def play(self, pcm: Any, samplerate: int) -> None:
+        """`pcm` を `samplerate` Hz で再生する。同期/ブロッキングは実装依存。
+
+        - pcm: np.ndarray(1次元 mono か (N, ch))、dtype は実装側で float32 化。
+              None や空は SkipError(発話単位の破棄)。
+        - samplerate: 0 以下は内部標準 (16kHz) と仮定する実装でよい。
+        """
 
     @abstractmethod
     def stop(self) -> None:

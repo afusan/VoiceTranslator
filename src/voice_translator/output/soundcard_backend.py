@@ -1,11 +1,12 @@
 """SoundcardOutputBackend: soundcard ライブラリを使った音声再生。
 
-役割: 指定された出力デバイスへ、Utterance.tts_pcm を再生する。
-PCM のサンプルレートは Utterance.tts_samplerate を参照する。
+役割: 指定された出力デバイスへ、与えられた PCM を再生する。
 入力レイヤと別デバイスが選ばれている前提(DeviceValidator で保証)。
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 import numpy as np
 import soundcard as sc
@@ -17,7 +18,6 @@ from voice_translator.common.types import (
     BackendCapabilities,
     OutputDevice,
 )
-from voice_translator.common.utterance import Utterance
 
 from .backend import AudioOutputBackend
 
@@ -25,8 +25,8 @@ from .backend import AudioOutputBackend
 class SoundcardOutputBackend(AudioOutputBackend):
     """soundcard ベースの AudioOutputBackend。
 
-    役割: スピーカデバイスを列挙し、選ばれたデバイスへ Utterance の TTS 音声を流す。
-    再生時のサンプルレート/チャネル数は Utterance のメタ情報に従う。
+    役割: スピーカデバイスを列挙し、選ばれたデバイスへ TTS 音声を流す。
+    再生時のサンプルレート/チャネル数は呼び出し時の引数に従う。
     """
 
     def __init__(self) -> None:
@@ -52,28 +52,28 @@ class SoundcardOutputBackend(AudioOutputBackend):
         raise FatalError(f"指定された出力デバイスが見つかりません: {device_id}")
 
     # ----------------------------------------------------------
-    def play(self, utterance: Utterance) -> None:
-        """utterance.tts_pcm を utterance.tts_samplerate で再生する。
+    def play(self, pcm: Any, samplerate: int) -> None:
+        """pcm を samplerate Hz で再生する。
 
-        - tts_pcm が None または空なら SKIP として何もせず例外を出す。
-        - tts_samplerate が 0 の場合は内部標準 (16kHz) と仮定する。
+        - pcm が None または空なら SkipError。
+        - pcm が np.ndarray でない場合は FatalError。
         - 1次元(mono)/ 2次元(numframes,channels) のどちらも受け付ける。
+        - samplerate が 0 以下なら内部標準 (16kHz) を使う。
         """
         if self._speaker is None:
             raise RuntimeError("start() を呼んでから play() してください")
 
-        pcm = utterance.tts_pcm
         if pcm is None or (hasattr(pcm, "size") and pcm.size == 0):
             raise SkipError("再生対象の TTS PCM が空です")
 
         if not isinstance(pcm, np.ndarray):
             raise FatalError(f"tts_pcm は np.ndarray が必要: 受領={type(pcm).__name__}")
 
-        samplerate = utterance.tts_samplerate or INTERNAL_SAMPLE_RATE
+        sr = samplerate if samplerate and samplerate > 0 else INTERNAL_SAMPLE_RATE
         channels = pcm.shape[1] if pcm.ndim == 2 else INTERNAL_CHANNELS
 
         try:
-            with self._speaker.player(samplerate=samplerate, channels=channels) as player:
+            with self._speaker.player(samplerate=sr, channels=channels) as player:
                 player.play(pcm.astype(np.float32, copy=False))
         except Exception as e:  # noqa: BLE001 - デバイス問題は FATAL
             raise FatalError(f"音声再生に失敗: {e}", cause=e) from e

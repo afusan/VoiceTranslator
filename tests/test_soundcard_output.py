@@ -1,4 +1,7 @@
-"""SoundcardOutputBackend の単体テスト。"""
+"""SoundcardOutputBackend の単体テスト。
+
+R-2 でプリミティブ I/F に変更: play(pcm, samplerate) -> None。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +12,6 @@ import pytest
 
 from voice_translator.common.errors import FatalError, SkipError
 from voice_translator.common.types import INTERNAL_SAMPLE_RATE
-from voice_translator.common.utterance import Utterance
 from voice_translator.output.soundcard_backend import SoundcardOutputBackend
 
 
@@ -72,62 +74,54 @@ class TestPlay:
         backend.start(spk_id)
         return backend, spk
 
-    def test_play_uses_default_samplerate_when_unset(self, mocker) -> None:
+    def test_play_uses_default_samplerate_when_zero(self, mocker) -> None:
         backend, spk = self._setup(mocker)
-        u = Utterance(tts_pcm=np.zeros(1600, dtype=np.float32))
-        backend.play(u)
+        backend.play(np.zeros(1600, dtype=np.float32), 0)
         spk.player.assert_called_once()
         assert spk.player.call_args.kwargs["samplerate"] == INTERNAL_SAMPLE_RATE
         assert spk.player.call_args.kwargs["channels"] == 1
         spk._player_obj.play.assert_called_once()
         backend.stop()
 
-    def test_play_uses_utterance_samplerate(self, mocker) -> None:
+    def test_play_uses_given_samplerate(self, mocker) -> None:
         backend, spk = self._setup(mocker)
-        u = Utterance(tts_pcm=np.zeros(2205, dtype=np.float32), tts_samplerate=22050)
-        backend.play(u)
+        backend.play(np.zeros(2205, dtype=np.float32), 22050)
         assert spk.player.call_args.kwargs["samplerate"] == 22050
         backend.stop()
 
     def test_play_handles_2d_stereo(self, mocker) -> None:
         backend, spk = self._setup(mocker)
         pcm = np.zeros((1000, 2), dtype=np.float32)
-        u = Utterance(tts_pcm=pcm, tts_samplerate=16000)
-        backend.play(u)
+        backend.play(pcm, 16000)
         assert spk.player.call_args.kwargs["channels"] == 2
         backend.stop()
 
     def test_empty_pcm_raises_skip(self, mocker) -> None:
         backend, _ = self._setup(mocker)
-        u = Utterance(tts_pcm=np.array([], dtype=np.float32))
         with pytest.raises(SkipError):
-            backend.play(u)
+            backend.play(np.array([], dtype=np.float32), 16000)
         backend.stop()
 
     def test_none_pcm_raises_skip(self, mocker) -> None:
         backend, _ = self._setup(mocker)
-        u = Utterance(tts_pcm=None)
         with pytest.raises(SkipError):
-            backend.play(u)
+            backend.play(None, 16000)
         backend.stop()
 
     def test_non_ndarray_pcm_raises_fatal(self, mocker) -> None:
         backend, _ = self._setup(mocker)
-        u = Utterance(tts_pcm=b"raw bytes")
         with pytest.raises(FatalError, match="np.ndarray"):
-            backend.play(u)
+            backend.play(b"raw bytes", 16000)
         backend.stop()
 
     def test_play_before_start_raises_runtime(self) -> None:
         backend = SoundcardOutputBackend()
-        u = Utterance(tts_pcm=np.zeros(10, dtype=np.float32))
         with pytest.raises(RuntimeError):
-            backend.play(u)
+            backend.play(np.zeros(10, dtype=np.float32), 16000)
 
     def test_player_exception_wrapped_in_fatal(self, mocker) -> None:
         backend, spk = self._setup(mocker)
         spk._player_obj.play.side_effect = OSError("device gone")
-        u = Utterance(tts_pcm=np.zeros(10, dtype=np.float32))
         with pytest.raises(FatalError, match="音声再生"):
-            backend.play(u)
+            backend.play(np.zeros(10, dtype=np.float32), 16000)
         backend.stop()

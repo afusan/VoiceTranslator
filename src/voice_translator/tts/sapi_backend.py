@@ -1,7 +1,7 @@
 """SapiTtsBackend: Windows SAPI(pyttsx3 経由)による音声合成。
 
 役割: 翻訳テキストを SAPI で WAV に保存 → 読み込んで PCM 化し
-Utterance に格納する。pyttsx3 は通常はデフォルトデバイスへ直接再生するが、
+(pcm, samplerate) を返す。pyttsx3 は通常はデフォルトデバイスへ直接再生するが、
 ここでは出力デバイス指定をサポートするため WAV 経由の迂回方式を取る。
 """
 
@@ -17,7 +17,6 @@ import numpy as np
 
 from voice_translator.common.errors import FatalError, SkipError
 from voice_translator.common.types import BackendCapabilities
-from voice_translator.common.utterance import Utterance
 
 from .backend import TtsBackend
 
@@ -26,7 +25,7 @@ class SapiTtsBackend(TtsBackend):
     """pyttsx3 + SAPI による合成。
 
     役割: synthesize() のたびにエンジンを初期化 → 一時 WAV へ書き出し →
-    読み込んで Utterance.tts_pcm / tts_samplerate を埋める。
+    読み込んで (pcm, samplerate) を返す。
     エンジンを毎回作り直すのは pyttsx3 の既知の問題(save_to_file の状態が残る)対策。
     """
 
@@ -52,9 +51,9 @@ class SapiTtsBackend(TtsBackend):
         self._flush_delay_sec = max(0.0, float(flush_delay_sec))
 
     # ----------------------------------------------------------
-    def synthesize(self, utterance: Utterance) -> Utterance:
-        """utterance.tgt_text を音声合成し、tts_pcm/tts_samplerate を埋めて返す。"""
-        text = (utterance.tgt_text or "").strip()
+    def synthesize(self, text: str, tgt_lang: str) -> tuple[np.ndarray, int]:
+        """text を音声合成し、(pcm, samplerate) を返す。"""
+        text = (text or "").strip()
         if not text:
             raise SkipError("TTS入力テキストが空です")
 
@@ -68,7 +67,7 @@ class SapiTtsBackend(TtsBackend):
             engine = pyttsx3.init()
             try:
                 engine.setProperty("rate", self._rate)
-                self._try_set_voice_for_lang(engine, utterance.tgt_lang or self._voice_lang_hint)
+                self._try_set_voice_for_lang(engine, tgt_lang or self._voice_lang_hint)
                 engine.save_to_file(text, wav_path)
                 engine.runAndWait()
             finally:
@@ -91,9 +90,7 @@ class SapiTtsBackend(TtsBackend):
         if pcm.size == 0:
             raise SkipError("合成された音声が空です")
 
-        utterance.tts_pcm = pcm
-        utterance.tts_samplerate = samplerate
-        return utterance
+        return pcm, samplerate
 
     # ----------------------------------------------------------
     def capabilities(self) -> BackendCapabilities:

@@ -1,17 +1,18 @@
-"""SapiTtsBackend の単体テスト。pyttsx3 と wave 読み込みをモック化。"""
+"""SapiTtsBackend の単体テスト。pyttsx3 と wave 読み込みをモック化。
+
+R-2 でプリミティブ I/F に変更: synthesize(text, tgt_lang) -> (pcm, samplerate)。
+"""
 
 from __future__ import annotations
 
 import sys
 import wave
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 from voice_translator.common.errors import FatalError, SkipError
-from voice_translator.common.utterance import Utterance
 
 
 @pytest.fixture()
@@ -66,28 +67,26 @@ class TestSynthesize:
     def test_empty_text_raises_skip(self, fake_pyttsx3) -> None:
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
+        backend = SapiTtsBackend(flush_delay_sec=0)
         with pytest.raises(SkipError):
-            backend.synthesize(Utterance(tgt_text=""))
+            backend.synthesize("", "ja")
 
-    def test_synthesize_fills_pcm_and_samplerate(self, fake_pyttsx3) -> None:
+    def test_synthesize_returns_pcm_and_samplerate(self, fake_pyttsx3) -> None:
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
-        utt = Utterance(tgt_text="こんにちは", tgt_lang="ja")
-        result = backend.synthesize(utt)
-        assert result is utt
-        assert isinstance(utt.tts_pcm, np.ndarray)
-        assert utt.tts_pcm.dtype == np.float32
-        assert utt.tts_samplerate == 16000
-        assert utt.tts_pcm.size > 0
+        backend = SapiTtsBackend(flush_delay_sec=0)
+        pcm, sr = backend.synthesize("こんにちは", "ja")
+        assert isinstance(pcm, np.ndarray)
+        assert pcm.dtype == np.float32
+        assert sr == 16000
+        assert pcm.size > 0
 
     def test_voice_selection_attempted(self, fake_pyttsx3) -> None:
         _, fake_engine = fake_pyttsx3
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
-        backend.synthesize(Utterance(tgt_text="hello", tgt_lang="ja"))
+        backend = SapiTtsBackend(flush_delay_sec=0)
+        backend.synthesize("hello", "ja")
         # setProperty が voice 引数で呼ばれたか
         voice_calls = [
             c for c in fake_engine.setProperty.call_args_list if c.args and c.args[0] == "voice"
@@ -99,16 +98,16 @@ class TestSynthesize:
         fake_engine.save_to_file = MagicMock(side_effect=OSError("disk"))
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
+        backend = SapiTtsBackend(flush_delay_sec=0)
         with pytest.raises(FatalError, match="SAPI/TTS"):
-            backend.synthesize(Utterance(tgt_text="hi"))
+            backend.synthesize("hi", "ja")
 
-    def test_temp_file_is_cleaned_up(self, fake_pyttsx3, tmp_path) -> None:
+    def test_temp_file_is_cleaned_up(self, fake_pyttsx3) -> None:
         # 通常の synthesize 後、tempfile が残らないことを確認
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
-        backend = SapiTtsBackend(flush_delay_sec=0)  # テストでは sleep スキップ
-        backend.synthesize(Utterance(tgt_text="hello"))
+        backend = SapiTtsBackend(flush_delay_sec=0)
+        backend.synthesize("hello", "ja")
         # 一時ファイルが片付くこと(細かい検証は省略)
 
 
@@ -138,7 +137,7 @@ class TestFlushDelayWorkaround:
         monkeypatch.setattr(sapi_backend.time, "sleep", lambda s: calls.append(s))
 
         backend = sapi_backend.SapiTtsBackend(flush_delay_sec=0.05)
-        backend.synthesize(Utterance(tgt_text="hello"))
+        backend.synthesize("hello", "ja")
         assert 0.05 in calls, f"flush sleep が呼ばれていない: {calls}"
 
     def test_synthesize_skips_sleep_when_delay_zero(
@@ -151,5 +150,5 @@ class TestFlushDelayWorkaround:
         monkeypatch.setattr(sapi_backend.time, "sleep", lambda s: calls.append(s))
 
         backend = sapi_backend.SapiTtsBackend(flush_delay_sec=0)
-        backend.synthesize(Utterance(tgt_text="hello"))
+        backend.synthesize("hello", "ja")
         assert calls == [], f"sleep が呼ばれてしまった: {calls}"
