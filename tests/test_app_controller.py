@@ -1,11 +1,13 @@
 """AppController の単体テスト。
 
 実バックエンドを使わず、BackendRegistry にモッククラスを登録して検証する。
+R-3 で on_utterance_done(dict) / on_dropped(seq_ids, stage) の新シグネチャに更新。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from time import monotonic
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,7 +21,6 @@ from voice_translator.common.types import (
     LayerKind,
     OutputDevice,
 )
-from voice_translator.common.utterance import Utterance
 
 
 # ============================================================
@@ -51,9 +52,10 @@ def _fake_simple_backend():
     inst = MagicMock(name="simple_backend")
     inst.reset = MagicMock()
     inst.process = MagicMock(return_value=[])
-    inst.transcribe = MagicMock(side_effect=lambda u, lang: u)
-    inst.translate = MagicMock(side_effect=lambda u, lang: u)
-    inst.synthesize = MagicMock(side_effect=lambda u: u)
+    # 新 I/F: 戻り値はプリミティブ
+    inst.transcribe = MagicMock(return_value=("hello", "en"))
+    inst.translate = MagicMock(return_value="こんにちは")
+    inst.synthesize = MagicMock(return_value=(b"audio", 16000))
     return inst
 
 
@@ -72,6 +74,19 @@ def populated_registry() -> BackendRegistry:
 @pytest.fixture()
 def config(tmp_path: Path) -> ConfigStore:
     return ConfigStore(tmp_path / "cfg.yaml")
+
+
+def _sample_record(seq_id: int = 1) -> dict:
+    """テスト用 ledger record(handle_utterance_done に渡す)。"""
+    t0 = monotonic()
+    return {
+        "seq_id": seq_id,
+        "src_text": "hi",
+        "src_lang": "en",
+        "tgt_text": "やあ",
+        "tgt_lang": "ja",
+        "timeline": {"t_capture": t0, "t_playback": t0 + 0.1},
+    }
 
 
 # ============================================================
@@ -227,32 +242,31 @@ class TestCallbacks:
     def test_on_utterance_done_is_invoked_with_jsonl_write(
         self, populated_registry, config, tmp_path
     ) -> None:
-        # AppController を直接叩いて jsonl 出力 + コールバック呼び出しを検証
         ctrl = AppController(registry=populated_registry, config=config)
         ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
 
-        seen: list[Utterance] = []
-        ctrl.set_callbacks(on_utterance_done=lambda u: seen.append(u))
+        seen: list[dict] = []
+        ctrl.set_callbacks(on_utterance_done=lambda r: seen.append(r))
 
-        # start_pipeline せず _translation_logger を強制初期化したいので、
-        # 直接プライベートを差し替え(テスト都合)
+        # _translation_logger を手動で初期化(start せずに直接 _handle_utterance_done を叩く)
         from voice_translator.common.logger import TranslationLogger
-
         ctrl._translation_logger = TranslationLogger(
             tmp_path / "logs" / "translations.jsonl", enabled=True
         )
 
-        u = Utterance(src_text="hi", tgt_text="やあ", src_lang="en", tgt_lang="ja")
-        u.timeline.mark("t_capture")
-        u.timeline.mark("t_playback")
-        ctrl._handle_utterance_done(u)
+        record = _sample_record(seq_id=42)
+        ctrl._handle_utterance_done(record)
 
-        assert seen == [u]
+        assert seen == [record]
         assert (tmp_path / "logs" / "translations.jsonl").exists()
 
 
 class TestTextLoggerIntegration:
-    """AppController と TextLogger の連携を検証。"""
+    """AppController と TextLogger の連携を検証。
+
+    R-3: TextLogger は PipelineCoordinator に渡され、ASR/Translator 段で
+    write_src/write_tgt が呼ばれる。AppController._handle_utterance_done からは呼ばれない。
+    """
 
     def test_text_logger_created_after_start_with_settings(
         self, populated_registry, config, tmp_path
@@ -277,48 +291,6 @@ class TestTextLoggerIntegration:
         finally:
             ctrl.stop_pipeline()
 
-    def test_handle_utterance_done_writes_text_files(
-        self, populated_registry, config, tmp_path
-    ) -> None:
-        from voice_translator.common.logger import TextLogger, TranslationLogger
-
-        ctrl = AppController(registry=populated_registry, config=config)
-        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
-
-        # ロガーを直接差し込んで _handle_utterance_done を叩く
-        ctrl._translation_logger = TranslationLogger(
-            tmp_path / "logs" / "translations.jsonl", enabled=False
-        )
-        ctrl._text_logger = TextLogger(
-            src_path=tmp_path / "logs" / "soundsrc.txt",
-            tgt_path=tmp_path / "logs" / "translated.txt",
-            src_enabled=True,
-            tgt_enabled=True,
-        )
-
-        u = Utterance(src_text="hi", tgt_text="やあ", src_lang="en", tgt_lang="ja")
-        ctrl._handle_utterance_done(u)
-
-        assert (tmp_path / "logs" / "soundsrc.txt").exists()
-        assert (tmp_path / "logs" / "translated.txt").exists()
-
-    def test_text_logger_failure_does_not_block_callback(
-        self, populated_registry, config, tmp_path
-    ) -> None:
-        """TextLogger.write が例外を出しても UI コールバックは呼ばれる。"""
-        from unittest.mock import MagicMock
-
-        ctrl = AppController(registry=populated_registry, config=config)
-        seen: list[Utterance] = []
-        ctrl.set_callbacks(on_utterance_done=lambda u: seen.append(u))
-
-        ctrl._text_logger = MagicMock()
-        ctrl._text_logger.write = MagicMock(side_effect=OSError("disk"))
-
-        u = Utterance(src_text="hi", tgt_text="やあ")
-        ctrl._handle_utterance_done(u)
-        assert seen == [u]
-
 
 class TestConfigDefaults:
     def test_text_log_defaults_off(self, populated_registry, config) -> None:
@@ -332,48 +304,25 @@ class TestConfigDefaults:
 
 
 class TestHandleDropped:
-    """AppController._handle_dropped が TextLogger に発話を流すことを検証。"""
+    """AppController._handle_dropped(seq_ids, stage) のシグネチャ確認。
 
-    def test_dropped_items_written_to_text_logger(
-        self, populated_registry, config, tmp_path
+    R-3 で signature 変更: list[int] + str を受ける(以前は list[Utterance])。
+    TextLogger には各段で既に書かれているので、AppController 側ではログのみ。
+    """
+
+    def test_seq_ids_logged(
+        self, populated_registry, config, caplog
     ) -> None:
-        from voice_translator.common.logger import TextLogger
+        import logging
+        caplog.set_level(logging.INFO, logger="voice_translator")
 
         ctrl = AppController(registry=populated_registry, config=config)
-        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
-        ctrl._text_logger = TextLogger(
-            src_path=tmp_path / "logs" / "soundsrc.txt",
-            tgt_path=tmp_path / "logs" / "translated.txt",
-            src_enabled=True,
-            tgt_enabled=True,
-        )
+        ctrl._handle_dropped([10, 11, 12], "q_raw(Input→ASR)")
 
-        utts = [
-            Utterance(src_text="hello", src_lang="en", tgt_text="こんにちは", tgt_lang="ja"),
-            Utterance(src_text="world", src_lang="en", tgt_text="世界", tgt_lang="ja"),
-        ]
-        ctrl._handle_dropped(utts, "q2(Process→Output)")
+        info_logs = [r for r in caplog.records if "dropped seq_ids" in r.message]
+        assert info_logs, "ドロップログが出ていない"
 
-        src_lines = (tmp_path / "logs" / "soundsrc.txt").read_text(encoding="utf-8").splitlines()
-        tgt_lines = (tmp_path / "logs" / "translated.txt").read_text(encoding="utf-8").splitlines()
-        assert len(src_lines) == 2
-        assert len(tgt_lines) == 2
-        assert "hello" in src_lines[0] and "world" in src_lines[1]
-        assert "こんにちは" in tgt_lines[0] and "世界" in tgt_lines[1]
-
-    def test_no_text_logger_is_safe(self, populated_registry, config) -> None:
+    def test_empty_seq_ids_is_noop(self, populated_registry, config) -> None:
         ctrl = AppController(registry=populated_registry, config=config)
-        ctrl._text_logger = None
         # 例外なく終わること
-        ctrl._handle_dropped([Utterance(src_text="x")], "q1")
-
-    def test_text_logger_exception_does_not_propagate(
-        self, populated_registry, config, tmp_path
-    ) -> None:
-        from unittest.mock import MagicMock
-
-        ctrl = AppController(registry=populated_registry, config=config)
-        ctrl._text_logger = MagicMock()
-        ctrl._text_logger.write = MagicMock(side_effect=OSError("disk"))
-        # 例外を内部で握って継続できること
-        ctrl._handle_dropped([Utterance(src_text="x")], "q2")
+        ctrl._handle_dropped([], "q_raw")

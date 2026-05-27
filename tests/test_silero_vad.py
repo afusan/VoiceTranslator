@@ -1,4 +1,7 @@
-"""SileroVadBackend の単体テスト。silero-vad を完全モック化。"""
+"""SileroVadBackend の単体テスト。silero-vad を完全モック化。
+
+R-3 で VadSegment 返却に変更。
+"""
 
 from __future__ import annotations
 
@@ -9,6 +12,7 @@ import numpy as np
 import pytest
 
 from voice_translator.common.errors import FatalError
+from voice_translator.vad.backend import VadSegment
 
 
 @pytest.fixture()
@@ -80,8 +84,8 @@ class TestProcessAndBuffer:
         assert result == []
         assert fake_iter.call_count == 3
 
-    def test_full_speech_cycle_produces_utterance(self, fake_silero) -> None:
-        """start イベント → 継続 → end イベントで Utterance が生成される。"""
+    def test_full_speech_cycle_produces_segment(self, fake_silero) -> None:
+        """start イベント → 継続 → end イベントで VadSegment が生成される。"""
         from voice_translator.vad.silero_backend import SileroVadBackend
 
         _, fake_iter = fake_silero
@@ -92,11 +96,12 @@ class TestProcessAndBuffer:
         result = backend.process(np.ones(512 * 3, dtype=np.float32))
 
         assert len(result) == 1
-        utt = result[0]
+        seg = result[0]
+        assert isinstance(seg, VadSegment)
         # 3ウィンドウ分の連結 = 1536サンプル
-        assert utt.pcm.shape == (512 * 3,)
-        assert utt.timeline.get("t_capture") is not None
-        assert utt.timeline.get("t_vad_end") is not None
+        assert seg.pcm.shape == (512 * 3,)
+        assert isinstance(seg.started_at_monotonic, float)
+        assert seg.started_at_monotonic > 0
 
     def test_reset_clears_state(self, fake_silero) -> None:
         from voice_translator.vad.silero_backend import SileroVadBackend

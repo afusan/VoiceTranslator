@@ -12,7 +12,6 @@ import customtkinter as ctk
 
 from voice_translator.common.app_controller import AppController
 from voice_translator.common.types import LayerKind, ModelStatus
-from voice_translator.common.utterance import Utterance
 
 
 class ControlPanel(ctk.CTkFrame):
@@ -119,8 +118,8 @@ class ControlPanel(ctk.CTkFrame):
     # ============================================================
     # Coordinator スレッドからのコールバック
     # ============================================================
-    def _on_utterance_from_thread(self, utt: Utterance) -> None:
-        self.after(0, lambda: self._apply_utterance(utt))
+    def _on_utterance_from_thread(self, record: dict) -> None:
+        self.after(0, lambda: self._apply_utterance(record))
 
     def _on_fatal_from_thread(self, message: str) -> None:
         self.after(0, lambda: self._apply_fatal(message))
@@ -134,16 +133,24 @@ class ControlPanel(ctk.CTkFrame):
             self._settings_panel.on_status_change(layer, status)
 
     # ---- メインスレッドでの反映 ----
-    def _apply_utterance(self, utt: Utterance) -> None:
-        latency = utt.timeline.elapsed("t_capture", "t_playback")
-        if latency is not None:
+    def _apply_utterance(self, record: dict) -> None:
+        timeline = record.get("timeline", {}) or {}
+        t_cap = timeline.get("t_capture")
+        t_play = timeline.get("t_playback")
+        if t_cap is not None and t_play is not None:
+            latency = t_play - t_cap
             self._latencies.append(latency)
             avg = sum(self._latencies) / len(self._latencies)
             self._latency_label.configure(
                 text=f"平均レイテンシ: {avg:.2f} 秒(直近{len(self._latencies)}件)"
             )
 
-        text = f"[{utt.src_lang} → {utt.tgt_lang}] {utt.src_text}\n   → {utt.tgt_text}"
+        seq = record.get("seq_id", "?")
+        src_lang = record.get("src_lang", "")
+        tgt_lang = record.get("tgt_lang", "")
+        src_text = record.get("src_text", "")
+        tgt_text = record.get("tgt_text", "")
+        text = f"#{seq} [{src_lang} → {tgt_lang}] {src_text}\n   → {tgt_text}"
         self._append_history(text)
 
     def _apply_fatal(self, message: str) -> None:

@@ -1,6 +1,6 @@
 """パイプライン縦通しの E2E テスト(モックの ML バックエンド使用)。
 
-役割: WavReplayCapture から WAV を流し、PipelineCoordinator が
+役割: WavReplayCapture から WAV を流し、PipelineCoordinator(5スレッド版)が
 VAD → ASR → 翻訳 → TTS → 出力 を順に呼ぶことを再現可能に検証する。
 実モデルを使わないため CI/ローカルで安定して動く。
 """
@@ -9,20 +9,19 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from time import monotonic
 from typing import Callable
 
 import numpy as np
-import pytest
 
 from voice_translator.asr.backend import AsrBackend
 from voice_translator.common.error_handler import ErrorHandler
 from voice_translator.common.pipeline import PipelineCoordinator
 from voice_translator.common.types import OutputDevice, PcmChunk
-from voice_translator.common.utterance import Utterance
 from voice_translator.output.backend import AudioOutputBackend
 from voice_translator.translator.backend import TranslatorBackend
 from voice_translator.tts.backend import TtsBackend
-from voice_translator.vad.backend import VadBackend
+from voice_translator.vad.backend import VadBackend, VadSegment
 
 from ._fixtures import WavReplayCapture
 
@@ -42,17 +41,14 @@ class VadEveryN(VadBackend):
         self._count = 0
         self._buf = []
 
-    def process(self, chunk: PcmChunk) -> list[Utterance]:
+    def process(self, chunk: PcmChunk) -> list[VadSegment]:
         self._buf.append(chunk.copy())
         self._count += 1
         if self._count % self._n != 0:
             return []
         pcm = np.concatenate(self._buf)
-        u = Utterance(pcm=pcm)
-        u.timeline.mark("t_capture")
-        u.timeline.mark("t_vad_end")
         self._buf = []
-        return [u]
+        return [VadSegment(pcm=pcm, started_at_monotonic=monotonic())]
 
 
 class EchoAsr(AsrBackend):
@@ -67,13 +63,12 @@ class SuffixTranslator(TranslatorBackend):
 
 class SilentTts(TtsBackend):
     def synthesize(self, text: str, tgt_lang: str) -> tuple[np.ndarray, int]:
-        # 0.01秒分の無音を合成したことにする
         return np.zeros(160, dtype=np.float32), 16000
 
 
 class RecordingOutput(AudioOutputBackend):
     def __init__(self) -> None:
-        self.played: list[tuple] = []  # (pcm, samplerate)
+        self.played: list[tuple] = []
         self._started = False
 
     def list_devices(self) -> list[OutputDevice]:
@@ -108,7 +103,7 @@ class TestPipelineE2EWithSynthPcm:
 
         capture = WavReplayCapture(pcm, chunk_size=512)
         output = RecordingOutput()
-        done_utts: list[Utterance] = []
+        done_records: list[dict] = []
 
         coord = PipelineCoordinator(
             capture=capture,
@@ -120,23 +115,22 @@ class TestPipelineE2EWithSynthPcm:
             error_handler=ErrorHandler(),
             src_lang="en",
             tgt_lang="ja",
-            on_utterance_done=lambda u: done_utts.append(u),
+            on_utterance_done=lambda r: done_records.append(r),
             read_timeout=0.01,
-            queue_size=100,  # テストでは取りこぼし防止のため大きめ
+            q_raw_size=100, q_tr_size=100, q_xl_size=100, q_syn_size=100,
         )
 
         coord.start(capture_source_id="wav_replay", output_device_id="dummy_out")
-        # 16000 / 512 = 約31チャンク、3チャンクで1発話なので 約10発話
         assert _wait_until(lambda: len(output.played) >= 5, timeout=3.0)
         coord.stop()
 
         assert len(output.played) > 0
-        assert len(done_utts) > 0
-        for u in done_utts:
-            assert u.src_text.startswith("text(")
-            assert u.tgt_text.endswith("-> ja")
+        assert len(done_records) > 0
+        for r in done_records:
+            assert r["src_text"].startswith("text(")
+            assert r["tgt_text"].endswith("-> ja")
             for key in ("t_capture", "t_vad_end", "t_asr", "t_translate", "t_tts", "t_playback"):
-                assert u.timeline.get(key) is not None
+                assert key in r["timeline"], f"{key} がタイムラインに記録されていない"
 
     def test_pipeline_loads_real_wav_file(self, tmp_path: Path) -> None:
         """WAV ファイルを書き出して、from_wav() で読み込んで流す。"""
@@ -168,7 +162,7 @@ class TestPipelineE2EWithSynthPcm:
             src_lang="en",
             tgt_lang="ja",
             read_timeout=0.01,
-            queue_size=100,
+            q_raw_size=100, q_tr_size=100, q_xl_size=100, q_syn_size=100,
         )
         coord.start(capture_source_id="wav_replay", output_device_id="dummy_out")
         assert _wait_until(lambda: len(output.played) >= 1, timeout=3.0)
