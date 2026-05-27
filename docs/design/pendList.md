@@ -4,6 +4,24 @@
 
 ---
 
+## [2026-05-27] PipelineCoordinator のキュー変数名を意味のある名前にリネーム
+- **対象**: `PipelineCoordinator` 内のキュー変数とコンストラクタ引数。
+  - 現状の名前: `q_raw` / `q_tr` / `q_xl` / `q_syn`
+  - 対応する引数: `q_raw_size` / `q_tr_size` / `q_xl_size` / `q_syn_size`
+  - ステージ間対応: `q_raw`=Input→ASR、`q_tr`=ASR→Translator(transcribed)、`q_xl`=Translator→TTS(translated)、`q_syn`=TTS→Output(synthesized)
+- **背景**: 5スレッド版への書き換え時(`refactor/pipeline-5thread`)に、ループ内で頻出するため短縮形を採用した。Python では PEP 8 的に descriptive な名前が推奨される一方、ローカル変数で頻出する場合は短縮形も許容範囲。ただし C#/C++ 出身のレビュアーから「もう少し意味を持たせたい」との指摘あり。
+- **対応の見送り理由**: 動作には影響しないため、5スレッド構成の安定確認(実機検証)を優先。リネーム自体は機械的だが、テスト・ドキュメント・コミット履歴を横断するため、独立したリファクタブランチで一気にやる方が安全。
+- **解消候補(リネーム案)**:
+  - `q_raw` → `pcm_queue` (Input → ASR)
+  - `q_tr` → `transcript_queue` (ASR → Translator)
+  - `q_xl` → `translation_queue` (Translator → TTS)
+  - `q_syn` → `synthesized_queue` (TTS → Output)
+  - サイズ引数も同様に `pcm_queue_size` 等に追従。
+- **再検討トリガ**: 別件で `PipelineCoordinator` を触る作業が出た時にまとめて実施 / GUI からキューサイズを公開するタイミング(B-2 と合流)。
+- **備考**: リネーム時は Architecture.html(セクション 3 と 4-1)、Class.md、testPlan.md、shortcutList も連動更新が必要。
+
+---
+
 ## [2026-05-27] SAPI(pyttsx3)で音節が異常に繰り返される既知バグ + 暫定対処
 - **問題の概要**: 低頻度で、TTS再生時に特定の音節(例: 「問題」が「問問問問問...問題」のように)1分近く繰り返されて再生されるケースが発生する。テキスト本来の長さを大幅に超える音声が出る。
 - **想定原因(未確定)**:
