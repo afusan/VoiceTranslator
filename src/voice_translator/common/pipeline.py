@@ -5,10 +5,10 @@
 横断メタ(timeline / 各種テキスト / 言語等)は `UtteranceLedger` に seq_id をキーに集約する。
 
 スレッド/キュー構成:
-- Input    --(q_raw)-->  ASR
-- ASR      --(q_tr)-->   Translator
-- Translator -(q_xl)-->  TTS
-- TTS      --(q_syn)-->  Output
+- Input    --(captured_queue)-->  ASR
+- ASR      --(recognized_queue)-->   Translator
+- Translator -(translated_queue)-->  TTS
+- TTS      --(synthesized_queue)-->  Output
 
 キューがあふれた場合は古いものから捨てる(リアルタイム性を優先)。
 """
@@ -68,10 +68,10 @@ class PipelineCoordinator:
         on_utterance_done: Callable[[dict], None] | None = None,
         on_dropped: Callable[[list[int], str], None] | None = None,
         read_timeout: float = 0.1,
-        q_raw_size: int = 5,
-        q_tr_size: int = 10,
-        q_xl_size: int = 10,
-        q_syn_size: int = 5,
+        captured_queue_size: int = 5,
+        recognized_queue_size: int = 10,
+        translated_queue_size: int = 10,
+        synthesized_queue_size: int = 5,
         logger: logging.Logger | None = None,
     ) -> None:
         self._capture = capture
@@ -92,10 +92,10 @@ class PipelineCoordinator:
         self._logger = logger or logging.getLogger("voice_translator")
 
         # キュー(PipelineMessage または _SENTINEL を流す)
-        self._q_raw: queue.Queue = queue.Queue(maxsize=q_raw_size)
-        self._q_tr: queue.Queue = queue.Queue(maxsize=q_tr_size)
-        self._q_xl: queue.Queue = queue.Queue(maxsize=q_xl_size)
-        self._q_syn: queue.Queue = queue.Queue(maxsize=q_syn_size)
+        self._captured_queue: queue.Queue = queue.Queue(maxsize=captured_queue_size)
+        self._recognized_queue: queue.Queue = queue.Queue(maxsize=recognized_queue_size)
+        self._translated_queue: queue.Queue = queue.Queue(maxsize=translated_queue_size)
+        self._synthesized_queue: queue.Queue = queue.Queue(maxsize=synthesized_queue_size)
 
         # overflow 累計(stage名 → 累積ドロップ数)
         self._drop_counts: dict[str, int] = {}
@@ -140,7 +140,7 @@ class PipelineCoordinator:
 
         self._stop_event.clear()
         # キュー + ledger 残骸をクリア
-        for q in (self._q_raw, self._q_tr, self._q_xl, self._q_syn):
+        for q in (self._captured_queue, self._recognized_queue, self._translated_queue, self._synthesized_queue):
             self._drain_queue(q)
         self._ledger.clear()
 
@@ -182,10 +182,10 @@ class PipelineCoordinator:
 
         # 各処理スレッドにセンチネルを投入して順次 join
         for q, thread_attr in (
-            (self._q_raw, "_asr_thread"),
-            (self._q_tr, "_translator_thread"),
-            (self._q_xl, "_tts_thread"),
-            (self._q_syn, "_output_thread"),
+            (self._captured_queue, "_asr_thread"),
+            (self._recognized_queue, "_translator_thread"),
+            (self._translated_queue, "_tts_thread"),
+            (self._synthesized_queue, "_output_thread"),
         ):
             self._try_put_sentinel(q)
             thread = getattr(self, thread_attr)
@@ -210,7 +210,7 @@ class PipelineCoordinator:
     # スレッド本体
     # ============================================================
     def _input_loop(self) -> None:
-        """capture.read_chunk → vad.process → q_raw へ Raw メッセージを流す。"""
+        """capture.read_chunk → vad.process → captured_queue へ Raw メッセージを流す。"""
         while not self._stop_event.is_set():
             try:
                 chunk = self._capture.read_chunk(timeout=self._read_timeout)
@@ -247,13 +247,13 @@ class PipelineCoordinator:
                     seq_id=seq_id,
                     payload=RawPayload(pcm=seg.pcm, src_lang_hint=self._src_lang),
                 )
-                self._put_with_drop(self._q_raw, msg, "q_raw(Input→ASR)")
+                self._put_with_drop(self._captured_queue, msg, "captured_queue(Input→ASR)")
 
     def _asr_loop(self) -> None:
-        """q_raw → ASR → q_tr。"""
+        """captured_queue → ASR → recognized_queue。"""
         while not self._stop_event.is_set():
             try:
-                item = self._q_raw.get(timeout=self._read_timeout)
+                item = self._captured_queue.get(timeout=self._read_timeout)
             except queue.Empty:
                 continue
             if item is _SENTINEL:
@@ -286,13 +286,13 @@ class PipelineCoordinator:
                 seq_id=msg.seq_id,
                 payload=TranscribedPayload(src_text=text, src_lang=src_lang),
             )
-            self._put_with_drop(self._q_tr, next_msg, "q_tr(ASR→Translator)")
+            self._put_with_drop(self._recognized_queue, next_msg, "recognized_queue(ASR→Translator)")
 
     def _translator_loop(self) -> None:
-        """q_tr → Translator → q_xl。"""
+        """recognized_queue → Translator → translated_queue。"""
         while not self._stop_event.is_set():
             try:
-                item = self._q_tr.get(timeout=self._read_timeout)
+                item = self._recognized_queue.get(timeout=self._read_timeout)
             except queue.Empty:
                 continue
             if item is _SENTINEL:
@@ -330,13 +330,13 @@ class PipelineCoordinator:
                 seq_id=msg.seq_id,
                 payload=TranslatedPayload(tgt_text=tgt_text, tgt_lang=self._tgt_lang),
             )
-            self._put_with_drop(self._q_xl, next_msg, "q_xl(Translator→TTS)")
+            self._put_with_drop(self._translated_queue, next_msg, "translated_queue(Translator→TTS)")
 
     def _tts_loop(self) -> None:
-        """q_xl → TTS → q_syn。"""
+        """translated_queue → TTS → synthesized_queue。"""
         while not self._stop_event.is_set():
             try:
-                item = self._q_xl.get(timeout=self._read_timeout)
+                item = self._translated_queue.get(timeout=self._read_timeout)
             except queue.Empty:
                 continue
             if item is _SENTINEL:
@@ -359,13 +359,13 @@ class PipelineCoordinator:
                 seq_id=msg.seq_id,
                 payload=SynthesizedPayload(tts_pcm=pcm, tts_samplerate=samplerate),
             )
-            self._put_with_drop(self._q_syn, next_msg, "q_syn(TTS→Output)")
+            self._put_with_drop(self._synthesized_queue, next_msg, "synthesized_queue(TTS→Output)")
 
     def _output_loop(self) -> None:
-        """q_syn → Output → ledger.pop → on_utterance_done。"""
+        """synthesized_queue → Output → ledger.pop → on_utterance_done。"""
         while not self._stop_event.is_set():
             try:
-                item = self._q_syn.get(timeout=self._read_timeout)
+                item = self._synthesized_queue.get(timeout=self._read_timeout)
             except queue.Empty:
                 continue
             if item is _SENTINEL:

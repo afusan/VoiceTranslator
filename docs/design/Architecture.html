@@ -233,25 +233,25 @@
     <th>含まれる情報</th>
   </tr>
   <tr>
-    <td><code>q_raw</code></td>
+    <td><code>captured_queue</code></td>
     <td>Input → ASR</td>
     <td><code>RawPayload</code></td>
     <td>seq_id, pcm(np.ndarray 16kHz/mono/float32), src_lang_hint("auto" or 言語コード)</td>
   </tr>
   <tr>
-    <td><code>q_tr</code></td>
+    <td><code>recognized_queue</code></td>
     <td>ASR → Translator</td>
     <td><code>TranscribedPayload</code></td>
     <td>seq_id, src_text(str), src_lang(検出済み)<br><strong>pcm は載せない</strong>(ASR後不要)</td>
   </tr>
   <tr>
-    <td><code>q_xl</code></td>
+    <td><code>translated_queue</code></td>
     <td>Translator → TTS</td>
     <td><code>TranslatedPayload</code></td>
     <td>seq_id, tgt_text(str), tgt_lang<br><strong>src_text は載せない</strong>(ledger に保管済み)</td>
   </tr>
   <tr>
-    <td><code>q_syn</code></td>
+    <td><code>synthesized_queue</code></td>
     <td>TTS → Output</td>
     <td><code>SynthesizedPayload</code></td>
     <td>seq_id, tts_pcm(np.ndarray), tts_samplerate</td>
@@ -305,11 +305,11 @@
 <h2>5. データフロー(発話1件あたり)</h2>
 
 <ol>
-  <li><strong>Input</strong>: PCMチャンク連続取得 → VAD が無音で区切り → <code>seq_id = SequenceGenerator.next()</code> → <code>ledger.init(seq_id, t_capture, t_vad_end, src_lang_hint)</code> → <code>q_raw.put(RawPayload(seq_id, pcm, hint))</code></li>
-  <li><strong>ASR</strong>: q_raw から取出 → <code>(src_text, src_lang) = asr.transcribe(pcm, hint)</code> → <code>ledger.record(seq_id, t_asr=now, src_text, src_lang)</code> → (任意) <code>text_logger.write_src(seq_id, src_text, src_lang)</code> → <code>q_tr.put(TranscribedPayload(seq_id, src_text, src_lang))</code></li>
-  <li><strong>Translator</strong>: q_tr から取出 → <code>tgt_text = translator.translate(src_text, src_lang, tgt_lang)</code> → <code>ledger.record(seq_id, t_translate, tgt_text, tgt_lang)</code> → (任意) <code>text_logger.write_tgt(seq_id, tgt_text, tgt_lang)</code> → <code>q_xl.put(TranslatedPayload(seq_id, tgt_text, tgt_lang))</code></li>
-  <li><strong>TTS</strong>: q_xl から取出 → <code>(pcm, sr) = tts.synthesize(tgt_text, tgt_lang)</code> → <code>ledger.record(seq_id, t_tts)</code> → <code>q_syn.put(SynthesizedPayload(seq_id, pcm, sr))</code></li>
-  <li><strong>Output</strong>: q_syn から取出 → <code>output.play(pcm, sr)</code> → <code>ledger.record(seq_id, t_playback)</code> → <code>record = ledger.pop(seq_id)</code> → <code>jsonl.write(record)</code> → <code>on_utterance_done(seq_id, record)</code></li>
+  <li><strong>Input</strong>: PCMチャンク連続取得 → VAD が無音で区切り → <code>seq_id = SequenceGenerator.next()</code> → <code>ledger.init(seq_id, t_capture, t_vad_end, src_lang_hint)</code> → <code>captured_queue.put(RawPayload(seq_id, pcm, hint))</code></li>
+  <li><strong>ASR</strong>: captured_queue から取出 → <code>(src_text, src_lang) = asr.transcribe(pcm, hint)</code> → <code>ledger.record(seq_id, t_asr=now, src_text, src_lang)</code> → (任意) <code>text_logger.write_src(seq_id, src_text, src_lang)</code> → <code>recognized_queue.put(TranscribedPayload(seq_id, src_text, src_lang))</code></li>
+  <li><strong>Translator</strong>: recognized_queue から取出 → <code>tgt_text = translator.translate(src_text, src_lang, tgt_lang)</code> → <code>ledger.record(seq_id, t_translate, tgt_text, tgt_lang)</code> → (任意) <code>text_logger.write_tgt(seq_id, tgt_text, tgt_lang)</code> → <code>translated_queue.put(TranslatedPayload(seq_id, tgt_text, tgt_lang))</code></li>
+  <li><strong>TTS</strong>: translated_queue から取出 → <code>(pcm, sr) = tts.synthesize(tgt_text, tgt_lang)</code> → <code>ledger.record(seq_id, t_tts)</code> → <code>synthesized_queue.put(SynthesizedPayload(seq_id, pcm, sr))</code></li>
+  <li><strong>Output</strong>: synthesized_queue から取出 → <code>output.play(pcm, sr)</code> → <code>ledger.record(seq_id, t_playback)</code> → <code>record = ledger.pop(seq_id)</code> → <code>jsonl.write(record)</code> → <code>on_utterance_done(seq_id, record)</code></li>
 </ol>
 
 <!-- =================================================== -->
@@ -318,7 +318,7 @@
 <p>全ログレコードに <code>seq_id=N</code> を含める。grep で対応が取れる。</p>
 <pre>app.log:
 [2026-05-27 12:34:56] [INFO] seq=42 ASR完了 src="hello world"
-[2026-05-27 12:34:57] [WARNING] seq=42 queue overflow in q_syn (dropped)
+[2026-05-27 12:34:57] [WARNING] seq=42 queue overflow in synthesized_queue (dropped)
 
 soundsrc.txt:
 [2026-05-27 12:34:56] [seq=42] [en] hello world

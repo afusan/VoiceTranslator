@@ -23,7 +23,7 @@ shortcutList A-1 / Phase 5「案C」の合流。
 | 項目 | 決定 |
 |------|------|
 | スレッド構成 | Input / ASR / Translator / TTS / Output の5本 |
-| キュー構成 | q_raw(5) / q_tr(10) / q_xl(10) / q_syn(5) |
+| キュー構成 | captured_queue(5) / recognized_queue(10) / translated_queue(10) / synthesized_queue(5) |
 | キューあふれ | 最古を捨てる + WARN ログ + on_dropped 通知(現状継承) |
 | payload | プリミティブ(pcm/text等) + seq_id |
 | メタ管理 | UtteranceLedger(中央) で timeline/言語/テキスト/状態 を集約 |

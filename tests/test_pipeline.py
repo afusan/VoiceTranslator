@@ -187,10 +187,10 @@ def _build(
     asr: AsrBackend | None = None,
     on_done: Callable[[dict], None] | None = None,
     on_dropped: Callable[[list[int], str], None] | None = None,
-    q_raw_size: int = 50,
-    q_tr_size: int = 50,
-    q_xl_size: int = 50,
-    q_syn_size: int = 50,
+    captured_queue_size: int = 50,
+    recognized_queue_size: int = 50,
+    translated_queue_size: int = 50,
+    synthesized_queue_size: int = 50,
     text_logger: TextLogger | None = None,
 ) -> tuple[PipelineCoordinator, FakeOutput]:
     if chunks is None:
@@ -210,10 +210,10 @@ def _build(
         on_utterance_done=on_done,
         on_dropped=on_dropped,
         read_timeout=0.01,
-        q_raw_size=q_raw_size,
-        q_tr_size=q_tr_size,
-        q_xl_size=q_xl_size,
-        q_syn_size=q_syn_size,
+        captured_queue_size=captured_queue_size,
+        recognized_queue_size=recognized_queue_size,
+        translated_queue_size=translated_queue_size,
+        synthesized_queue_size=synthesized_queue_size,
     )
     return coord, output
 
@@ -338,10 +338,10 @@ class TestPipelineQueueOverflow:
 
         coord, _ = _build(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(40)],
-            q_raw_size=1,
-            q_tr_size=1,
-            q_xl_size=1,
-            q_syn_size=1,
+            captured_queue_size=1,
+            recognized_queue_size=1,
+            translated_queue_size=1,
+            synthesized_queue_size=1,
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         time.sleep(0.3)
@@ -356,10 +356,10 @@ class TestPipelineQueueOverflow:
         seen: list[tuple[list[int], str]] = []
         coord, _ = _build(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(30)],
-            q_raw_size=1,
-            q_tr_size=1,
-            q_xl_size=1,
-            q_syn_size=1,
+            captured_queue_size=1,
+            recognized_queue_size=1,
+            translated_queue_size=1,
+            synthesized_queue_size=1,
             on_dropped=lambda sids, stage: seen.append((sids, stage)),
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
@@ -370,16 +370,16 @@ class TestPipelineQueueOverflow:
         for sids, stage in seen:
             assert isinstance(sids, list)
             assert all(isinstance(s, int) and s > 0 for s in sids)
-            assert stage.startswith("q_")
+            assert stage.endswith("_queue(Input→ASR)") or "_queue(" in stage
 
     def test_dropped_seq_ids_removed_from_ledger(self) -> None:
         """ドロップしたら ledger からも消える(リークしない)。"""
         coord, _ = _build(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(40)],
-            q_raw_size=1,
-            q_tr_size=1,
-            q_xl_size=1,
-            q_syn_size=1,
+            captured_queue_size=1,
+            recognized_queue_size=1,
+            translated_queue_size=1,
+            synthesized_queue_size=1,
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         time.sleep(0.3)
@@ -394,10 +394,10 @@ class TestPipelineQueueOverflow:
 
         coord, _ = _build(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(30)],
-            q_raw_size=1,
-            q_tr_size=1,
-            q_xl_size=1,
-            q_syn_size=1,
+            captured_queue_size=1,
+            recognized_queue_size=1,
+            translated_queue_size=1,
+            synthesized_queue_size=1,
             on_dropped=lambda sids, stage: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
@@ -567,7 +567,7 @@ def _build_with_backends(
         tgt_lang="ja",
         on_utterance_done=on_done,
         read_timeout=0.01,
-        q_raw_size=50, q_tr_size=50, q_xl_size=50, q_syn_size=50,
+        captured_queue_size=50, recognized_queue_size=50, translated_queue_size=50, synthesized_queue_size=50,
     )
     return coord, output
 
@@ -900,7 +900,7 @@ class TestPipelineQueueFullConcurrency:
                     n = self._count
                 translate_inputs.append((n, src_text))
                 if n == 1:
-                    # 翻訳中シグナル → 解放されるまで待機(その間 q_tr に後続が溜まる)
+                    # 翻訳中シグナル → 解放されるまで待機(その間 recognized_queue に後続が溜まる)
                     gate_started.set()
                     gate_release.wait(timeout=3.0)
                 # 結果は「入力文字列 + 呼び出し回」: 入力が途中で書き換わったら検出できる
@@ -913,9 +913,9 @@ class TestPipelineQueueFullConcurrency:
         coord, output = _build_with_backends(
             chunks=chunks,
             translator=slow_translator,
-            # q_tr を最小化して、翻訳ブロック中に必ず満杯になるよう仕向ける
+            # recognized_queue を最小化して、翻訳ブロック中に必ず満杯になるよう仕向ける
         )
-        # q_tr_size を小さくして強制的にあふれさせる
+        # recognized_queue_size を小さくして強制的にあふれさせる
         # _build_with_backends は q_*_size=50 を渡すので、別途 PipelineCoordinator を組み直す
         # ↑ シンプル化のため独自に構築する
         capture = FakeCapture(chunks)
@@ -933,7 +933,7 @@ class TestPipelineQueueFullConcurrency:
             tgt_lang="ja",
             on_dropped=lambda sids, stage: seen_dropped.append((sids, stage)),
             read_timeout=0.01,
-            q_raw_size=1, q_tr_size=1, q_xl_size=50, q_syn_size=50,
+            captured_queue_size=1, recognized_queue_size=1, translated_queue_size=50, synthesized_queue_size=50,
         )
 
         coord2.start(capture_source_id="dummy", output_device_id="dummy_out")
@@ -941,7 +941,7 @@ class TestPipelineQueueFullConcurrency:
             # 1) 翻訳1件目がブロック状態に入るのを待つ
             assert gate_started.wait(timeout=2.0), "翻訳1件目に到達しない"
 
-            # 2) その間、ASR が後続発話を生産して q_tr (size=1) に push しまくる
+            # 2) その間、ASR が後続発話を生産して recognized_queue (size=1) に push しまくる
             #    満杯のため _put_with_drop で旧要素を捨てる動作が走る
             time.sleep(0.3)
 
