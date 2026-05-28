@@ -36,7 +36,14 @@ packages = ["src/voice_translator"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# Google "small / middle / large" のテストピラミッドに沿うマーカー。
+# - small: 既定(マーカー無し)。高速 / モック中心 / 毎回回す。
+# - middle: 実コンポーネントだが軽め。リリース前/機能更新時に確認したい統合的なもの。
+# - large : 実モデル/実デバイス必須で重い(数十秒〜数分)。手動で明示実行のみ。
 markers = [
-    "slow: middle/large tests requiring real models or audio devices",
+    "middle: middle-size integration tests (real local components, moderate cost)",
+    "large: large/end-to-end tests requiring real models or audio devices (manual only)",
 ]
-addopts = "-ra"
+# 既定では middle / large を除外する。リリース前は `-m middle` / `-m large` /
+# `-m \"middle or large\"` を明示して回す。
+addopts = "-ra -m 'not middle and not large'"

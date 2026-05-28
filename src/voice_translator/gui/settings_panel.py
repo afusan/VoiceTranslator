@@ -11,6 +11,8 @@ import customtkinter as ctk
 from voice_translator.common.app_controller import AppController
 from voice_translator.common.types import LayerKind, ModelStatus
 
+from .layer_settings_dialog import LayerSettingsDialog
+
 # GUIで切替対象とするレイヤと表示ラベル
 _LAYER_LABELS: list[tuple[LayerKind, str]] = [
     (LayerKind.CAPTURE, "音声取得"),
@@ -57,11 +59,11 @@ class SettingsPanel(ctk.CTkFrame):
     # ============================================================
     def _build_widgets(self) -> None:
         ctk.CTkLabel(self, text="設定", font=("", 16, "bold")).grid(
-            row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4)
+            row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 4)
         )
 
         row = 1
-        # レイヤ実装の選択 + モデルステータス
+        # レイヤ実装の選択 + モデルステータス + 設定ボタン
         # ("バックエンド" 表記はユーザ向けには冗長なので外し、ラベル単体に統一)
         for layer, label in _LAYER_LABELS:
             ctk.CTkLabel(self, text=f"{label}:").grid(
@@ -80,14 +82,21 @@ class SettingsPanel(ctk.CTkFrame):
             self._backend_vars[layer] = var
 
             status_label = ctk.CTkLabel(self, text="-", text_color="#64748b", anchor="w")
-            status_label.grid(row=row, column=2, sticky="ew", padx=(4, 10), pady=2)
+            status_label.grid(row=row, column=2, sticky="ew", padx=(4, 4), pady=2)
             self._status_labels[layer] = status_label
+
+            # レイヤ別「設定」ボタン → LayerSettingsDialog
+            ctk.CTkButton(
+                self, text="設定", width=60,
+                command=lambda lyr=layer: self._open_layer_settings(lyr),
+            ).grid(row=row, column=3, sticky="e", padx=(0, 10), pady=2)
+
             row += 1
 
         # レイヤ実装グループとデバイス選択グループの境界線(視覚的な区切り)
         separator = ctk.CTkFrame(self, height=2, fg_color="#475569")
         separator.grid(
-            row=row, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 8)
+            row=row, column=0, columnspan=4, sticky="ew", padx=10, pady=(8, 8)
         )
         row += 1
 
@@ -98,7 +107,7 @@ class SettingsPanel(ctk.CTkFrame):
         self._capture_dropdown = ctk.CTkOptionMenu(
             self, values=["(列挙中)"], variable=self._capture_var, command=self._on_capture_changed
         )
-        self._capture_dropdown.grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
+        self._capture_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         row += 1
 
         # 出力デバイス
@@ -108,7 +117,7 @@ class SettingsPanel(ctk.CTkFrame):
         self._output_dropdown = ctk.CTkOptionMenu(
             self, values=["(列挙中)"], variable=self._output_var, command=self._on_output_changed
         )
-        self._output_dropdown.grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
+        self._output_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         row += 1
 
         # src 言語
@@ -118,7 +127,7 @@ class SettingsPanel(ctk.CTkFrame):
         ctk.CTkOptionMenu(
             self, values=_LANG_CHOICES, variable=self._src_var,
             command=lambda v: self._controller.set_setting("languages", "src", v),
-        ).grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
+        ).grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         row += 1
 
         # tgt 言語
@@ -130,7 +139,7 @@ class SettingsPanel(ctk.CTkFrame):
             values=[c for c in _LANG_CHOICES if c != "auto"],
             variable=self._tgt_var,
             command=lambda v: self._controller.set_setting("languages", "tgt", v),
-        ).grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
+        ).grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         row += 1
 
         # ログ出力先
@@ -138,7 +147,7 @@ class SettingsPanel(ctk.CTkFrame):
             row=row, column=0, sticky="w", padx=10, pady=2
         )
         log_frame = ctk.CTkFrame(self)
-        log_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
+        log_frame.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         log_frame.columnconfigure(0, weight=1)
         log_entry = ctk.CTkEntry(log_frame, textvariable=self._log_dir_var)
         log_entry.grid(row=0, column=0, sticky="ew")
@@ -150,7 +159,7 @@ class SettingsPanel(ctk.CTkFrame):
 
         # 保存/再読込
         btn_frame = ctk.CTkFrame(self)
-        btn_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 8))
+        btn_frame.grid(row=row, column=0, columnspan=4, sticky="ew", padx=10, pady=(8, 8))
         ctk.CTkButton(btn_frame, text="設定を保存", command=self._on_save).pack(
             side="left", padx=4
         )
@@ -163,6 +172,12 @@ class SettingsPanel(ctk.CTkFrame):
 
         self.columnconfigure(1, weight=1)
         self.columnconfigure(2, weight=0)
+        self.columnconfigure(3, weight=0)
+
+    # ----------------------------------------------------------
+    def _open_layer_settings(self, layer: LayerKind) -> None:
+        """指定レイヤの設定ダイアログを開く(モーダル風)。"""
+        LayerSettingsDialog(self, self._controller, layer)
 
     # ============================================================
     # ステータス更新(AppController から呼ばれる)

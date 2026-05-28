@@ -108,6 +108,24 @@ MVP では各レイヤ1実装のみ:
 
 将来別実装が追加されたらプルダウンから選択できます。
 
+### 5-4-1. レイヤ別の細かい設定 (「設定」ボタン)
+各レイヤ行の右側に **「設定」ボタン** があります。クリックすると、そのレイヤ固有の
+設定編集ダイアログが開きます。
+
+現在編集できる項目:
+| レイヤ | 設定項目 |
+|---|---|
+| 音声取得 | 入力バッファ容量 (bytes) — VAD出力PCM を ASR に渡すバッファのバイト上限 |
+| ASR | 認識結果バッファ件数 — ASR→翻訳 のキュー上限件数 |
+| 翻訳 | 翻訳結果バッファ件数 — 翻訳→TTS のキュー上限件数 |
+| TTS | 読み上げ速度 (rate) — SAPI 選択時のみ表示 |
+| 音声出力 | 出力バッファ容量 (bytes) — TTS合成PCM を再生段に渡すバッファのバイト上限 |
+| VAD | (まだ編集項目なし) |
+
+「保存」ボタンで `config.yaml` の in-memory 値が更新されます。pipeline 関連の値は
+**次の「▶ 開始」を押した時に Coordinator に渡される** ので、動作中なら一度停止
+→開始してください。永続化したい場合は SettingsPanel の「設定を保存」を押します。
+
 ### 5-5. ログ出力先
 ログとjsonl履歴の保存先フォルダ。既定は `./logs`。
 
@@ -260,11 +278,17 @@ backends_config:
 
 開発用コマンド:
 ```bash
-py -m uv run pytest                      # テスト実行(全件)
-py -m uv run pytest --cov=src            # カバレッジ表示
-py -m uv run pytest -v                   # テスト名表示
-py -m uv add <package>                   # 依存追加
+py -m uv run pytest                              # small のみ(既定 / 高速、毎コミット用)
+py -m uv run pytest -m middle                    # middle のみ(機能更新時に確認)
+py -m uv run pytest -m large                     # large のみ(実モデル/実デバイス必須、手動)
+py -m uv run pytest -m "middle or large"         # リリース前まとめ実行
+py -m uv run pytest -m "" --override-ini="addopts="  # 既定 addopts を override して全部
+py -m uv run pytest --cov=src                    # カバレッジ表示
+py -m uv run pytest -v                           # テスト名表示
+py -m uv add <package>                           # 依存追加
 ```
+
+テスト階層の方針: `CLAUDE.md` の「テスト階層 (small / middle / large)」を参照。
 
 設計ドキュメント:
 - [アーキテクチャ](design/Architecture.html)

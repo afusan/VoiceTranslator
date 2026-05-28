@@ -89,3 +89,19 @@
   - **A. ソフトゲイン(推奨/簡単)**: `SoundcardOutputBackend.play()` の直前で `pcm * gain` を掛ける。スライダ値 0.0〜1.5 程度。クリップ防止のためゲイン>1.0 時は `np.clip(-1.0, 1.0)`。
   - **B. OS音量制御**: Windows なら `pycaw` で出力デバイス本体の音量を変える。他アプリも影響を受けるので慎重に。
   - 設定永続化キー: `audio.output_gain`(0.0〜1.5 の float)。
+
+---
+
+## [2026-05-28] 翻訳/LLM バックエンドの生成パラメータを設定可能にする
+- **問題の具体(発生事例)**: `translations.jsonl` L184 で、920文字の英文(イラン国内インターネット復旧の話題、`internet` / `online` / `restrictions` / `businesses` が密集して反復)を入力した際、`tgt_text` が「ウェブのインターネットは,インターネットの普及を 妨げている.」を約 28 回繰り返すなど、明確な **degenerate output**(同じ n-gram に吸着して max_length まで延々と回る現象)が発生した。L180 や L183 は同等の長文だが語彙が散らばっており崩れていない。
+- **直接の要因**: `Nllb200TranslatorBackend.translate()` の `generate()` 呼び出しが `forced_bos_token_id` と `max_length` しか渡しておらず、`num_beams=1`(greedy)/ `no_repeat_ngram_size=0` / `repetition_penalty=1.0` という HF デフォルトのまま。NLLB-200 distilled 600M は容量が小さく、greedy 探索が局所最適に落ちると抜け出せない。修正は `num_beams=4` / `no_repeat_ngram_size=3` / `repetition_penalty=1.1` / `early_stopping=True` を渡すだけで効くことが確認できる。
+- **抽象化した課題**: **翻訳バックエンド(将来 LLM ベースも含む)の "生成パラメータ" は、バックエンドごとに名前/意味/値域が異なる**。NLLB の `num_beams`、Marian の `length_penalty`、Ollama の `temperature` / `top_p`、OpenAI 互換 API の `max_tokens` / `frequency_penalty` … 共通化できない。一律な GUI 化は事故のもと(切替えたら効かない・値が無意味になる)。
+- **対応方針(案)**: 既存パターン(`backends_config.sapi.rate` / `SapiTtsBackend.__init__(rate=...)`)に倣って、**バックエンド固有の名前空間** で持つ。
+  - `config.yaml` 例: `backends_config.nllb200.{num_beams, no_repeat_ngram_size, repetition_penalty, early_stopping}`
+  - `Nllb200TranslatorBackend.__init__` で受けて `translate()` 内の `generate()` に渡す。
+  - `layer_settings_schema` の Translator レイヤに足せばレイヤ別「設定」ダイアログから編集可能になる(`applies_when_backend="nllb200"`)。
+- **対応の見送り理由(現時点)**: ここはサイドチャットからの派生。本筋の作業を進めつつ、別ブランチで対応する。最低限の "degenerate 防止" は **コード内のデフォルト引数を変える**(`num_beams=4, no_repeat_ngram_size=3, ...`)だけでも回避可能(設定可能化は別フェーズ)。
+- **再検討トリガ**: 実機で再度 degenerate が観測された時 / 第二の翻訳バックエンド(Ollama / M2M100 / API ベース等)を追加するタイミング(設定スキーマの汎用化を一緒に検討)。
+- **関連項目**: 下の「パイプラインステージのパラメータ GUI 化」とも重なる(VAD/ASR/翻訳/TTS いずれも同種の課題)。プリセット方式 vs バックエンド固有展開の設計検討は共通。
+
+---
