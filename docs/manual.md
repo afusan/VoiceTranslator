@@ -182,6 +182,26 @@ log:
 - severity 別の対応: FATAL → ERROR、RECOVERABLE → WARNING、WARN → WARNING、SKIP → INFO
 - 設定変更後は再起動で反映
 
+### ステージ間バッファの容量を変える
+PC性能や発話頻度に応じて、ステージ間キューの上限を調整できる。`config.yaml` を編集:
+```yaml
+pipeline:
+  # PCM 系(バイト基準)。1発話=サンプル数×4byte。
+  # 例: 500_000 ≒ 16kHz×float32 で約 7.8 秒分。
+  captured_queue_max_bytes: 500_000     # Input → ASR
+  synthesized_queue_max_bytes: 500_000  # TTS → Output
+  # テキスト系(件数基準)。テキスト1発話は数百バイトなのでバイト基準より件数が直感的。
+  recognized_queue_size: 10             # ASR → Translator
+  translated_queue_size: 10             # Translator → TTS
+```
+- **PCM 系の挙動**: 「設定値を超えるまで積み、超えたら古い順に退避」。`push` した発話は必ず残り、合計が `max_bytes` を超えていれば古いものから捨てる。**運用上は設定値を少し超える前提**(1発話が単独で上限を超えても、その発話は残る)。
+- **テキスト系の挙動**: `*_size` 件で頭打ち。あふれたら古いものから 1 件ずつ退避(従来通り)。
+- 退避された発話は `app.log` に `queue overflow in ... dropped N utterance(s) (seq=[...])` で記録される。
+- **使い分けの目安**:
+  - 翻訳/TTS が時間的に詰まりやすい → ASR の入力 (`captured_queue_max_bytes`) を増やす
+  - メモリ消費を抑えたい → 各 `*_max_bytes` を 200_000 〜 300_000 に下げる
+- 設定変更後はアプリ再起動で反映(動作中の Coordinator には反映されない)。
+
 ### TTS の読み上げ速度を変える
 SAPI(pyttsx3) の rate を `config.yaml` で変更可能:
 ```yaml

@@ -117,7 +117,7 @@ class TestPipelineE2EWithSynthPcm:
             tgt_lang="ja",
             on_utterance_done=lambda r: done_records.append(r),
             read_timeout=0.01,
-            captured_queue_size=100, recognized_queue_size=100, translated_queue_size=100, synthesized_queue_size=100,
+            captured_queue_max_bytes=10_000_000, recognized_queue_size=100, translated_queue_size=100, synthesized_queue_max_bytes=10_000_000,
         )
 
         coord.start(capture_source_id="wav_replay", output_device_id="dummy_out")
@@ -162,7 +162,7 @@ class TestPipelineE2EWithSynthPcm:
             src_lang="en",
             tgt_lang="ja",
             read_timeout=0.01,
-            captured_queue_size=100, recognized_queue_size=100, translated_queue_size=100, synthesized_queue_size=100,
+            captured_queue_max_bytes=10_000_000, recognized_queue_size=100, translated_queue_size=100, synthesized_queue_max_bytes=10_000_000,
         )
         coord.start(capture_source_id="wav_replay", output_device_id="dummy_out")
         assert _wait_until(lambda: len(output.played) >= 1, timeout=3.0)

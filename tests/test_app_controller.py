@@ -423,6 +423,46 @@ class TestLoadModels:
             ctrl.stop_pipeline()
 
 
+class TestPipelineQueueConfig:
+    """config.yaml の pipeline セクションがコーディネータに反映されることを確認。"""
+
+    def test_default_queue_config_values(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_setting("pipeline", "captured_queue_max_bytes") == 500_000
+        assert ctrl.get_setting("pipeline", "synthesized_queue_max_bytes") == 500_000
+        assert ctrl.get_setting("pipeline", "recognized_queue_size") == 10
+        assert ctrl.get_setting("pipeline", "translated_queue_size") == 10
+
+    def test_queue_config_propagates_to_coordinator(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        from voice_translator.common.bounded_queue import ByteBoundedQueue
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        # 既定値を上書き
+        ctrl.set_setting("pipeline", "captured_queue_max_bytes", 12_345)
+        ctrl.set_setting("pipeline", "synthesized_queue_max_bytes", 67_890)
+        ctrl.set_setting("pipeline", "recognized_queue_size", 7)
+        ctrl.set_setting("pipeline", "translated_queue_size", 3)
+
+        ctrl.start_pipeline()
+        try:
+            assert isinstance(ctrl._coord._captured_queue, ByteBoundedQueue)
+            assert ctrl._coord._captured_queue.max_bytes == 12_345
+            assert isinstance(ctrl._coord._synthesized_queue, ByteBoundedQueue)
+            assert ctrl._coord._synthesized_queue.max_bytes == 67_890
+            # テキスト系は queue.Queue で maxsize 反映
+            assert ctrl._coord._recognized_queue.maxsize == 7
+            assert ctrl._coord._translated_queue.maxsize == 3
+        finally:
+            ctrl.stop_pipeline()
+
+
 class TestHandleDropped:
     """AppController._handle_dropped(seq_ids, stage) のシグネチャ確認。
 

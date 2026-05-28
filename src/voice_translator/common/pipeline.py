@@ -5,12 +5,13 @@
 横断メタ(timeline / 各種テキスト / 言語等)は `UtteranceLedger` に seq_id をキーに集約する。
 
 スレッド/キュー構成:
-- Input    --(captured_queue)-->  ASR
-- ASR      --(recognized_queue)-->   Translator
-- Translator -(translated_queue)-->  TTS
-- TTS      --(synthesized_queue)-->  Output
+- Input    --(captured_queue)-->  ASR        (PCM、バイト基準 ByteBoundedQueue)
+- ASR      --(recognized_queue)--> Translator (テキスト、件数基準 queue.Queue)
+- Translator -(translated_queue)-> TTS        (テキスト、件数基準 queue.Queue)
+- TTS      --(synthesized_queue)-> Output    (PCM、バイト基準 ByteBoundedQueue)
 
-キューがあふれた場合は古いものから捨てる(リアルタイム性を優先)。
+キューがあふれた場合は古いものから捨てる(リアルタイム性を優先)。PCM 系はバイト数で
+制限し、設定値を少し超える前提で「push してから超過分を退避」する。
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-from typing import Callable
+from typing import Callable, Union
 
 from voice_translator.asr.backend import AsrBackend
 from voice_translator.capture.backend import AudioCaptureBackend
@@ -27,6 +28,7 @@ from voice_translator.translator.backend import TranslatorBackend
 from voice_translator.tts.backend import TtsBackend
 from voice_translator.vad.backend import VadBackend
 
+from .bounded_queue import ByteBoundedQueue
 from .error_handler import ErrorAction, ErrorHandler
 from .ledger import UtteranceLedger
 from .logger import TextLogger
@@ -41,6 +43,32 @@ from .sequence import SequenceGenerator
 
 # 停止シグナル代わりにキューへ流すセンチネル値
 _SENTINEL: object = object()
+
+# 両方のキュー実装をまとめて指すエイリアス
+_StageQueue = Union[queue.Queue, ByteBoundedQueue]
+
+
+def _pcm_message_bytes(item: object) -> int:
+    """PipelineMessage 内の PCM バイト数を返す。非該当(センチネル等)は 0。
+
+    captured_queue / synthesized_queue 用の size_of(`ByteBoundedQueue`)。
+    """
+    if not isinstance(item, PipelineMessage):
+        return 0
+    payload = item.payload
+    if isinstance(payload, RawPayload):
+        arr = payload.pcm
+        return int(getattr(arr, "nbytes", 0))
+    if isinstance(payload, SynthesizedPayload):
+        arr = payload.tts_pcm
+        nbytes = getattr(arr, "nbytes", None)
+        if nbytes is not None:
+            return int(nbytes)
+        try:
+            return len(arr)  # bytes/bytearray 互換
+        except TypeError:
+            return 0
+    return 0
 
 
 class PipelineCoordinator:
@@ -68,10 +96,10 @@ class PipelineCoordinator:
         on_utterance_done: Callable[[dict], None] | None = None,
         on_dropped: Callable[[list[int], str], None] | None = None,
         read_timeout: float = 0.1,
-        captured_queue_size: int = 5,
+        captured_queue_max_bytes: int = 500_000,
+        synthesized_queue_max_bytes: int = 500_000,
         recognized_queue_size: int = 10,
         translated_queue_size: int = 10,
-        synthesized_queue_size: int = 5,
         logger: logging.Logger | None = None,
     ) -> None:
         self._capture = capture
@@ -92,10 +120,15 @@ class PipelineCoordinator:
         self._logger = logger or logging.getLogger("voice_translator")
 
         # キュー(PipelineMessage または _SENTINEL を流す)
-        self._captured_queue: queue.Queue = queue.Queue(maxsize=captured_queue_size)
-        self._recognized_queue: queue.Queue = queue.Queue(maxsize=recognized_queue_size)
-        self._translated_queue: queue.Queue = queue.Queue(maxsize=translated_queue_size)
-        self._synthesized_queue: queue.Queue = queue.Queue(maxsize=synthesized_queue_size)
+        # PCM 系はバイト基準(ByteBoundedQueue) / テキスト系は件数基準(queue.Queue)。
+        self._captured_queue: _StageQueue = ByteBoundedQueue(
+            max_bytes=captured_queue_max_bytes, size_of=_pcm_message_bytes
+        )
+        self._recognized_queue: _StageQueue = queue.Queue(maxsize=recognized_queue_size)
+        self._translated_queue: _StageQueue = queue.Queue(maxsize=translated_queue_size)
+        self._synthesized_queue: _StageQueue = ByteBoundedQueue(
+            max_bytes=synthesized_queue_max_bytes, size_of=_pcm_message_bytes
+        )
 
         # overflow 累計(stage名 → 累積ドロップ数)
         self._drop_counts: dict[str, int] = {}
@@ -414,8 +447,11 @@ class PipelineCoordinator:
             thread.join(timeout=timeout)
 
     @staticmethod
-    def _drain_queue(q: queue.Queue) -> None:
-        """キューの残骸を捨てる(start 直前に呼ぶ)。"""
+    def _drain_queue(q: _StageQueue) -> None:
+        """キューの残骸を捨てる(start 直前に呼ぶ)。両キュータイプ対応。"""
+        if isinstance(q, ByteBoundedQueue):
+            q.drain()
+            return
         try:
             while True:
                 q.get_nowait()
@@ -423,8 +459,15 @@ class PipelineCoordinator:
             pass
 
     @staticmethod
-    def _try_put_sentinel(q: queue.Queue) -> None:
-        """キューにセンチネルを入れる。満杯なら 1つ捨ててから入れる。"""
+    def _try_put_sentinel(q: _StageQueue) -> None:
+        """キューにセンチネルを入れる。
+
+        - ByteBoundedQueue: `push_evicting` は常に成功するのでそのまま入れる。
+        - queue.Queue: 満杯なら 1つ捨てて再投入する。
+        """
+        if isinstance(q, ByteBoundedQueue):
+            q.push_evicting(_SENTINEL)
+            return
         try:
             q.put_nowait(_SENTINEL)
         except queue.Full:
@@ -437,36 +480,48 @@ class PipelineCoordinator:
             except queue.Full:
                 pass
 
-    def _put_with_drop(self, q: queue.Queue, item: PipelineMessage, stage_name: str) -> None:
+    def _put_with_drop(
+        self, q: _StageQueue, item: PipelineMessage, stage_name: str
+    ) -> None:
         """満杯なら古いものから捨てて新しいものを入れる(リアルタイム性優先)。
 
         捨てた発話があれば WARN ログ + 累計更新 + `on_dropped(seq_ids, stage)` 呼び出し。
         ドロップした seq_id のレジャ entry もここで pop する(リーク防止)。
+
+        - ByteBoundedQueue: `push_evicting` で「設定値を超えるまで積み、超えたら退避」。
+        - queue.Queue:     `put_nowait` → Full なら先頭を捨てて再試行(従来の count 基準)。
         """
-        dropped: list[PipelineMessage] = []
-        while True:
-            try:
-                q.put_nowait(item)
-                if dropped:
-                    seq_ids = [d.seq_id for d in dropped]
-                    count = len(seq_ids)
-                    total = self._drop_counts.get(stage_name, 0) + count
-                    self._drop_counts[stage_name] = total
-                    self._logger.warning(
-                        "queue overflow in %s: dropped %d utterance(s) (seq=%s), total=%d",
-                        stage_name, count, seq_ids, total,
-                    )
-                    # 捨てたぶんのレジャは削除(リーク防止)。テキストログは既に各段で残っている。
-                    for sid in seq_ids:
-                        self._ledger.pop(sid)
-                    if self._on_dropped is not None:
-                        try:
-                            self._on_dropped(seq_ids, stage_name)
-                        except Exception:  # noqa: BLE001 - コールバック失敗で停止しない
-                            self._logger.exception("on_dropped callback failed")
-                return
-            except queue.Full:
+        if isinstance(q, ByteBoundedQueue):
+            evicted = q.push_evicting(item)
+            dropped = [d for d in evicted if isinstance(d, PipelineMessage)]
+        else:
+            dropped = []
+            while True:
                 try:
-                    dropped.append(q.get_nowait())
-                except queue.Empty:
-                    pass
+                    q.put_nowait(item)
+                    break
+                except queue.Full:
+                    try:
+                        dropped.append(q.get_nowait())
+                    except queue.Empty:
+                        pass
+
+        if not dropped:
+            return
+
+        seq_ids = [d.seq_id for d in dropped]
+        count = len(seq_ids)
+        total = self._drop_counts.get(stage_name, 0) + count
+        self._drop_counts[stage_name] = total
+        self._logger.warning(
+            "queue overflow in %s: dropped %d utterance(s) (seq=%s), total=%d",
+            stage_name, count, seq_ids, total,
+        )
+        # 捨てたぶんのレジャは削除(リーク防止)。テキストログは既に各段で残っている。
+        for sid in seq_ids:
+            self._ledger.pop(sid)
+        if self._on_dropped is not None:
+            try:
+                self._on_dropped(seq_ids, stage_name)
+            except Exception:  # noqa: BLE001 - コールバック失敗で停止しない
+                self._logger.exception("on_dropped callback failed")
