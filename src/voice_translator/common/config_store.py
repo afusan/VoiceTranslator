@@ -55,13 +55,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "pipeline": {
         # ステージ間バッファ(キュー)の容量。あふれた場合は古いものから自動退避。
         # PCM 系(captured/synthesized)は **合計バイト数で制限**。1発話=PCM長×4byte。
-        # 例: 500_000 (≒500KB) ≒ 16kHz×float32 で約 7.8 秒分。
+        # 16kHz×float32 換算: 10MB ≒ 約 156 秒分、5MB ≒ 約 78 秒分。
         # 「設定値を超えるまでは積み、超えたら先頭を消す」方針なので、運用中に若干超えることがある。
-        "captured_queue_max_bytes": 500_000,    # Input → ASR(VAD 出力 PCM)
-        "synthesized_queue_max_bytes": 500_000,  # TTS → Output(合成 PCM)
+        "captured_queue_max_bytes": 10_000_000,   # Input → ASR(VAD 出力 PCM)
+        "synthesized_queue_max_bytes": 5_000_000,  # TTS → Output(合成 PCM)
         # テキスト系(recognized/translated)は **発話件数で制限**(中身が小さいためバイト換算は冗長)。
-        "recognized_queue_size": 10,             # ASR → Translator(認識テキスト)
-        "translated_queue_size": 10,             # Translator → TTS(翻訳テキスト)
+        "recognized_queue_size": 10,              # ASR → Translator(認識テキスト)
+        "translated_queue_size": 10,              # Translator → TTS(翻訳テキスト)
     },
     # 各バックエンド固有の設定値(GUI公開はまだ。手動で config.yaml 編集)
     "backends_config": {
