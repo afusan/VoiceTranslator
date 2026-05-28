@@ -7,6 +7,7 @@ R-Error-Context: callback の新シグネチャ(message + exc/stage/seq_id kwarg
 from __future__ import annotations
 
 import logging
+import time
 
 from voice_translator.common.error_handler import ErrorAction, ErrorHandler
 from voice_translator.common.errors import (
@@ -42,7 +43,7 @@ class TestErrorHandlerActions:
     def test_fatal_returns_stop_and_calls_notifier(self) -> None:
         called: list[dict] = []
 
-        def notifier(message, *, exc=None, stage=None, seq_id=None):
+        def notifier(message, *, exc=None, stage=None, seq_id=None, suppressed=0):
             called.append({"message": message, "exc": exc, "stage": stage, "seq_id": seq_id})
 
         handler = ErrorHandler(on_fatal=notifier)
@@ -62,7 +63,7 @@ class TestErrorHandlerActions:
     def test_warn_returns_continue_and_calls_notifier(self) -> None:
         called: list[dict] = []
 
-        def notifier(message, *, exc=None, stage=None, seq_id=None):
+        def notifier(message, *, exc=None, stage=None, seq_id=None, suppressed=0):
             called.append({"message": message, "exc": exc})
 
         handler = ErrorHandler(on_warn=notifier)
@@ -85,7 +86,7 @@ class TestErrorHandlerContext:
     def test_context_passed_to_callback(self) -> None:
         seen: list[dict] = []
 
-        def notifier(message, *, exc=None, stage=None, seq_id=None):
+        def notifier(message, *, exc=None, stage=None, seq_id=None, suppressed=0):
             seen.append({"message": message, "exc": exc, "stage": stage, "seq_id": seq_id})
 
         handler = ErrorHandler(on_fatal=notifier)
@@ -193,3 +194,89 @@ class TestErrorHandlerCallbackResilience:
         action = handler.handle(FatalError("e"))
         assert action == ErrorAction.STOP
         assert any("エラー通知コールバックで例外" in r.message for r in caplog.records)
+
+
+class TestErrorHandlerThrottle:
+    """NotificationThrottle 統合: 集約・抑制動作の確認。"""
+
+    def test_throttle_suppresses_same_key_callback(self, caplog) -> None:
+        """同 (stage, exc_type) を連発したら 2回目以降は callback が呼ばれない。"""
+        from voice_translator.common.notification_throttle import NotificationThrottle
+
+        caplog.set_level(logging.ERROR, logger="voice_translator")
+        called: list[dict] = []
+
+        def on_fatal(message, **kw):
+            called.append({"message": message, "suppressed": kw.get("suppressed", 0)})
+
+        handler = ErrorHandler(
+            on_fatal=on_fatal,
+            throttle=NotificationThrottle(window_sec=10.0),  # 長窓で実質1回しか通らない
+        )
+        for _ in range(5):
+            handler.handle(FatalError("boom"), stage="ASR")
+
+        # callback は 1 度だけ呼ばれた(残り 4 件は抑制)
+        assert len(called) == 1
+        assert called[0]["message"] == "boom"
+        assert called[0]["suppressed"] == 0  # 初回は抑制カウントなし
+
+        # ログは全 5 件出ている(ログは抑制しない)
+        fatal_logs = [r for r in caplog.records if "[FATAL]" in r.message]
+        assert len(fatal_logs) == 5
+
+    def test_throttle_passes_suppressed_count_on_next_allow(self) -> None:
+        """窓が抜けた後の通知に、抑制中に積まれた件数が乗る。"""
+        from voice_translator.common.notification_throttle import NotificationThrottle
+
+        called: list[int] = []
+
+        def on_fatal(message, **kw):
+            called.append(kw.get("suppressed", 0))
+
+        throttle = NotificationThrottle(window_sec=0.1)
+        handler = ErrorHandler(on_fatal=on_fatal, throttle=throttle)
+
+        handler.handle(FatalError("e"), stage="ASR")  # 1回目 allow
+        handler.handle(FatalError("e"), stage="ASR")  # 抑制
+        handler.handle(FatalError("e"), stage="ASR")  # 抑制
+        time.sleep(0.15)
+        handler.handle(FatalError("e"), stage="ASR")  # 窓抜け → allow + suppressed=2
+
+        assert called == [0, 2]
+
+    def test_throttle_differentiates_by_stage_and_type(self) -> None:
+        """異なる (stage, exc_type) は別キーとして独立に通知される。"""
+        from voice_translator.common.notification_throttle import NotificationThrottle
+
+        called: list[tuple[str, str]] = []
+
+        def on_fatal(message, *, exc=None, stage=None, **_kw):
+            called.append((stage or "", type(exc).__name__))
+
+        handler = ErrorHandler(
+            on_fatal=on_fatal,
+            throttle=NotificationThrottle(window_sec=10.0),
+        )
+
+        # 同 stage 同型 → 2回目抑制
+        handler.handle(FatalError("a"), stage="ASR")
+        handler.handle(FatalError("b"), stage="ASR")
+        # 別 stage → 通る
+        handler.handle(FatalError("c"), stage="Translator")
+        # 別型(未分類 RuntimeError) → 通る
+        handler.handle(RuntimeError("d"), stage="ASR")
+
+        assert ("ASR", "FatalError") in called
+        assert ("Translator", "FatalError") in called
+        assert ("ASR", "RuntimeError") in called
+        # ASR/FatalError は1度だけ
+        assert sum(1 for s, t in called if s == "ASR" and t == "FatalError") == 1
+
+    def test_no_throttle_means_all_pass_through(self) -> None:
+        """throttle 未指定なら毎回 callback が呼ばれる(後方互換)。"""
+        called: list[str] = []
+        handler = ErrorHandler(on_fatal=lambda m, **_kw: called.append(m))
+        for _ in range(5):
+            handler.handle(FatalError("e"), stage="ASR")
+        assert len(called) == 5

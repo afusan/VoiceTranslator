@@ -14,12 +14,14 @@ import logging
 from typing import Callable, Protocol
 
 from .errors import AppError, Severity
+from .notification_throttle import NotificationThrottle
 
 
 class FatalNotifier(Protocol):
     """致命エラー通知のコールバック型(GUIのダイアログ等を想定)。
 
     keyword 引数で context を受け取る。実装側は不要なら `**_kwargs` で吸収可。
+    `suppressed` は前回通知から本通知までの間に集約・抑制された同種エラーの件数。
     """
 
     def __call__(
@@ -29,6 +31,7 @@ class FatalNotifier(Protocol):
         exc: BaseException | None = None,
         stage: str | None = None,
         seq_id: int | None = None,
+        suppressed: int = 0,
     ) -> None: ...
 
 
@@ -42,6 +45,7 @@ class WarnNotifier(Protocol):
         exc: BaseException | None = None,
         stage: str | None = None,
         seq_id: int | None = None,
+        suppressed: int = 0,
     ) -> None: ...
 
 
@@ -76,10 +80,13 @@ class ErrorHandler:
         logger: logging.Logger | None = None,
         on_fatal: FatalNotifier | None = None,
         on_warn: WarnNotifier | None = None,
+        throttle: NotificationThrottle | None = None,
     ) -> None:
+        """`throttle` は省略可。指定すれば callback だけを集約・抑制する(ログは常に出る)。"""
         self._logger = logger or logging.getLogger("voice_translator")
         self._on_fatal = on_fatal
         self._on_warn = on_warn
+        self._throttle = throttle
 
     def handle(
         self,
@@ -172,10 +179,22 @@ class ErrorHandler:
         stage: str | None,
         seq_id: int | None,
     ) -> None:
-        """コールバックを安全に呼ぶ。コールバック側の例外で停止させない。"""
+        """コールバックを安全に呼ぶ。コールバック側の例外で停止させない。
+
+        `throttle` が設定されている場合、(stage, 例外クラス名) をキーに集約・抑制する。
+        抑制された呼び出しは静かに drop され、次の許可タイミングで suppressed カウントが渡される。
+        """
         if cb is None:
             return
+
+        suppressed = 0
+        if self._throttle is not None:
+            key = (stage or "_", type(exc).__name__)
+            allow, suppressed = self._throttle.check(key)
+            if not allow:
+                return  # ログは _notify の外で済んでいる
+
         try:
-            cb(message, exc=exc, stage=stage, seq_id=seq_id)
+            cb(message, exc=exc, stage=stage, seq_id=seq_id, suppressed=suppressed)
         except Exception:  # noqa: BLE001
             self._logger.exception("エラー通知コールバックで例外")

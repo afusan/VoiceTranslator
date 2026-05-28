@@ -1002,7 +1002,7 @@ class TestPipelineErrorContext:
         """Translator FATAL 時、on_fatal に stage='Translator' と seq_id が渡る。"""
         received: list[dict] = []
 
-        def on_fatal(message, *, exc=None, stage=None, seq_id=None):
+        def on_fatal(message, *, exc=None, stage=None, seq_id=None, suppressed=0):
             received.append({
                 "message": message, "exc": exc, "stage": stage, "seq_id": seq_id
             })
