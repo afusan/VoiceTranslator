@@ -122,28 +122,34 @@ class ControlPanel(ctk.CTkFrame):
         self.after(0, lambda: self._apply_utterance(record))
 
     def _on_fatal_from_thread(
-        self, message: str, *, exc=None, stage=None, seq_id=None
+        self, message: str, *, exc=None, stage=None, seq_id=None, suppressed=0
     ) -> None:
-        formatted = self._format_with_context(message, stage=stage, seq_id=seq_id)
+        formatted = self._format_with_context(
+            message, stage=stage, seq_id=seq_id, suppressed=suppressed
+        )
         self.after(0, lambda: self._apply_fatal(formatted))
 
     def _on_warn_from_thread(
-        self, message: str, *, exc=None, stage=None, seq_id=None
+        self, message: str, *, exc=None, stage=None, seq_id=None, suppressed=0
     ) -> None:
-        formatted = self._format_with_context(message, stage=stage, seq_id=seq_id)
+        formatted = self._format_with_context(
+            message, stage=stage, seq_id=seq_id, suppressed=suppressed
+        )
         self.after(0, lambda: self._apply_warn(formatted))
 
     @staticmethod
-    def _format_with_context(message: str, *, stage, seq_id) -> str:
-        """UI 表示用に "[stage] #seq message" 形式に整形(None は省略)。"""
+    def _format_with_context(message: str, *, stage, seq_id, suppressed=0) -> str:
+        """UI 表示用に "[stage] #seq message (+N件抑制)" 形式に整形。"""
         prefix_parts: list[str] = []
         if stage is not None:
             prefix_parts.append(f"[{stage}]")
         if seq_id is not None:
             prefix_parts.append(f"#{seq_id}")
-        if not prefix_parts:
-            return message
-        return " ".join(prefix_parts) + " " + message
+        prefix = " ".join(prefix_parts)
+        suffix = f" (+{suppressed}件抑制)" if suppressed > 0 else ""
+        if not prefix:
+            return message + suffix
+        return prefix + " " + message + suffix
 
     def _on_status_from_thread(self, layer: LayerKind, status: ModelStatus) -> None:
         # SettingsPanel に転送(UI 表示)

@@ -29,6 +29,7 @@ from .device_validator import DeviceValidator
 from .error_handler import ErrorHandler
 from .ledger import UtteranceLedger
 from .logger import TextLogger, TranslationLogger
+from .notification_throttle import NotificationThrottle
 from .pipeline import PipelineCoordinator
 from .sequence import SequenceGenerator
 from .types import CaptureSource, LayerKind, ModelStatus, OutputDevice
@@ -250,10 +251,15 @@ class AppController:
             tgt_enabled=tgt_text_enabled,
         )
 
+        throttle_sec = float(
+            self._config.get("notifications", "throttle_sec", default=5.0)
+        )
+        throttle = NotificationThrottle(window_sec=throttle_sec)
         error_handler = ErrorHandler(
             logger=self._logger,
             on_fatal=self._on_fatal,
             on_warn=self._on_warn,
+            throttle=throttle,
         )
 
         src_lang = self._config.get("languages", "src", default="auto")

@@ -45,6 +45,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "latency": {
         "warn_threshold_sec": 5.0,  # これを超えたら WARN
     },
+    "notifications": {
+        # 同じ (stage, 例外型) のエラー通知を集約・抑制する時間窓(秒)。
+        # 例: 5.0 → 同種エラーは 5 秒に 1 度しか UI に通知しない。0 で無効化(全件通知)。
+        # 抑制された件数は次の通知に suppressed=N として乗る(UI 側で「裏で N 件起きた」を表示可)。
+        # ログ(app.log)には抑制せず全件記録される。
+        "throttle_sec": 5.0,
+    },
     # 各バックエンド固有の設定値(GUI公開はまだ。手動で config.yaml 編集)
     "backends_config": {
         "sapi": {
