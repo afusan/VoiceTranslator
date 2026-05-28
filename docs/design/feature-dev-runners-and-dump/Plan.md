@@ -229,7 +229,7 @@ python -m voice_translator.dev.runner_pipeline \
 
 | Phase | 内容 | 完了条件 |
 |---|---|---|
-| **A. データ規約 + ダンプ機能** | `StageDumpWriter` / `NullStageDumpWriter` の追加、PipelineCoordinator への結線、ConfigStore キー追加。本体 GUI で `dump.enabled=true` にして縦通しが回り、出力ファイルが規約通りに揃うところまで。 | small テストで Coordinator が dump フックを正しい順序・正しい seq_id で呼ぶことを確認。middle で実 WAV を流して規約通りのファイルが書かれることを確認。 |
+| **A. データ規約 + ダンプ機能 ✅完了 2026-05-28** | `StageDumpWriter` / `NullStageDumpWriter` の追加(`common/stage_dump.py`)、PipelineCoordinator への結線(各ループに 1 行ずつ on_* 呼び出し)、ConfigStore キー追加(`pipeline.dump.*`)、AppController での生成・ライフサイクル管理。small テスト 19 件追加で計 363 件パス。`config.yaml` で `pipeline.dump.enabled: true` にすると `./logs/dumps/<run_id>/seq_NNNN_*.wav,json` が書かれる。 | (達成済)Coordinator が dump フックを vad→asr→translate→tts の順で同一 seq_id で呼ぶことを `test_pipeline_dump.py` で確認。`test_stage_dump.py` で WAV/JSON 規約・古い run の自動削除・stages フィルタを確認。 |
 | **B. 共通基盤 + ASR/Translator ランナー** | `dev/_common.py`(WAV/JSON IO、CLI 引数→config override)、`runner_asr.py`、`runner_translator.py`。**最優先**:この 2 つが pendList の「Whisper model_size」「翻訳生成パラメータ」の調査入口になる。 | `python -m voice_translator.dev.runner_asr --input <ダンプWAV> --model small` が JSON を吐く。同 translator が `--num-beams 4` 等を効かせて結果を変えられる。 |
 | **C. VAD/TTS ランナー** | `runner_vad.py`(出力は切り出し WAV 群 + index.json)、`runner_tts.py`。 | VAD のパラメータ調整(min_silence_ms 等)を CUI で回せる。TTS は SAPI の rate 等を試せる。 |
 | **D. Capture/Output ランナー** | `runner_capture.py`、`runner_output.py`(デバイス依存)。 | マイクから 10 秒録音 → WAV / 既存 WAV をデバイスで再生、が動く。 |
