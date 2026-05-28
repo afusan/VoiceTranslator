@@ -44,6 +44,38 @@ py -m voice_translator.dev.runner_<layer> [args]
 ランナーは Ledger を持たないので `seq_id` は CLI 引数(`--seq-id`)か自動採番(既定 1)。
 **ダミー値で OK**。後段ランナーへの繋ぎ込みでは値は素通しされる。
 
+### 2.5 GPU / CPU の切り替え(`--extra` と `--device` は別レイヤ)
+
+CUDA を使うかどうかは **2 段階** に分かれている:
+
+| 層 | フラグ | 役割 |
+|---|---|---|
+| env(uv 層) | `--extra cuda` / `--extra cpu` | CUDA 版 torch / ctranslate2 バイナリを venv に入れる(GPU を使う**前提条件**) |
+| app(ランナー層) | `--device` | この実行で実際に何を使うか(既定 `auto`)。`auto` は `torch.cuda.is_available()` を見て自動選択 |
+
+実用パターンは下記の 3 つだけ:
+
+```powershell
+# (A) GPU 環境(NVIDIA + CUDA 12 ドライバ)で動かす — 普段はこれ
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
+    --input <wav> -o out.json
+# → 内部で auto → cuda + int8_float16 に解決される(明示不要)
+
+# (B) CPU 環境(GPU 非搭載 / オフィス PC 等)で動かす
+py -m uv run --extra cpu python -m voice_translator.dev.runner_asr `
+    --input <wav> -o out.json
+# → 内部で auto → cpu + int8 に解決される
+
+# (C) GPU 環境で意図的に CPU 走行させて比較計測したい
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
+    --input <wav> -o out.json --device cpu --compute-type int8
+```
+
+注意:
+- `uv run` は `--extra` を指定しないと既定で CPU 版に倒れる(uv の conflicts 解決仕様)。**起動コマンドにも sync と同じ `--extra` を必ず付ける**(`README.md` 参照)。
+- `--extra cpu` の env で `--device cuda` を指定すると CUDA DLL(`cublas64_12.dll`)が見つからず `FatalError` で落ちる。これは想定通りの失敗で、`--extra cuda` への切替が必要。
+- 以降の例では原則 `--extra cuda` を付ける(GPU 想定)。CPU 環境のユーザは `--extra cpu` に読み替え。
+
 ---
 
 ## 3. 本体アプリでサンプルダンプを生成する
@@ -83,17 +115,17 @@ seq_0002_*.{wav,json}          … 発話 2 件目以降
 ### 4.1 `runner_asr` — 書き起こし
 
 ```powershell
-# 最小: 既定モデル(small)+ device=auto で書き起こし → stdout に JSON
-py -m voice_translator.dev.runner_asr --input sample.wav
+# 最小: 既定モデル(small)で書き起こし → stdout に JSON
+# (GPU env なら自動で cuda、CPU env なら自動で cpu を選択)
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
+    --input sample.wav
 
-# GPU + medium モデル + int8_float16 で書き起こし、ファイルへ
-py -m voice_translator.dev.runner_asr `
-    --input sample.wav `
-    --model medium --device cuda --compute-type int8_float16 `
-    --output result.json
+# medium モデルで書き起こし、ファイルへ
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
+    --input sample.wav --model medium --output result.json
 
 # ダンプの VAD セグメントを別モデルで再書き起こし(検証ループの典型)
-py -m voice_translator.dev.runner_asr `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
     --input logs/dumps/20260528-160000-0001/seq_0042_vad.wav `
     --model medium --beam-size 5 --lang-hint en
 ```
@@ -117,25 +149,24 @@ py -m voice_translator.dev.runner_asr `
 
 ```powershell
 # 最小: 直接テキスト指定
-py -m voice_translator.dev.runner_translator --text "Hello, world."
+py -m uv run --extra cuda python -m voice_translator.dev.runner_translator --text "Hello, world."
 
 # ダンプの ASR 結果を翻訳(src_lang は JSON の値を継承)
-py -m voice_translator.dev.runner_translator `
-    --input logs/dumps/20260528-160000-0001/seq_0042_asr.json `
-    --tgt-lang ja
+py -m uv run --extra cuda python -m voice_translator.dev.runner_translator `
+    --input logs/dumps/20260528-160000-0001/seq_0042_asr.json --tgt-lang ja
 
 # degenerate(同じ n-gram 反復)再現:既定 vs 抑止パラメータの比較
-py -m voice_translator.dev.runner_translator `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_translator `
     --input long.txt `
     --num-beams 1 --no-repeat-ngram-size 0 --repetition-penalty 1.0 `
     --output before.json
-py -m voice_translator.dev.runner_translator `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_translator `
     --input long.txt `
     --num-beams 4 --no-repeat-ngram-size 3 --repetition-penalty 1.1 `
     --output after.json
 
 # stdin から
-"good morning" | py -m voice_translator.dev.runner_translator --src-lang en --tgt-lang ja
+"good morning" | py -m uv run --extra cuda python -m voice_translator.dev.runner_translator --src-lang en --tgt-lang ja
 ```
 
 | オプション | 既定 | 説明 |
@@ -162,10 +193,11 @@ py -m voice_translator.dev.runner_translator `
 
 ```powershell
 # 既定パラメータで long.wav を切り出し
-py -m voice_translator.dev.runner_vad --input long.wav --out-dir vad_out/
+py -m uv run --extra cuda python -m voice_translator.dev.runner_vad `
+    --input long.wav --out-dir vad_out/
 
 # 短めの無音で区切る + 1発話最大 5 秒
-py -m voice_translator.dev.runner_vad `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_vad `
     --input long.wav --out-dir vad_out/ `
     --threshold 0.3 --min-silence-ms 300 --max-speech-sec 5.0
 ```
@@ -188,15 +220,17 @@ py -m voice_translator.dev.runner_vad `
 
 ```powershell
 # 直接テキストを合成
-py -m voice_translator.dev.runner_tts --text "こんにちは" --output hello.wav
+py -m uv run --extra cuda python -m voice_translator.dev.runner_tts `
+    --text "こんにちは" --output hello.wav
 
 # ダンプの翻訳結果から(tgt_lang は JSON から継承)
-py -m voice_translator.dev.runner_tts `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_tts `
     --input logs/dumps/20260528-160000-0001/seq_0042_translate.json `
     --output out.wav
 
 # 早口 + flush 待機を短く
-py -m voice_translator.dev.runner_tts --text "テスト" -o t.wav --rate 240 --flush-delay-sec 0.05
+py -m uv run --extra cuda python -m voice_translator.dev.runner_tts `
+    --text "テスト" -o t.wav --rate 240 --flush-delay-sec 0.05
 ```
 
 | オプション | 既定 | 説明 |
@@ -218,20 +252,18 @@ py -m voice_translator.dev.runner_tts --text "テスト" -o t.wav --rate 240 --f
 
 ```powershell
 # 長尺 WAV を VAD で区切って ASR まで一気に
-py -m voice_translator.dev.runner_pipeline `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_pipeline `
     --from vad --to asr `
-    --input long.wav --out-dir out/ `
-    --model small --device auto
+    --input long.wav --out-dir out/ --model small
 
 # ダンプ済み発話を ASR から TTS まで(VAD はスキップ)
-py -m voice_translator.dev.runner_pipeline `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_pipeline `
     --from asr --to tts `
     --input logs/dumps/20260528-160000-0001/seq_0042_vad.wav `
-    --out-dir out/ `
-    --model medium --rate 200
+    --out-dir out/ --model medium --rate 200
 
 # ASR ダンプ JSON を翻訳→合成(degenerate 再現)
-py -m voice_translator.dev.runner_pipeline `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_pipeline `
     --from translate --to tts `
     --input logs/dumps/20260528-160000-0001/seq_0042_asr.json `
     --out-dir out/ `
@@ -258,41 +290,52 @@ py -m voice_translator.dev.runner_pipeline `
 
 ### 5.1 「ASR モデルを上げると精度がどう変わるか」
 ```powershell
-# 本体で sample を取って
-# (config.yaml の pipeline.dump.enabled: true で再生)
-
+# 本体で sample を取って (config.yaml の pipeline.dump.enabled: true)
 # small と medium を同じ WAV で比較
-py -m voice_translator.dev.runner_asr -i logs/dumps/<run>/seq_0001_vad.wav -m small -o small.json
-py -m voice_translator.dev.runner_asr -i logs/dumps/<run>/seq_0001_vad.wav -m medium -o medium.json
-
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
+    -i logs/dumps/<run>/seq_0001_vad.wav -m small  -o small.json
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
+    -i logs/dumps/<run>/seq_0001_vad.wav -m medium -o medium.json
 # 差分は jq 等で確認
 ```
 
 ### 5.2 「翻訳の degenerate を抑える設定の効果を測る」
 ```powershell
 # 問題が出た発話の ASR 結果(.json)を流して、現行設定 vs より強い抑止
-py -m voice_translator.dev.runner_translator -i logs/dumps/<run>/seq_0184_asr.json `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_translator `
+    -i logs/dumps/<run>/seq_0184_asr.json `
     --num-beams 1 --no-repeat-ngram-size 0 -o before.json
-py -m voice_translator.dev.runner_translator -i logs/dumps/<run>/seq_0184_asr.json `
+py -m uv run --extra cuda python -m voice_translator.dev.runner_translator `
+    -i logs/dumps/<run>/seq_0184_asr.json `
     --num-beams 8 --no-repeat-ngram-size 4 --repetition-penalty 1.3 -o after.json
 ```
 
 ### 5.3 「長尺 WAV を VAD パラメータ別に切ってまとめて ASR」
 ```powershell
-# 既定値で
-py -m voice_translator.dev.runner_pipeline --from vad --to asr `
-    -i lecture.wav -O out_default/
+py -m uv run --extra cuda python -m voice_translator.dev.runner_pipeline `
+    --from vad --to asr -i lecture.wav -O out_default/
 
-# min_silence を短くして細切れに
-py -m voice_translator.dev.runner_pipeline --from vad --to asr `
-    -i lecture.wav -O out_short/ --vad-min-silence-ms 200
+py -m uv run --extra cuda python -m voice_translator.dev.runner_pipeline `
+    --from vad --to asr -i lecture.wav -O out_short/ --vad-min-silence-ms 200
 ```
 
 ### 5.4 「翻訳テキストの TTS 出力をいくつかの rate で聴き比べ」
 ```powershell
 $text = (Get-Content logs/dumps/<run>/seq_0042_translate.json | ConvertFrom-Json).tgt_text
-py -m voice_translator.dev.runner_tts -t $text -o slow.wav --rate 140
-py -m voice_translator.dev.runner_tts -t $text -o fast.wav --rate 240
+py -m uv run --extra cuda python -m voice_translator.dev.runner_tts -t $text -o slow.wav --rate 140
+py -m uv run --extra cuda python -m voice_translator.dev.runner_tts -t $text -o fast.wav --rate 240
+```
+
+### 5.5 「同じ env のままで CPU vs GPU の速度差を測る」
+```powershell
+# GPU(既定。明示不要)
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
+    -i logs/dumps/<run>/seq_0001_vad.wav -o asr_gpu.json
+# 同 env で CPU 走行を強制(--device cpu + --compute-type int8 を両方明示)
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
+    -i logs/dumps/<run>/seq_0001_vad.wav -o asr_cpu.json `
+    --device cpu --compute-type int8
+# elapsed_ms フィールドを比較
 ```
 
 ---
@@ -345,10 +388,11 @@ py -m voice_translator.dev.runner_tts -t $text -o fast.wav --rate 240
 
 | 症状 | 対処 |
 |---|---|
-| `faster-whisper のロードに失敗` | `uv sync --extra cpu`(または `--extra cuda`)を実行して torch を入れる |
-| ランナーが何も出さない / `transformers のロードに失敗` | 同上(NLLB-200 で必要) |
+| `faster-whisper のロードに失敗` / `transformers のロードに失敗` | env の torch が入っていない。`py -m uv sync --extra cpu`(または `--extra cuda`)を実行 |
+| `Library cublas64_12.dll is not found or cannot be loaded` | CPU env(`--extra cpu`)で `--device cuda` を指定した場合に出る。`py -m uv run --extra cuda ...` で起動するか、`--device` を既定(`auto`)に戻す |
+| GPU 環境のはずなのに `device_resolved: cpu` になる | `py -m uv run` を **`--extra cuda` 無し**で起動した可能性。uv の conflicts 解決が CPU 側に倒れて torch が CPU 版に差し替わる(`uv run` 既知挙動。README.md 参照) |
 | `--input` 指定したのに `入力が空です` | `.json` のスキーマが `text`/`tgt_text`/`src_text` のいずれも持っていない可能性 |
-| ASR が CPU(int8)より GPU(float16)で遅い | `--compute-type int8_float16` を指定(short モデル+短入力に最適) |
+| ASR が CPU(int8)より GPU(float16)で遅い | `--compute-type int8_float16`(`auto` 既定で自動選択される)。`float16` 単独より small モデル+短入力で安定して速い |
 | `runner_vad` のセグメント数が 0 | 入力 WAV が無音 / `--threshold` が高すぎ / サンプルレートが 16kHz でない(警告が出る) |
 | `runner_pipeline` で `--from > --to` エラー | ステージ順は `vad < asr < translate < tts` で固定 |
 
