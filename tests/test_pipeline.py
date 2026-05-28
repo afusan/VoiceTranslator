@@ -446,6 +446,52 @@ class TestPipelineQueueOverflow:
 
 
 # ============================================================
+# 処理時間マーカー(t_*_start / t_*_end)
+# ============================================================
+class TestPipelineProcessTimeMarkers:
+    """各処理段で backend 呼び出しの直前に t_*_start が記録されることを検証。"""
+
+    def test_all_stage_start_markers_recorded(self) -> None:
+        done: list[dict] = []
+        coord, _ = _build(on_done=lambda r: done.append(r))
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: len(done) >= 3)
+        coord.stop()
+
+        # 少なくとも 1 件は完走しているので、その timeline を見る
+        rec = done[0]
+        timeline = rec.get("timeline", {})
+        for key in (
+            "t_capture", "t_vad_end",
+            "t_asr_start", "t_asr",
+            "t_translate_start", "t_translate",
+            "t_tts_start", "t_tts",
+            "t_playback_start", "t_playback",
+        ):
+            assert key in timeline, f"{key} がタイムラインに記録されていない: {timeline}"
+
+    def test_start_markers_precede_end_markers(self) -> None:
+        """t_*_start ≤ t_*_end の不変条件(同 monotonic 時計上)。"""
+        done: list[dict] = []
+        coord, _ = _build(on_done=lambda r: done.append(r))
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: len(done) >= 3)
+        coord.stop()
+
+        for r in done:
+            tl = r["timeline"]
+            for start, end in (
+                ("t_asr_start", "t_asr"),
+                ("t_translate_start", "t_translate"),
+                ("t_tts_start", "t_tts"),
+                ("t_playback_start", "t_playback"),
+            ):
+                assert tl[start] <= tl[end], (
+                    f"{start}={tl[start]} は {end}={tl[end]} を超えてはならない"
+                )
+
+
+# ============================================================
 # Ledger / SequenceGenerator 連携
 # ============================================================
 class TestPipelineLedgerIntegration:

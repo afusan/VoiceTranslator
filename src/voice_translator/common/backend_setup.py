@@ -32,9 +32,55 @@ def register_default_backends(
     from voice_translator.vad.silero_backend import SileroVadBackend
 
     registry.register(LayerKind.CAPTURE, "soundcard", SoundcardCaptureBackend)
-    registry.register(LayerKind.VAD, "silero", SileroVadBackend)
-    registry.register(LayerKind.ASR, "faster_whisper", FasterWhisperAsrBackend)
-    registry.register(LayerKind.TRANSLATOR, "nllb200", Nllb200TranslatorBackend)
+
+    # Silero VAD は config から発話区切り関連パラメータを読み込む
+    vad_threshold = _read_float(
+        config, ("backends_config", "silero", "threshold"), default=0.5
+    )
+    vad_min_silence_ms = _read_int(
+        config, ("backends_config", "silero", "min_silence_ms"), default=500
+    )
+    vad_speech_pad_ms = _read_int(
+        config, ("backends_config", "silero", "speech_pad_ms"), default=100
+    )
+    vad_max_speech_sec = _read_float(
+        config, ("backends_config", "silero", "max_speech_sec"), default=8.0
+    )
+    registry.register(
+        LayerKind.VAD,
+        "silero",
+        lambda: SileroVadBackend(
+            threshold=vad_threshold,
+            min_silence_ms=vad_min_silence_ms,
+            speech_pad_ms=vad_speech_pad_ms,
+            max_speech_sec=vad_max_speech_sec,
+        ),
+    )
+
+    # faster-whisper の device / compute_type を config から取る
+    fw_device = _read_str(
+        config, ("backends_config", "faster_whisper", "device"), default="auto"
+    )
+    fw_compute_type = _read_str(
+        config, ("backends_config", "faster_whisper", "compute_type"), default="auto"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "faster_whisper",
+        lambda: FasterWhisperAsrBackend(
+            device=fw_device, compute_type=fw_compute_type
+        ),
+    )
+
+    # NLLB-200 の device を config から取る
+    nllb_device = _read_str(
+        config, ("backends_config", "nllb200", "device"), default="auto"
+    )
+    registry.register(
+        LayerKind.TRANSLATOR,
+        "nllb200",
+        lambda: Nllb200TranslatorBackend(device=nllb_device),
+    )
 
     # SAPI は config から rate を取って渡す(設定なしなら既定 180)
     sapi_rate = _read_int(config, ("backends_config", "sapi", "rate"), default=180)
@@ -54,3 +100,28 @@ def _read_int(config: ConfigStore | None, keys: tuple[str, ...], *, default: int
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _read_float(config: ConfigStore | None, keys: tuple[str, ...], *, default: float) -> float:
+    """config から float 値を取り出す。失敗時は default。"""
+    if config is None:
+        return default
+    value: Any = config.get(*keys, default=default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_str(config: ConfigStore | None, keys: tuple[str, ...], *, default: str) -> str:
+    """config から str 値を取り出す。空文字や None は default に置換。"""
+    if config is None:
+        return default
+    value: Any = config.get(*keys, default=default)
+    if value is None:
+        return default
+    try:
+        s = str(value).strip()
+    except Exception:  # noqa: BLE001
+        return default
+    return s or default

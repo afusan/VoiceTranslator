@@ -191,7 +191,20 @@ class SettingsPanel(ctk.CTkFrame):
         label = self._status_labels.get(layer)
         if label is None:
             return
-        label.configure(text=status.value, text_color=_STATUS_COLORS.get(status, "#64748b"))
+        text = self._format_status_text(layer, status)
+        label.configure(text=text, text_color=_STATUS_COLORS.get(status, "#64748b"))
+
+    def _format_status_text(self, layer: LayerKind, status: ModelStatus) -> str:
+        """Loaded のときだけ device 情報を併記する("Loaded (cuda)" 等)。
+
+        device 概念を持たないレイヤ(Capture/VAD/TTS/Output)は status のみ表示。
+        """
+        if status != ModelStatus.LOADED:
+            return status.value
+        device = self._controller.get_layer_device(layer)
+        if not device:
+            return status.value
+        return f"{status.value} ({device})"
 
     def _sync_all_status_labels(self) -> None:
         """初期化時/再読込後に全レイヤのステータスを一括反映する。"""

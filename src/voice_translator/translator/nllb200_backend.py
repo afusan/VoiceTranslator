@@ -2,10 +2,13 @@
 
 役割: 書き起こしテキストを src 言語 → tgt 言語 に翻訳する。
 言語コードは ISO 639-1 を NLLB の "<lang>_<script>" 形式に内部で変換する。
+device は "auto" / "cuda" / "mps" / "cpu" を受け、利用可能なアクセラレータを
+自動選択する(CPU を floor とする配布方針に従う)。
 """
 
 from __future__ import annotations
 
+from voice_translator.common.device import resolve_torch_device
 from voice_translator.common.errors import FatalError, SkipError
 from voice_translator.common.types import BackendCapabilities
 
@@ -62,15 +65,25 @@ class Nllb200TranslatorBackend(TranslatorBackend):
         no_repeat_ngram_size: int = 3,
         repetition_penalty: float = 1.1,
         early_stopping: bool = True,
+        device: str = "auto",
     ) -> None:
         try:
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
         except Exception as e:  # noqa: BLE001
             raise FatalError(f"transformers のロードに失敗: {e}", cause=e) from e
 
+        # device を解決("auto" → cuda/mps/cpu)。明示指定はそのまま使う。
+        self._device = resolve_torch_device(device)
+
         try:
             self._tokenizer = AutoTokenizer.from_pretrained(model_name)
             self._model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            # 解決した device にモデルを移送(失敗時は CPU フォールバック)
+            try:
+                self._model = self._model.to(self._device)
+            except Exception:  # noqa: BLE001 - GPU OOM / 未対応で落ちたら CPU で続行
+                self._device = "cpu"
+                self._model = self._model.to("cpu")
         except Exception as e:  # noqa: BLE001
             raise FatalError(
                 f"NLLB-200 モデルのロードに失敗 ({model_name}): {e}", cause=e
@@ -87,6 +100,11 @@ class Nllb200TranslatorBackend(TranslatorBackend):
         self._repetition_penalty = repetition_penalty
         self._early_stopping = early_stopping
 
+    @property
+    def device(self) -> str:
+        """実際に使用しているデバイス名(診断/テスト用)。"""
+        return self._device
+
     # ----------------------------------------------------------
     def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:
         """src_text を tgt_lang に翻訳した文字列を返す。"""
@@ -101,6 +119,8 @@ class Nllb200TranslatorBackend(TranslatorBackend):
         try:
             self._tokenizer.src_lang = src_nllb
             inputs = self._tokenizer(text, return_tensors="pt")
+            # 入力テンソルを model と同じデバイスへ移送(CPU のときは no-op に近い)
+            inputs = {k: v.to(self._device) for k, v in inputs.items()}
             translated = self._model.generate(
                 **inputs,
                 forced_bos_token_id=self._tokenizer.convert_tokens_to_ids(tgt_nllb),
@@ -126,5 +146,8 @@ class Nllb200TranslatorBackend(TranslatorBackend):
         return BackendCapabilities(
             supported_languages=tuple(ISO_TO_NLLB.keys()),
             requires_gpu=False,  # GPU があれば高速だが必須ではない
-            notes=f"NLLB-200 ({self._model_name})。200言語対応(マッピング表は要拡張)",
+            notes=(
+                f"NLLB-200 ({self._model_name}) / device={self._device}。"
+                "200言語対応(マッピング表は要拡張)"
+            ),
         )

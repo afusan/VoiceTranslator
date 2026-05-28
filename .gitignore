@@ -19,3 +19,4 @@ htmlcov/
 .vs/
 .idea/
 .vscode/
+/dumps

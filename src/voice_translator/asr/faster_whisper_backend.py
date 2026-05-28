@@ -2,12 +2,17 @@
 
 役割: 発話単位の PCM(16kHz/mono/float32) を Whisper モデルで書き起こす。
 タスクは transcribe 固定(translate は使わない — 翻訳は別レイヤの責務)。
+device は "auto" / "cuda" / "cpu" を受け、利用可能ならアクセラレータを自動選択。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from voice_translator.common.device import (
+    resolve_ctranslate2_compute_type,
+    resolve_ctranslate2_device,
+)
 from voice_translator.common.errors import FatalError, SkipError
 from voice_translator.common.types import BackendCapabilities
 
@@ -25,8 +30,8 @@ class FasterWhisperAsrBackend(AsrBackend):
         self,
         *,
         model_size: str = "small",
-        device: str = "cpu",
-        compute_type: str = "int8",
+        device: str = "auto",
+        compute_type: str = "auto",
         beam_size: int = 1,
     ) -> None:
         try:
@@ -34,18 +39,49 @@ class FasterWhisperAsrBackend(AsrBackend):
         except Exception as e:  # noqa: BLE001
             raise FatalError(f"faster-whisper のロードに失敗: {e}", cause=e) from e
 
+        # device / compute_type の解決(auto → 実値)
+        self._device = resolve_ctranslate2_device(device)
+        self._compute_type = resolve_ctranslate2_compute_type(
+            self._device, compute_type
+        )
+
         try:
             self._model = WhisperModel(
-                model_size, device=device, compute_type=compute_type
+                model_size, device=self._device, compute_type=self._compute_type
             )
         except Exception as e:  # noqa: BLE001
-            raise FatalError(
-                f"faster-whisper モデルの初期化に失敗 (size={model_size}): {e}",
-                cause=e,
-            ) from e
+            # GPU 未利用環境 + compute_type=float16 などで失敗した場合の保険:
+            # CPU + int8 へフォールバックして再試行
+            if self._device != "cpu":
+                try:
+                    self._device = "cpu"
+                    self._compute_type = "int8"
+                    self._model = WhisperModel(
+                        model_size, device="cpu", compute_type="int8"
+                    )
+                except Exception as e2:  # noqa: BLE001
+                    raise FatalError(
+                        f"faster-whisper モデルの初期化に失敗 (size={model_size}): {e2}",
+                        cause=e2,
+                    ) from e2
+            else:
+                raise FatalError(
+                    f"faster-whisper モデルの初期化に失敗 (size={model_size}): {e}",
+                    cause=e,
+                ) from e
 
         self._model_size = model_size
         self._beam_size = beam_size
+
+    @property
+    def device(self) -> str:
+        """実際に使用しているデバイス名(診断/テスト用)。"""
+        return self._device
+
+    @property
+    def compute_type(self) -> str:
+        """実際に使用している compute_type(診断/テスト用)。"""
+        return self._compute_type
 
     # ----------------------------------------------------------
     def transcribe(self, pcm: Any, src_lang_hint: str = "auto") -> tuple[str, str]:

@@ -38,11 +38,47 @@ py -m pip install --user uv                       # pip経由
 # or: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  # 公式
 
 # プロジェクトを取得後、依存と Python 3.11 を自動セットアップ
-py -m uv sync
+# CPU 専用環境(誰でも動く、推奨初手):
+py -m uv sync --extra cpu
+
+# NVIDIA GPU を持っているなら CUDA 版にする(自動で GPU 使用、+3GB):
+# py -m uv sync --extra cuda
 ```
 
 `uv sync` で `.venv/` フォルダに仮想環境が作られ、Python 3.11 と必要なライブラリが入ります。
 初回は数百MB〜数GBのダウンロードが入るので、ネット環境に注意してください。
+
+### `--extra cpu` と `--extra cuda` の選び方
+| 環境 | 推奨 | 備考 |
+|---|---|---|
+| Windows / Linux (NVIDIA GPU 無し) | `--extra cpu` | CPU でしか動かない |
+| Windows / Linux + NVIDIA GPU(RTX 等) | `--extra cuda` | 翻訳/ASR が 5〜15 倍速 |
+| macOS (Apple Silicon: M1/M2/M3) | `--extra cpu` | MPS が自動で使われる |
+| macOS (Intel) | `--extra cpu` | CPU のみ |
+| AMD GPU | `--extra cpu` | ROCm は本リリース非対応 |
+
+- **CUDA Toolkit のインストールは不要**(`--extra cuda` で取得する wheel に CUDA ランタイムが同梱されています)。NVIDIA ドライバが入っていれば動きます(`nvidia-smi` で確認)。
+- 2 つの extras は **排他**(同時に指定しないこと)。
+- 後から切り替えたい場合は再度 `uv sync --extra <別の方>` で OK(差分だけインストールされます)。
+
+### **重要**: アプリ起動時にも `--extra` を付ける
+
+`uv run` はデフォルトで「extras 無し」で内部 sync を再実行するため、せっかく `--extra cuda`
+で入れた CUDA 版 torch が **CPU 版に上書きされて戻ってしまう** という挙動があります。
+これを避けるには、起動コマンドにも同じ `--extra` を付けてください:
+
+```bash
+# GPU 版で動かす(毎回 --extra cuda を付ける)
+py -m uv run --extra cuda python -m voice_translator
+
+# CPU 版で動かす
+py -m uv run --extra cpu python -m voice_translator
+```
+
+「sync ではなく今の venv を維持して実行したい」場合は `--no-sync` を付けます:
+```bash
+py -m uv run --extra cuda --no-sync python -m voice_translator
+```
 
 ---
 
@@ -234,6 +270,91 @@ pipeline:
   - 翻訳/TTS が時間的に詰まりやすい → ASR の入力 (`captured_queue_max_bytes`) を増やす
   - メモリ消費を抑えたい → 各 `*_max_bytes` を 200_000 〜 300_000 に下げる
 - 設定変更後はアプリ再起動で反映(動作中の Coordinator には反映されない)。
+
+### 各レイヤの処理時間を CSV で記録する(プロファイル用)
+レイテンシのボトルネックを調査したいときに使う。`config.yaml` を編集して有効化:
+```yaml
+log:
+  directory: ./logs
+  process_time_enabled: true   # ./logs/processtime.csv に追記される
+```
+
+`processtime.csv` の各列(1 行 = 1 発話):
+
+| 列 | 意味 |
+|---|---|
+| `timestamp` | 書き込み時刻(ISO 形式) |
+| `seq_id` | 発話 ID(他ログと突き合わせ可) |
+| `src_lang` / `tgt_lang` | 言語ペア |
+| `utterance_ms` | `t_vad_end - t_capture`(発話の音声長 + VAD ラグ) |
+| `asr_wait_ms` | `captured_queue` で待たされた時間 |
+| `asr_proc_ms` | ASR の純処理時間(`transcribe` の所要) |
+| `translate_wait_ms` | `recognized_queue` で待たされた時間 |
+| `translate_proc_ms` | 翻訳の純処理時間 |
+| `tts_wait_ms` | `translated_queue` で待たされた時間 |
+| `tts_proc_ms` | TTS の純処理時間 |
+| `output_wait_ms` | `synthesized_queue` で待たされた時間 |
+| `output_proc_ms` | `output.play()` の所要時間 |
+| `total_ms` | `t_playback - t_capture`(端から端まで) |
+| `src_chars` / `tgt_chars` | テキスト長(参考値) |
+
+- 既定 **OFF**。プロファイルしたい時だけ ON にする(常時 ON でも書込みは軽量)。
+- 追記モード。起動ごとに継続される(ローテーションなし)。
+- 失敗等で欠損したマーカーがあると、その列は空欄。
+- ヒント:
+  - `*_proc_ms` が大きい段が処理ボトルネック
+  - `*_wait_ms` が大きい段は **直前のステージが詰まっている**(or バッファが小さい)
+  - 例: `translate_wait_ms` が大きいなら ASR の出力速度に翻訳が追いつけていない
+
+### GPU(CUDA / Apple Silicon)を使う
+NLLB-200(翻訳)と faster-whisper(ASR)は GPU があれば自動的に使用します。
+何もしなくても **`device: auto`** が既定で、CUDA → MPS → CPU の順に試行されます。
+
+**現状を UI で確認**:
+- **設定パネル** の各レイヤ右側のステータスラベルが `Loaded (cuda)` / `Loaded (cpu)` のように **実際に使われているデバイス**を表示します(ASR と 翻訳 が対象)。
+- **動作パネル**の中ほどに **「演算: GPU (cuda)」「演算: CPU のみ」「演算: -(モデル準備中)」** という集約サマリが出ます。
+  - **緑** = GPU を1つでも使用中
+  - **オレンジ** = 全レイヤ CPU(動作はするが速度面で最速ではない)
+  - **グレー** = 起動直後・モデル準備中
+
+明示的にデバイスを指定したい場合(動作確認 / トラブルシュート):
+```yaml
+backends_config:
+  nllb200:
+    device: auto          # "auto" / "cuda" / "mps" / "cpu"
+  faster_whisper:
+    device: auto          # "auto" / "cuda" / "cpu"(CTranslate2 は MPS 未対応)
+    compute_type: auto    # "auto" / "int8" / "float16" / "int8_float16" 等
+                          # auto なら GPU=float16、CPU=int8 が選ばれる
+```
+
+- **CUDA 想定**: NVIDIA GPU。`nvidia-smi` でドライバが認識されていれば自動検出されます。
+- **MPS 想定**: Apple Silicon(M1/M2/M3)。NLLB のみ対応(faster-whisper は CPU 落ち)。
+- **CPU 想定**: その他すべて。デフォルトでも問題なく動作しますが翻訳速度が遅め。
+- GPU で起動に失敗した場合は **自動的に CPU にフォールバック** します(ログに記録)。
+- 設定変更後はアプリ再起動で反映。
+
+### VAD の発話区切り設定(長文連続発話で詰まるとき)
+ニュース放送のように **話者がほとんどポーズしない** 入力では、1 発話が数十秒〜数分の塊に
+なってしまい、翻訳/TTS/再生が破綻する(レイテンシが入力速度に追いつかなくなる)ことが
+ある。Silero VAD の挙動を `config.yaml` で調整できる:
+
+```yaml
+backends_config:
+  silero:
+    threshold: 0.5         # speech probability 判定しきい値(0〜1)。下げると敏感に
+    min_silence_ms: 500    # 発話終了とみなす無音期間(ms)。短くすると早く区切れる
+    speech_pad_ms: 100     # 発話前後の余白(ms)
+    max_speech_sec: 8.0    # 1 発話の最大長(秒)。超えたら強制区切り。0 で無効化
+```
+
+- `max_speech_sec` を超えると、VAD の自然な end イベントを待たずに **強制的に区切られ**、
+  次のサンプルから新しい発話として再開する(VAD のモデル内部状態は維持されるため、継続発話が
+  きちんと拾える)。
+- ニュース等のノンストップ素材では **`min_silence_ms: 200` + `max_speech_sec: 5.0`** くらいが
+  目安。短い発話に意味の切れ目を作って下流の翻訳/再生を回しやすくする。
+- 通常会話なら既定値(500ms / 8秒)で十分。
+- 設定変更後はアプリ再起動で反映される(動作中の VAD には反映されない)。
 
 ### TTS の読み上げ速度を変える
 SAPI(pyttsx3) の rate を `config.yaml` で変更可能:

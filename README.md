@@ -16,11 +16,26 @@ py -m pip install --user uv
 # or: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 # 2) 仮想環境と Python 3.11 を自動セットアップ
-py -m uv sync
+#    CPU 専用環境(誰でも動く、軽い)
+py -m uv sync --extra cpu
 
-# 3) 起動(GUI が立ち上がる)
-py -m uv run python -m voice_translator
+#    あるいは NVIDIA GPU を持っている人向け(自動で CUDA が使われる、ダウンロード約3GB増)
+# py -m uv sync --extra cuda
+
+# 3) 起動(GUI が立ち上がる) — sync 時と **同じ extras を付ける** こと
+py -m uv run --extra cpu python -m voice_translator
+# あるいは GPU 版なら:
+# py -m uv run --extra cuda python -m voice_translator
 ```
+
+> **`uv run` のクセに注意**: `uv run` はデフォルトで「extras 無し」で sync を
+> 再実行するため、起動時に `--extra` を省くと CPU 版に強制的に戻されます。
+> 起動コマンドにも sync と同じ extras を必ず付けてください。
+
+> **CPU と CUDA の選択について**: `--extra cpu` と `--extra cuda` は互いに排他です。
+> NVIDIA GPU を持っているかどうかで選んでください。**CUDA Toolkit のインストールは不要**
+> (wheel に CUDA ランタイムが同梱されているため)、NVIDIA ドライバさえあれば動きます。
+> Mac (Apple Silicon) は `--extra cpu` でも MPS が自動利用されます。
 
 > **初回起動の注意**: GUI 起動後、「開始」ボタンを押すと ASRモデル(150MB) と
 > 翻訳モデル(NLLB-200 約2.5GB) のダウンロードが走ります。数分〜十数分かかります。

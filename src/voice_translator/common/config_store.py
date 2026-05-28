@@ -41,6 +41,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "src_text_enabled": False,    # 翻訳前テキスト soundsrc.txt の出力 ON/OFF(デバッグ用)
         "tgt_text_enabled": False,    # 翻訳後テキスト translated.txt の出力 ON/OFF(デバッグ用)
         "show_translation": True,     # GUI への翻訳テキスト表示 ON/OFF
+        "process_time_enabled": False,  # 各レイヤ処理時間の CSV 出力 ON/OFF(プロファイル用)
     },
     "latency": {
         "warn_threshold_sec": 5.0,  # これを超えたら WARN
@@ -62,11 +63,40 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # テキスト系(recognized/translated)は **発話件数で制限**(中身が小さいためバイト換算は冗長)。
         "recognized_queue_size": 10,              # ASR → Translator(認識テキスト)
         "translated_queue_size": 10,              # Translator → TTS(翻訳テキスト)
+        # ステージ間データのダンプ機能(検証/再現用)。
+        # 有効時、各ステージ出力を <directory>/<run_id>/seq_NNNN_<stage>.{wav,json} に書き出す。
+        # 単体ランナー(voice_translator.dev.runner_*)の入力として使う。
+        # 詳細は docs/design/feature-dev-runners-and-dump/Plan.md を参照。
+        "dump": {
+            "enabled": False,                                       # ON/OFF
+            "directory": "./logs/dumps",                            # 出力ルート(run_id 配下に書く)
+            "stages": ["vad", "asr", "translate", "tts"],          # 書き出す対象
+            "max_runs": 20,                                         # 古い run の自動掃除上限(0で無効)
+        },
     },
     # 各バックエンド固有の設定値(GUI公開はまだ。手動で config.yaml 編集)
     "backends_config": {
         "sapi": {
             "rate": 180,  # 読み上げ速度(WPM相当)。早口にするなら 220 等。
+        },
+        "silero": {
+            # 発話区切り検出の細部。長文連続発話(ニュース読み上げ等)で 1 発話が肥大化して
+            # 翻訳/TTS が破綻するのを避けるため、特に max_speech_sec の上限が重要。
+            "threshold": 0.5,         # speech probability の判定しきい値(0〜1)
+            "min_silence_ms": 500,    # 発話終了とみなす無音期間(ms)。下げると早く区切れる
+            "speech_pad_ms": 100,     # 発話前後の余白(ms)
+            "max_speech_sec": 8.0,    # 1 発話の最大長(秒)。超えたら強制区切り。0 で無効化
+        },
+        "faster_whisper": {
+            # device: "auto" / "cuda" / "cpu"。auto なら CUDA があれば自動で使う(MPS は未対応)。
+            # compute_type: "auto" / "int8" / "float16" / "int8_float16" 等。auto なら device に応じて
+            #   GPU=int8_float16, CPU=int8 を選ぶ。
+            "device": "auto",
+            "compute_type": "auto",
+        },
+        "nllb200": {
+            # device: "auto" / "cuda" / "mps" / "cpu"。auto なら cuda → mps → cpu の順で使う。
+            "device": "auto",
         },
     },
 }

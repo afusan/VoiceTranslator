@@ -239,6 +239,49 @@ class TestModelStatus:
             assert seen[-1] == ModelStatus.LOADED, f"{layer}: 最終状態が LOADED でない"
 
 
+class TestGetLayerDevice:
+    """get_layer_device(layer) の動作確認(UI が GPU/CPU 表示に使う API)。"""
+
+    def test_returns_none_when_not_loaded(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        # ロード前は None
+        assert ctrl.get_layer_device(LayerKind.ASR) is None
+        assert ctrl.get_layer_device(LayerKind.TRANSLATOR) is None
+
+    def test_returns_device_when_backend_has_attribute(
+        self, populated_registry, config
+    ) -> None:
+        """device 属性を持つバックエンドはその値を返す。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        # 仮想バックエンドを差し込んで device 属性を持たせる
+        fake_asr = MagicMock(name="asr_backend")
+        fake_asr.device = "cuda"
+        ctrl._backends[LayerKind.ASR] = fake_asr
+
+        assert ctrl.get_layer_device(LayerKind.ASR) == "cuda"
+
+    def test_returns_none_when_backend_has_no_device_attr(
+        self, populated_registry, config
+    ) -> None:
+        """device 概念のないバックエンド(Capture/VAD/TTS/Output)は None を返す。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        # MagicMock は何でも返してしまうので、device 属性を持たない素オブジェクトを使う
+        class _PlainBackend:
+            pass
+
+        ctrl._backends[LayerKind.TTS] = _PlainBackend()
+        assert ctrl.get_layer_device(LayerKind.TTS) is None
+
+    def test_empty_or_whitespace_device_returns_none(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        fake = MagicMock()
+        fake.device = "   "
+        ctrl._backends[LayerKind.ASR] = fake
+        assert ctrl.get_layer_device(LayerKind.ASR) is None
+
+
 class TestCallbacks:
     def test_on_utterance_done_is_invoked_with_jsonl_write(
         self, populated_registry, config, tmp_path
@@ -302,6 +345,74 @@ class TestConfigDefaults:
     def test_sapi_rate_default(self, populated_registry, config) -> None:
         ctrl = AppController(registry=populated_registry, config=config)
         assert ctrl.get_setting("backends_config", "sapi", "rate") == 180
+
+    def test_process_time_default_off(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_setting("log", "process_time_enabled") is False
+
+
+class TestProcessTimeLoggerWiring:
+    """AppController から ProcessTimeLogger への配線確認。"""
+
+    def test_logger_enabled_when_config_true(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        import threading
+        from voice_translator.common.process_time_logger import ProcessTimeLogger
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        ctrl.set_setting("log", "process_time_enabled", True)
+
+        started = threading.Event()
+        ctrl.start_pipeline_async(on_started=lambda: started.set())
+        try:
+            assert started.wait(timeout=3.0)
+            assert isinstance(ctrl._process_time_logger, ProcessTimeLogger)
+            assert ctrl._process_time_logger.enabled is True
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_logger_disabled_when_config_false(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        import threading
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        # process_time_enabled は既定 False のままにする
+
+        started = threading.Event()
+        ctrl.start_pipeline_async(on_started=lambda: started.set())
+        try:
+            assert started.wait(timeout=3.0)
+            assert ctrl._process_time_logger.enabled is False
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_handle_utterance_done_invokes_logger(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        """完了通知時に CSV へ追記される(モック record で動作確認)。"""
+        from voice_translator.common.process_time_logger import ProcessTimeLogger
+
+        csv_path = tmp_path / "processtime.csv"
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl._process_time_logger = ProcessTimeLogger(csv_path, enabled=True)
+
+        record = _sample_record(seq_id=99)
+        ctrl._handle_utterance_done(record)
+
+        assert csv_path.exists(), "CSV が作成されていない"
+        with csv_path.open("r", encoding="utf-8") as f:
+            content = f.read()
+        # ヘッダ + データ 1 行
+        assert "seq_id" in content
+        assert "99" in content
 
 
 class TestLoadModels:

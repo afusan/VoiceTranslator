@@ -19,6 +19,59 @@ dependencies = [
     "customtkinter>=5.2",
 ]
 
+# 配布方針: CPU を floor、GPU は opt-in(CLAUDE.md「配布方針」参照)。
+# - `uv sync --extra cpu`  : PyPI の CPU 専用 torch を取得(誰でも動く)
+# - `uv sync --extra cuda` : NVIDIA CUDA 12.1 wheels の torch を取得(GPU 高速)
+# - extras を指定しない素の `uv sync` は意図が曖昧なので避ける(どちらかを必ず付ける)
+#
+# 互いに排他なため `[tool.uv].conflicts` で uv に明示する。これがないと universal
+# resolution が両方を満たそうとして CUDA 版に倒れる("uv sync"だけで GPU 版が入る)。
+#
+# torchaudio は torch と **同じ index から同じバージョン系列で取る** こと(silero-vad が
+# 依存)。デフォルト PyPI から取ると torch と ABI が合わず WinError 127 になる。
+[project.optional-dependencies]
+cpu = [
+    "torch>=2.2",
+    "torchaudio>=2.2",
+]
+cuda = [
+    "torch>=2.2",
+    "torchaudio>=2.2",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cuda" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "cuda" },
+]
+torchaudio = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "cuda" },
+]
+
+[[tool.uv.index]]
+# PyTorch の CPU 専用ビルド。--extra cpu のときだけ参照される。
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+# PyTorch の CUDA 12.4 ビルド。--extra cuda のときだけ参照される。
+# cu121 だと torch 2.5.1 までしか無く、transformers の torch>=2.6 要求(CVE-2025-32434)を
+# 満たせないため cu124 を採用。CUDA バージョンを更に上げる場合はここを `cu126` 等に変える。
+# 必要なドライババージョン目安: cu124 -> 525+、cu126 -> 555+。
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

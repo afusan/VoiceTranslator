@@ -40,6 +40,8 @@ from .messages import (
     TranslatedPayload,
 )
 from .sequence import SequenceGenerator
+from .stage_dump import NullStageDumpWriter, StageDumpWriter
+from .types import INTERNAL_SAMPLE_RATE
 
 # 停止シグナル代わりにキューへ流すセンチネル値
 _SENTINEL: object = object()
@@ -101,6 +103,7 @@ class PipelineCoordinator:
         recognized_queue_size: int = 10,
         translated_queue_size: int = 10,
         logger: logging.Logger | None = None,
+        dump: StageDumpWriter | NullStageDumpWriter | None = None,
     ) -> None:
         self._capture = capture
         self._vad = vad
@@ -118,6 +121,11 @@ class PipelineCoordinator:
         self._on_dropped = on_dropped
         self._read_timeout = read_timeout
         self._logger = logger or logging.getLogger("voice_translator")
+        # ステージ間データのダンプフック。無効時は no-op の NullStageDumpWriter。
+        # ライフサイクル(start_run/stop_run)は呼び出し側(AppController)で管理する。
+        self._dump: StageDumpWriter | NullStageDumpWriter = (
+            dump if dump is not None else NullStageDumpWriter()
+        )
 
         # キュー(PipelineMessage または _SENTINEL を流す)
         # PCM 系はバイト基準(ByteBoundedQueue) / テキスト系は件数基準(queue.Queue)。
@@ -276,6 +284,7 @@ class PipelineCoordinator:
                     timeline={"t_capture": seg.started_at_monotonic},
                 )
                 self._ledger.mark_time(seq_id, "t_vad_end")
+                self._dump.on_vad(seq_id, seg.pcm, INTERNAL_SAMPLE_RATE)
                 msg = PipelineMessage(
                     seq_id=seq_id,
                     payload=RawPayload(pcm=seg.pcm, src_lang_hint=self._src_lang),
@@ -294,6 +303,8 @@ class PipelineCoordinator:
 
             msg: PipelineMessage = item
             payload: RawPayload = msg.payload
+            # t_asr_start: backend 呼び出しの直前(キュー待ち時間と純処理時間を切り分けるため)
+            self._ledger.mark_time(msg.seq_id, "t_asr_start")
             try:
                 text, lang = self._asr.transcribe(payload.pcm, payload.src_lang_hint)
             except Exception as exc:  # noqa: BLE001
@@ -308,6 +319,7 @@ class PipelineCoordinator:
             src_lang = lang if payload.src_lang_hint in ("auto", "", None) else payload.src_lang_hint
 
             self._ledger.mark_time(msg.seq_id, "t_asr")
+            self._dump.on_asr(msg.seq_id, text, src_lang)
             self._ledger.record(msg.seq_id, src_text=text, src_lang=src_lang)
             if self._text_logger is not None:
                 try:
@@ -333,6 +345,7 @@ class PipelineCoordinator:
 
             msg: PipelineMessage = item
             payload: TranscribedPayload = msg.payload
+            self._ledger.mark_time(msg.seq_id, "t_translate_start")
             try:
                 tgt_text = self._translator.translate(
                     payload.src_text, payload.src_lang, self._tgt_lang
@@ -346,6 +359,13 @@ class PipelineCoordinator:
                 continue
 
             self._ledger.mark_time(msg.seq_id, "t_translate")
+            self._dump.on_translate(
+                msg.seq_id,
+                payload.src_text,
+                payload.src_lang,
+                tgt_text,
+                self._tgt_lang,
+            )
             self._ledger.record(msg.seq_id, tgt_text=tgt_text, tgt_lang=self._tgt_lang)
             if self._text_logger is not None:
                 try:
@@ -377,6 +397,7 @@ class PipelineCoordinator:
 
             msg: PipelineMessage = item
             payload: TranslatedPayload = msg.payload
+            self._ledger.mark_time(msg.seq_id, "t_tts_start")
             try:
                 pcm, samplerate = self._tts.synthesize(payload.tgt_text, payload.tgt_lang)
             except Exception as exc:  # noqa: BLE001
@@ -388,6 +409,7 @@ class PipelineCoordinator:
                 continue
 
             self._ledger.mark_time(msg.seq_id, "t_tts")
+            self._dump.on_tts(msg.seq_id, pcm, samplerate)
             next_msg = PipelineMessage(
                 seq_id=msg.seq_id,
                 payload=SynthesizedPayload(tts_pcm=pcm, tts_samplerate=samplerate),
@@ -406,6 +428,7 @@ class PipelineCoordinator:
 
             msg: PipelineMessage = item
             payload: SynthesizedPayload = msg.payload
+            self._ledger.mark_time(msg.seq_id, "t_playback_start")
             try:
                 self._output.play(payload.tts_pcm, payload.tts_samplerate)
             except Exception as exc:  # noqa: BLE001
