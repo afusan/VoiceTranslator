@@ -71,11 +71,14 @@ class ModelStatus(str, Enum):
     """バックエンドモデルの状態(UI表示用)。表示文字列は英語固定。
 
     役割: GUI でレイヤ別の準備状況を表すラベル。
-    - NOT_DOWNLOADED: ローカルキャッシュに無い(初回起動でDLが必要)。
+    - INIT:           初期状態(まだロード処理を起動していない)。アプリ起動直後や
+                      バックエンド差し替え直後に置かれる。
+    - NOT_DOWNLOADED: ロード試行に失敗(ローカルキャッシュ無 + DL失敗等)。
     - LOADING:        DL中 or メモリへロード中。
-    - LOADED:         メモリに読み込み済み or キャッシュ済みで即ロード可能。
+    - LOADED:         メモリに読み込み済み(即使用可能)。
     """
 
+    INIT = "Init"
     NOT_DOWNLOADED = "Not Downloaded"
     LOADING = "Loading..."
     LOADED = "Loaded"
