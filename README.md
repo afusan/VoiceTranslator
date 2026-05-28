@@ -22,9 +22,15 @@ py -m uv sync --extra cpu
 #    あるいは NVIDIA GPU を持っている人向け(自動で CUDA が使われる、ダウンロード約3GB増)
 # py -m uv sync --extra cuda
 
-# 3) 起動(GUI が立ち上がる)
-py -m uv run python -m voice_translator
+# 3) 起動(GUI が立ち上がる) — sync 時と **同じ extras を付ける** こと
+py -m uv run --extra cpu python -m voice_translator
+# あるいは GPU 版なら:
+# py -m uv run --extra cuda python -m voice_translator
 ```
+
+> **`uv run` のクセに注意**: `uv run` はデフォルトで「extras 無し」で sync を
+> 再実行するため、起動時に `--extra` を省くと CPU 版に強制的に戻されます。
+> 起動コマンドにも sync と同じ extras を必ず付けてください。
 
 > **CPU と CUDA の選択について**: `--extra cpu` と `--extra cuda` は互いに排他です。
 > NVIDIA GPU を持っているかどうかで選んでください。**CUDA Toolkit のインストールは不要**

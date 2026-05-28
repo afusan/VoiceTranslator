@@ -26,12 +26,17 @@ dependencies = [
 #
 # 互いに排他なため `[tool.uv].conflicts` で uv に明示する。これがないと universal
 # resolution が両方を満たそうとして CUDA 版に倒れる("uv sync"だけで GPU 版が入る)。
+#
+# torchaudio は torch と **同じ index から同じバージョン系列で取る** こと(silero-vad が
+# 依存)。デフォルト PyPI から取ると torch と ABI が合わず WinError 127 になる。
 [project.optional-dependencies]
 cpu = [
     "torch>=2.2",
+    "torchaudio>=2.2",
 ]
 cuda = [
     "torch>=2.2",
+    "torchaudio>=2.2",
 ]
 
 [tool.uv]
@@ -44,6 +49,10 @@ conflicts = [
 
 [tool.uv.sources]
 torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "cuda" },
+]
+torchaudio = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cuda", extra = "cuda" },
 ]

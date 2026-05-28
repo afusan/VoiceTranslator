@@ -61,6 +61,25 @@ py -m uv sync --extra cpu
 - 2 つの extras は **排他**(同時に指定しないこと)。
 - 後から切り替えたい場合は再度 `uv sync --extra <別の方>` で OK(差分だけインストールされます)。
 
+### **重要**: アプリ起動時にも `--extra` を付ける
+
+`uv run` はデフォルトで「extras 無し」で内部 sync を再実行するため、せっかく `--extra cuda`
+で入れた CUDA 版 torch が **CPU 版に上書きされて戻ってしまう** という挙動があります。
+これを避けるには、起動コマンドにも同じ `--extra` を付けてください:
+
+```bash
+# GPU 版で動かす(毎回 --extra cuda を付ける)
+py -m uv run --extra cuda python -m voice_translator
+
+# CPU 版で動かす
+py -m uv run --extra cpu python -m voice_translator
+```
+
+「sync ではなく今の venv を維持して実行したい」場合は `--no-sync` を付けます:
+```bash
+py -m uv run --extra cuda --no-sync python -m voice_translator
+```
+
 ---
 
 ## 4. 起動方法
