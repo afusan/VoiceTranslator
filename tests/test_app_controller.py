@@ -196,19 +196,20 @@ class TestAsyncStart:
 
 
 class TestModelStatus:
-    def test_initial_status_for_known_backends(
-        self, populated_registry, config, monkeypatch
+    def test_initial_status_is_init_for_all_layers(
+        self, populated_registry, config
     ) -> None:
-        # cache_check 系を全部 LOADED に固定
-        from voice_translator.common import cache_check
-        monkeypatch.setattr(cache_check, "check_faster_whisper", lambda *a, **k: cache_check.ModelStatus.LOADED)
-        monkeypatch.setattr(cache_check, "check_nllb200", lambda *a, **k: cache_check.ModelStatus.LOADED)
+        """アプリ起動直後はキャッシュ有無に関わらず全レイヤ INIT。
 
-        ctrl = AppController(registry=populated_registry, config=config)
+        in-memory のロードはまだ走っていないことを素直に表現する
+        (キャッシュ由来の LOADED を出すと "Loaded→Loading→Loaded" の不自然な
+        遷移になるため)。
+        """
         from voice_translator.common.types import LayerKind, ModelStatus
 
+        ctrl = AppController(registry=populated_registry, config=config)
         for layer in LayerKind:
-            assert ctrl.get_model_status(layer) == ModelStatus.LOADED
+            assert ctrl.get_model_status(layer) == ModelStatus.INIT
 
     def test_status_listener_invoked_during_load(
         self, populated_registry, config, tmp_path

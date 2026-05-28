@@ -28,6 +28,7 @@ _LANG_CHOICES: list[str] = [
 
 # ModelStatus → 色マップ(customtkinter は色名そのまま使える)
 _STATUS_COLORS: dict[ModelStatus, str] = {
+    ModelStatus.INIT: "#64748b",            # slate gray (まだロード起動前)
     ModelStatus.NOT_DOWNLOADED: "#dc2626",  # red
     ModelStatus.LOADING: "#d97706",         # amber
     ModelStatus.LOADED: "#16a34a",          # green

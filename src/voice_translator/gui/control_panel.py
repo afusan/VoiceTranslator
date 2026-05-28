@@ -197,7 +197,8 @@ class ControlPanel(ctk.CTkFrame):
         if not statuses:
             return
 
-        if any(s == ModelStatus.LOADING for s in statuses):
+        if any(s in (ModelStatus.INIT, ModelStatus.LOADING) for s in statuses):
+            # INIT(未着手) / LOADING(進行中) はどちらも「準備中」とまとめて表示
             self._toggle_btn.configure(text="モデル準備中…", state="disabled")
             self._status_label.configure(text="モデル準備中…")
         elif any(s == ModelStatus.NOT_DOWNLOADED for s in statuses):

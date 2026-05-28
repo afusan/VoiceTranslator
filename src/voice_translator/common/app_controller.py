@@ -29,7 +29,6 @@ from typing import Any, Callable
 from voice_translator.capture.backend import AudioCaptureBackend
 from voice_translator.output.backend import AudioOutputBackend
 
-from . import cache_check
 from .backend_registry import BackendRegistry
 from .config_store import ConfigStore
 from .device_validator import DeviceValidator
@@ -40,18 +39,6 @@ from .notification_throttle import NotificationThrottle
 from .pipeline import PipelineCoordinator
 from .sequence import SequenceGenerator
 from .types import CaptureSource, LayerKind, ModelStatus, OutputDevice
-
-
-# レイヤ + 選択中バックエンド名 → cache_check モジュール内の関数名
-# (直接 callable を保持しないことで monkeypatch を効くようにする)
-_CACHE_CHECKER_NAMES: dict[tuple[LayerKind, str], str] = {
-    (LayerKind.CAPTURE, "soundcard"): "check_soundcard",
-    (LayerKind.VAD, "silero"): "check_silero",
-    (LayerKind.ASR, "faster_whisper"): "check_faster_whisper",
-    (LayerKind.TRANSLATOR, "nllb200"): "check_nllb200",
-    (LayerKind.TTS, "sapi"): "check_sapi",
-    (LayerKind.OUTPUT, "soundcard"): "check_soundcard",
-}
 
 
 class AppController:
@@ -90,9 +77,12 @@ class AppController:
         self._on_warn: Callable[..., None] = lambda m, **_kw: None
         self._on_status_change: Callable[[LayerKind, ModelStatus], None] = lambda l, s: None
 
-        # モデル状態の初期化(キャッシュチェック)
-        self._model_status: dict[LayerKind, ModelStatus] = {}
-        self._refresh_model_status_from_cache()
+        # モデル状態の初期化: 全レイヤ INIT(まだロード処理を起動していない)。
+        # キャッシュ有無で初期 LOADED を出すと "Loaded→Loading→Loaded" の不自然な
+        # 遷移になるため、in-memory ロードの実態を素直に表す。
+        self._model_status: dict[LayerKind, ModelStatus] = {
+            layer: ModelStatus.INIT for layer in LayerKind
+        }
 
     # ============================================================
     # コールバック登録
@@ -118,19 +108,10 @@ class AppController:
     # モデルステータス
     # ============================================================
     def get_model_status(self, layer: LayerKind) -> ModelStatus:
-        return self._model_status.get(layer, ModelStatus.NOT_DOWNLOADED)
+        return self._model_status.get(layer, ModelStatus.INIT)
 
     def get_all_model_statuses(self) -> dict[LayerKind, ModelStatus]:
         return dict(self._model_status)
-
-    def _refresh_model_status_from_cache(self) -> None:
-        """設定中のバックエンドに対するキャッシュ状況で状態を初期化する。"""
-        for layer in LayerKind:
-            name = self._config.get("backends", layer.value, default="")
-            func_name = _CACHE_CHECKER_NAMES.get((layer, name))
-            checker = getattr(cache_check, func_name, None) if func_name else None
-            status = checker() if checker is not None else ModelStatus.NOT_DOWNLOADED
-            self._model_status[layer] = status
 
     def _set_status(self, layer: LayerKind, status: ModelStatus) -> None:
         self._model_status[layer] = status
@@ -172,9 +153,8 @@ class AppController:
             if layer_changed is not None:
                 with self._load_lock:
                     self._backends.pop(layer_changed, None)
-                self._refresh_model_status_from_cache()
-                for layer in LayerKind:
-                    self._on_status_change(layer, self._model_status[layer])
+                # 該当レイヤは INIT に戻す(まだロード起動前の状態)
+                self._set_status(layer_changed, ModelStatus.INIT)
                 # バックグラウンドで即座にロードを試みる(GUI 側で進捗が見える)
                 threading.Thread(
                     target=lambda: self._safe_load_layer(layer_changed),
@@ -187,9 +167,12 @@ class AppController:
 
     def load_settings(self) -> None:
         self._config.load()
-        self._refresh_model_status_from_cache()
+        # 設定再読込ではバックエンド名が変わっている可能性があるので、キャッシュを全破棄して
+        # INIT に戻す。GUI 側で自動ロードを再度発火する想定。
+        with self._load_lock:
+            self._backends.clear()
         for layer in LayerKind:
-            self._on_status_change(layer, self._model_status[layer])
+            self._set_status(layer, ModelStatus.INIT)
 
     # ============================================================
     # ロード / 起動 / 停止
