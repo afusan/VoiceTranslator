@@ -149,7 +149,7 @@ class TestDeviceSelection:
     def test_default_auto_resolves_to_cuda_when_available(
         self, fake_faster_whisper, monkeypatch
     ) -> None:
-        """auto + CUDA 有り環境 → cuda+float16 に解決される。"""
+        """auto + CUDA 有り環境 → cuda+int8_float16 に解決される。"""
         fake_torch = MagicMock(name="torch")
         fake_torch.cuda.is_available = MagicMock(return_value=True)
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
@@ -161,9 +161,9 @@ class TestDeviceSelection:
 
         backend = FasterWhisperAsrBackend()
         assert backend.device == "cuda"
-        assert backend.compute_type == "float16"
+        assert backend.compute_type == "int8_float16"
         fake_module.WhisperModel.assert_called_with(
-            "small", device="cuda", compute_type="float16"
+            "small", device="cuda", compute_type="int8_float16"
         )
 
     def test_explicit_cpu_picks_int8(self, fake_faster_whisper) -> None:

@@ -80,7 +80,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "faster_whisper": {
             # device: "auto" / "cuda" / "cpu"。auto なら CUDA があれば自動で使う(MPS は未対応)。
             # compute_type: "auto" / "int8" / "float16" / "int8_float16" 等。auto なら device に応じて
-            #   GPU=float16, CPU=int8 を選ぶ。
+            #   GPU=int8_float16, CPU=int8 を選ぶ。
             "device": "auto",
             "compute_type": "auto",
         },
