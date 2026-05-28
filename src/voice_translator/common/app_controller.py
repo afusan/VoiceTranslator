@@ -115,6 +115,25 @@ class AppController:
     def get_all_model_statuses(self) -> dict[LayerKind, ModelStatus]:
         return dict(self._model_status)
 
+    def get_layer_device(self, layer: LayerKind) -> str | None:
+        """指定レイヤのバックエンドが報告するデバイス名を返す。
+
+        ASR / Translator のように GPU 対応バックエンドは `device` プロパティを持ち、
+        "cpu" / "cuda" / "mps" のいずれかを返す。device 概念を持たないバックエンド
+        (Capture / VAD / TTS / Output) や未ロードのレイヤは None。
+        """
+        backend = self._backends.get(layer)
+        if backend is None:
+            return None
+        device = getattr(backend, "device", None)
+        if device is None:
+            return None
+        try:
+            value = str(device).strip()
+        except Exception:  # noqa: BLE001
+            return None
+        return value or None
+
     def _set_status(self, layer: LayerKind, status: ModelStatus) -> None:
         self._model_status[layer] = status
         try:

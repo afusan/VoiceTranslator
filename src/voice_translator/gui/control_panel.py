@@ -60,22 +60,28 @@ class ControlPanel(ctk.CTkFrame):
         self._latency_label = ctk.CTkLabel(self, text="平均レイテンシ: -")
         self._latency_label.grid(row=1, column=2, padx=10, pady=8, sticky="e")
 
+        # アクセラレータ表示("GPU 使ってる/CPU のみ" の一目情報)
+        self._accel_label = ctk.CTkLabel(self, text="演算: -", text_color="#94a3b8")
+        self._accel_label.grid(
+            row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 4)
+        )
+
         # 履歴ラベル + クリアボタン(同じ行に配置)
         ctk.CTkLabel(self, text="最近の翻訳:").grid(
-            row=2, column=0, sticky="w", padx=10, pady=(8, 0)
+            row=3, column=0, sticky="w", padx=10, pady=(8, 0)
         )
         self._clear_btn = ctk.CTkButton(
             self, text="クリア", width=80, command=self._on_clear_history
         )
-        self._clear_btn.grid(row=2, column=2, sticky="e", padx=10, pady=(8, 0))
+        self._clear_btn.grid(row=3, column=2, sticky="e", padx=10, pady=(8, 0))
 
         self._history_text = ctk.CTkTextbox(self, height=360, wrap="word")
-        self._history_text.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=10, pady=4)
+        self._history_text.grid(row=4, column=0, columnspan=3, sticky="nsew", padx=10, pady=4)
         self._history_text.configure(state="disabled")
 
         self.columnconfigure(1, weight=1)
         # 履歴ボックスをウィンドウ拡大時に伸ばす
-        self.rowconfigure(3, weight=1)
+        self.rowconfigure(4, weight=1)
 
     # ============================================================
     def _on_toggle(self) -> None:
@@ -205,9 +211,44 @@ class ControlPanel(ctk.CTkFrame):
             self._toggle_btn.configure(text="モデル未準備", state="disabled")
             self._status_label.configure(text="モデル未準備(設定/ネット接続を確認)")
         else:
-            # 全部 LOADED
+            # 全部 LOADED — device サマリも併記して「GPU 動いてる?」が一目で分かるように
             self._toggle_btn.configure(text="▶ 開始", state="normal")
             self._status_label.configure(text="停止中")
+
+        # アクセラレータ表示は ready_state とは独立に常に更新する
+        self._refresh_accel_label()
+
+    def _refresh_accel_label(self) -> None:
+        """各レイヤの device を集約して「演算: GPU(cuda) / CPU のみ / 不明」を表示する。
+
+        device 概念を持つレイヤ(ASR / Translator 等)の値を見て、1つでも CUDA/MPS が
+        あれば GPU 利用扱い、すべて CPU なら "CPU のみ"、まだロードされていなければ
+        "不明" を表示する。
+        """
+        if self._accel_label is None:
+            return
+        gpu_devices: set[str] = set()
+        has_cpu = False
+        for layer in LayerKind:
+            device = self._controller.get_layer_device(layer)
+            if not device:
+                continue
+            d = device.lower()
+            if d in ("cuda", "mps"):
+                gpu_devices.add(d)
+            elif d == "cpu":
+                has_cpu = True
+
+        if gpu_devices:
+            color = "#16a34a"  # green
+            text = f"演算: GPU ({', '.join(sorted(gpu_devices))})"
+        elif has_cpu:
+            color = "#d97706"  # amber(動作はするがプロファイル的に最速ではない)
+            text = "演算: CPU のみ"
+        else:
+            color = "#94a3b8"  # slate
+            text = "演算: -(モデル準備中)"
+        self._accel_label.configure(text=text, text_color=color)
 
     # ---- メインスレッドでの反映 ----
     def _apply_utterance(self, record: dict) -> None:

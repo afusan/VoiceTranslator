@@ -77,10 +77,6 @@ class TestResolveTorchDevice:
 # resolve_ctranslate2_device
 # ============================================================
 class TestResolveCtranslate2Device:
-    def test_auto_passes_through(self) -> None:
-        # CTranslate2 自体が "auto" を解釈するのでそのまま渡す
-        assert resolve_ctranslate2_device("auto") == "auto"
-
     def test_explicit_cuda(self) -> None:
         assert resolve_ctranslate2_device("cuda") == "cuda"
 
@@ -91,9 +87,31 @@ class TestResolveCtranslate2Device:
         # CTranslate2 は MPS 未対応 → CPU に落とす
         assert resolve_ctranslate2_device("mps") == "cpu"
 
-    def test_empty_treated_as_auto(self) -> None:
-        assert resolve_ctranslate2_device("") == "auto"
-        assert resolve_ctranslate2_device(None) == "auto"  # type: ignore[arg-type]
+    def test_auto_picks_cuda_when_available(self, monkeypatch) -> None:
+        fake_torch = MagicMock(name="torch")
+        fake_torch.cuda.is_available = MagicMock(return_value=True)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        assert resolve_ctranslate2_device("auto") == "cuda"
+
+    def test_auto_falls_back_to_cpu_without_cuda(self, monkeypatch) -> None:
+        fake_torch = MagicMock(name="torch")
+        fake_torch.cuda.is_available = MagicMock(return_value=False)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        assert resolve_ctranslate2_device("auto") == "cpu"
+
+    def test_auto_returns_cpu_when_torch_unavailable(self, monkeypatch) -> None:
+        broken = MagicMock()
+        broken.cuda.is_available = MagicMock(side_effect=RuntimeError("dead"))
+        monkeypatch.setitem(sys.modules, "torch", broken)
+        assert resolve_ctranslate2_device("auto") == "cpu"
+
+    def test_empty_treated_as_auto(self, monkeypatch) -> None:
+        # auto 解決をテストするため torch を CUDA 無しに固定
+        fake_torch = MagicMock(name="torch")
+        fake_torch.cuda.is_available = MagicMock(return_value=False)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        assert resolve_ctranslate2_device("") == "cpu"
+        assert resolve_ctranslate2_device(None) == "cpu"  # type: ignore[arg-type]
 
 
 # ============================================================
@@ -106,10 +124,6 @@ class TestResolveComputeType:
 
     def test_auto_picks_float16_for_cuda(self) -> None:
         assert resolve_ctranslate2_compute_type("cuda", "auto") == "float16"
-
-    def test_auto_picks_float16_for_auto_device(self) -> None:
-        # device="auto" のときも GPU を期待した値(float16)
-        assert resolve_ctranslate2_compute_type("auto", "auto") == "float16"
 
     def test_auto_picks_int8_for_cpu(self) -> None:
         assert resolve_ctranslate2_compute_type("cpu", "auto") == "int8"

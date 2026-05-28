@@ -126,19 +126,44 @@ class TestTranscribe:
 class TestDeviceSelection:
     """device 引数の振る舞い: auto / 明示 / フォールバック。"""
 
-    def test_default_device_is_auto(self, fake_faster_whisper) -> None:
+    def test_default_auto_resolves_to_cpu_without_cuda(
+        self, fake_faster_whisper, monkeypatch
+    ) -> None:
+        """auto + GPU 無し環境 → cpu+int8 に解決される。"""
+        fake_torch = MagicMock(name="torch")
+        fake_torch.cuda.is_available = MagicMock(return_value=False)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
         fake_module, _ = fake_faster_whisper
         from voice_translator.asr.faster_whisper_backend import (
             FasterWhisperAsrBackend,
         )
 
         backend = FasterWhisperAsrBackend()
-        # CTranslate2 自体に "auto" を渡すので、解決後も "auto" のまま
-        assert backend.device == "auto"
-        # compute_type は auto → device=auto では GPU 想定で "float16"
+        assert backend.device == "cpu"
+        assert backend.compute_type == "int8"
+        fake_module.WhisperModel.assert_called_with(
+            "small", device="cpu", compute_type="int8"
+        )
+
+    def test_default_auto_resolves_to_cuda_when_available(
+        self, fake_faster_whisper, monkeypatch
+    ) -> None:
+        """auto + CUDA 有り環境 → cuda+float16 に解決される。"""
+        fake_torch = MagicMock(name="torch")
+        fake_torch.cuda.is_available = MagicMock(return_value=True)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        fake_module, _ = fake_faster_whisper
+        from voice_translator.asr.faster_whisper_backend import (
+            FasterWhisperAsrBackend,
+        )
+
+        backend = FasterWhisperAsrBackend()
+        assert backend.device == "cuda"
         assert backend.compute_type == "float16"
         fake_module.WhisperModel.assert_called_with(
-            "small", device="auto", compute_type="float16"
+            "small", device="cuda", compute_type="float16"
         )
 
     def test_explicit_cpu_picks_int8(self, fake_faster_whisper) -> None:

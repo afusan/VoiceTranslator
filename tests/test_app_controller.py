@@ -239,6 +239,49 @@ class TestModelStatus:
             assert seen[-1] == ModelStatus.LOADED, f"{layer}: 最終状態が LOADED でない"
 
 
+class TestGetLayerDevice:
+    """get_layer_device(layer) の動作確認(UI が GPU/CPU 表示に使う API)。"""
+
+    def test_returns_none_when_not_loaded(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        # ロード前は None
+        assert ctrl.get_layer_device(LayerKind.ASR) is None
+        assert ctrl.get_layer_device(LayerKind.TRANSLATOR) is None
+
+    def test_returns_device_when_backend_has_attribute(
+        self, populated_registry, config
+    ) -> None:
+        """device 属性を持つバックエンドはその値を返す。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        # 仮想バックエンドを差し込んで device 属性を持たせる
+        fake_asr = MagicMock(name="asr_backend")
+        fake_asr.device = "cuda"
+        ctrl._backends[LayerKind.ASR] = fake_asr
+
+        assert ctrl.get_layer_device(LayerKind.ASR) == "cuda"
+
+    def test_returns_none_when_backend_has_no_device_attr(
+        self, populated_registry, config
+    ) -> None:
+        """device 概念のないバックエンド(Capture/VAD/TTS/Output)は None を返す。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        # MagicMock は何でも返してしまうので、device 属性を持たない素オブジェクトを使う
+        class _PlainBackend:
+            pass
+
+        ctrl._backends[LayerKind.TTS] = _PlainBackend()
+        assert ctrl.get_layer_device(LayerKind.TTS) is None
+
+    def test_empty_or_whitespace_device_returns_none(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        fake = MagicMock()
+        fake.device = "   "
+        ctrl._backends[LayerKind.ASR] = fake
+        assert ctrl.get_layer_device(LayerKind.ASR) is None
+
+
 class TestCallbacks:
     def test_on_utterance_done_is_invoked_with_jsonl_write(
         self, populated_registry, config, tmp_path

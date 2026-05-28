@@ -54,13 +54,19 @@ def resolve_torch_device(preference: str = "auto") -> str:
 def resolve_ctranslate2_device(preference: str = "auto") -> str:
     """CTranslate2(faster-whisper)用のデバイス名を返す。
 
-    CTranslate2 は MPS を未サポートなので、PyTorch 用とは別ロジックにする
-    (auto で MPS にしようとしても fallback で CPU を返す)。
+    CTranslate2 は MPS を未サポートなので、PyTorch 用とは別ロジックにする。
+    "auto" は **eager に "cuda"/"cpu" のどちらかへ解決** する(CTranslate2 内部
+    の auto 解釈結果を API では取得できないため、UI 表示のために自前で決める)。
     """
     pref = (preference or "auto").lower().strip()
     if pref == "auto":
-        # faster-whisper / CTranslate2 自体が "auto" を解釈する。素直に渡す。
-        return "auto"
+        try:
+            import torch  # type: ignore
+            if torch.cuda.is_available():
+                return "cuda"
+        except Exception:  # noqa: BLE001
+            pass
+        return "cpu"
     if pref == "mps":
         # CTranslate2 は MPS 未対応 → CPU に落とす
         return "cpu"
@@ -73,16 +79,16 @@ def resolve_ctranslate2_compute_type(
     """CTranslate2 の compute_type を device に合わせて決める。
 
     Args:
-        device: `resolve_ctranslate2_device` の結果(`"auto"` も含む)。
+        device: `resolve_ctranslate2_device` の結果(確定値: "cuda" / "cpu")。
         preference: 明示指定があればそれを返す。"auto" のときに自動選択。
 
     Returns:
-        - GPU(`cuda` / `auto`): `"float16"`(GPU で高速、VRAM 削減)
+        - GPU(`cuda`): `"float16"`(GPU で高速、VRAM 削減)
         - CPU: `"int8"`(CPU で最も実用的な量子化)
     """
     pref = (preference or "auto").lower().strip()
     if pref != "auto":
         return pref
-    if device in ("cuda", "auto"):
+    if device == "cuda":
         return "float16"
     return "int8"
