@@ -278,11 +278,17 @@ backends_config:
 
 開発用コマンド:
 ```bash
-py -m uv run pytest                      # テスト実行(全件)
-py -m uv run pytest --cov=src            # カバレッジ表示
-py -m uv run pytest -v                   # テスト名表示
-py -m uv add <package>                   # 依存追加
+py -m uv run pytest                              # small のみ(既定 / 高速、毎コミット用)
+py -m uv run pytest -m middle                    # middle のみ(機能更新時に確認)
+py -m uv run pytest -m large                     # large のみ(実モデル/実デバイス必須、手動)
+py -m uv run pytest -m "middle or large"         # リリース前まとめ実行
+py -m uv run pytest -m "" --override-ini="addopts="  # 既定 addopts を override して全部
+py -m uv run pytest --cov=src                    # カバレッジ表示
+py -m uv run pytest -v                           # テスト名表示
+py -m uv add <package>                           # 依存追加
 ```
+
+テスト階層の方針: `CLAUDE.md` の「テスト階層 (small / middle / large)」を参照。
 
 設計ドキュメント:
 - [アーキテクチャ](design/Architecture.html)
