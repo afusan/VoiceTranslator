@@ -113,6 +113,50 @@ class TestTranslate:
         with pytest.raises(SkipError):
             backend.translate("hi", "en", "ja")
 
+    def test_generate_called_with_repetition_guard_params(
+        self, fake_transformers
+    ) -> None:
+        """退化(degenerate output)抑止のパラメータが generate() に渡されること。
+
+        translations.jsonl L184 で観測された "同じ n-gram を延々と繰り返す" 現象は
+        greedy decoding + 抑止なし が原因。コンストラクタ既定値で各種抑止が入る。
+        """
+        _, _, fake_model = fake_transformers
+        from voice_translator.translator.nllb200_backend import (
+            Nllb200TranslatorBackend,
+        )
+
+        backend = Nllb200TranslatorBackend()
+        backend.translate("hello", "en", "ja")
+
+        fake_model.generate.assert_called_once()
+        kwargs = fake_model.generate.call_args.kwargs
+        # 既定で beam search、n-gram 重複制限、繰り返しペナルティ、early_stopping が入る
+        assert kwargs.get("num_beams") == 4
+        assert kwargs.get("no_repeat_ngram_size") == 3
+        assert kwargs.get("repetition_penalty") == 1.1
+        assert kwargs.get("early_stopping") is True
+
+    def test_generate_params_can_be_overridden(self, fake_transformers) -> None:
+        """コンストラクタ引数で生成パラメータを上書きできる。"""
+        _, _, fake_model = fake_transformers
+        from voice_translator.translator.nllb200_backend import (
+            Nllb200TranslatorBackend,
+        )
+
+        backend = Nllb200TranslatorBackend(
+            num_beams=1,
+            no_repeat_ngram_size=0,
+            repetition_penalty=1.0,
+            early_stopping=False,
+        )
+        backend.translate("hello", "en", "ja")
+        kwargs = fake_model.generate.call_args.kwargs
+        assert kwargs.get("num_beams") == 1
+        assert kwargs.get("no_repeat_ngram_size") == 0
+        assert kwargs.get("repetition_penalty") == 1.0
+        assert kwargs.get("early_stopping") is False
+
     def test_inference_exception_wrapped_fatal(self, fake_transformers) -> None:
         _, _, fake_model = fake_transformers
         fake_model.generate = MagicMock(side_effect=RuntimeError("oom"))

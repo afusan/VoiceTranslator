@@ -58,6 +58,10 @@ class Nllb200TranslatorBackend(TranslatorBackend):
         *,
         model_name: str = "facebook/nllb-200-distilled-600M",
         max_length: int = 512,
+        num_beams: int = 4,
+        no_repeat_ngram_size: int = 3,
+        repetition_penalty: float = 1.1,
+        early_stopping: bool = True,
     ) -> None:
         try:
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
@@ -74,6 +78,14 @@ class Nllb200TranslatorBackend(TranslatorBackend):
 
         self._model_name = model_name
         self._max_length = max_length
+        # 退化(degenerate output)抑止のための生成パラメータ。
+        # 既定値のまま(greedy + 抑止なし)だと長文かつ語彙反復の多い入力で
+        # 同じ n-gram に吸着し、max_length まで延々と繰り返してしまう
+        # (translations.jsonl L184 で観測された症状)。
+        self._num_beams = num_beams
+        self._no_repeat_ngram_size = no_repeat_ngram_size
+        self._repetition_penalty = repetition_penalty
+        self._early_stopping = early_stopping
 
     # ----------------------------------------------------------
     def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:
@@ -93,6 +105,10 @@ class Nllb200TranslatorBackend(TranslatorBackend):
                 **inputs,
                 forced_bos_token_id=self._tokenizer.convert_tokens_to_ids(tgt_nllb),
                 max_length=self._max_length,
+                num_beams=self._num_beams,
+                no_repeat_ngram_size=self._no_repeat_ngram_size,
+                repetition_penalty=self._repetition_penalty,
+                early_stopping=self._early_stopping,
             )
             result = self._tokenizer.batch_decode(
                 translated, skip_special_tokens=True
