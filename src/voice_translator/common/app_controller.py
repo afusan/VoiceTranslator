@@ -349,6 +349,22 @@ class AppController:
             self._ledger = UtteranceLedger()
             self._sequence = SequenceGenerator()
 
+            # パイプラインのバッファ容量(config.yaml の pipeline セクションで上書き可)。
+            captured_max_bytes = int(
+                self._config.get("pipeline", "captured_queue_max_bytes", default=500_000)
+            )
+            synthesized_max_bytes = int(
+                self._config.get(
+                    "pipeline", "synthesized_queue_max_bytes", default=500_000
+                )
+            )
+            recognized_size = int(
+                self._config.get("pipeline", "recognized_queue_size", default=10)
+            )
+            translated_size = int(
+                self._config.get("pipeline", "translated_queue_size", default=10)
+            )
+
             self._coord = PipelineCoordinator(
                 capture=self._backends[LayerKind.CAPTURE],
                 vad=self._backends[LayerKind.VAD],
@@ -364,6 +380,10 @@ class AppController:
                 tgt_lang=tgt_lang,
                 on_utterance_done=self._handle_utterance_done,
                 on_dropped=self._handle_dropped,
+                captured_queue_max_bytes=captured_max_bytes,
+                synthesized_queue_max_bytes=synthesized_max_bytes,
+                recognized_queue_size=recognized_size,
+                translated_queue_size=translated_size,
             )
         self._coord.start(
             capture_source_id=input_id, output_device_id=output_id

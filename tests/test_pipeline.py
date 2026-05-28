@@ -187,10 +187,12 @@ def _build(
     asr: AsrBackend | None = None,
     on_done: Callable[[dict], None] | None = None,
     on_dropped: Callable[[list[int], str], None] | None = None,
-    captured_queue_size: int = 50,
+    # PCM 系はバイト基準。160 サンプル float32 = 640B。
+    # default は十分大きい値(オーバーフローしない)、テスト側で 1 等を渡すと最小1件保持挙動になる。
+    captured_queue_max_bytes: int = 1_000_000,
+    synthesized_queue_max_bytes: int = 1_000_000,
     recognized_queue_size: int = 50,
     translated_queue_size: int = 50,
-    synthesized_queue_size: int = 50,
     text_logger: TextLogger | None = None,
 ) -> tuple[PipelineCoordinator, FakeOutput]:
     if chunks is None:
@@ -210,10 +212,10 @@ def _build(
         on_utterance_done=on_done,
         on_dropped=on_dropped,
         read_timeout=0.01,
-        captured_queue_size=captured_queue_size,
+        captured_queue_max_bytes=captured_queue_max_bytes,
+        synthesized_queue_max_bytes=synthesized_queue_max_bytes,
         recognized_queue_size=recognized_queue_size,
         translated_queue_size=translated_queue_size,
-        synthesized_queue_size=synthesized_queue_size,
     )
     return coord, output
 
@@ -338,10 +340,10 @@ class TestPipelineQueueOverflow:
 
         coord, _ = _build(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(40)],
-            captured_queue_size=1,
+            captured_queue_max_bytes=1,
             recognized_queue_size=1,
             translated_queue_size=1,
-            synthesized_queue_size=1,
+            synthesized_queue_max_bytes=1,
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         time.sleep(0.3)
@@ -356,10 +358,10 @@ class TestPipelineQueueOverflow:
         seen: list[tuple[list[int], str]] = []
         coord, _ = _build(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(30)],
-            captured_queue_size=1,
+            captured_queue_max_bytes=1,
             recognized_queue_size=1,
             translated_queue_size=1,
-            synthesized_queue_size=1,
+            synthesized_queue_max_bytes=1,
             on_dropped=lambda sids, stage: seen.append((sids, stage)),
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
@@ -376,10 +378,10 @@ class TestPipelineQueueOverflow:
         """ドロップしたら ledger からも消える(リークしない)。"""
         coord, _ = _build(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(40)],
-            captured_queue_size=1,
+            captured_queue_max_bytes=1,
             recognized_queue_size=1,
             translated_queue_size=1,
-            synthesized_queue_size=1,
+            synthesized_queue_max_bytes=1,
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         time.sleep(0.3)
@@ -394,16 +396,53 @@ class TestPipelineQueueOverflow:
 
         coord, _ = _build(
             chunks=[np.zeros(160, dtype=np.float32) for _ in range(30)],
-            captured_queue_size=1,
+            captured_queue_max_bytes=1,
             recognized_queue_size=1,
             translated_queue_size=1,
-            synthesized_queue_size=1,
+            synthesized_queue_max_bytes=1,
             on_dropped=lambda sids, stage: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         coord.start(capture_source_id="dummy", output_device_id="dummy_out")
         time.sleep(0.3)
         coord.stop()
         assert any("on_dropped callback failed" in r.message for r in caplog.records)
+
+    def test_pcm_queue_uses_byte_bounded(self) -> None:
+        """captured_queue / synthesized_queue が ByteBoundedQueue であること。"""
+        from voice_translator.common.bounded_queue import ByteBoundedQueue
+        coord, _ = _build()
+        assert isinstance(coord._captured_queue, ByteBoundedQueue)
+        assert isinstance(coord._synthesized_queue, ByteBoundedQueue)
+
+    def test_text_queue_uses_count_based(self) -> None:
+        """recognized_queue / translated_queue は従来の queue.Queue(件数基準)。"""
+        import queue as _queue
+        coord, _ = _build()
+        assert isinstance(coord._recognized_queue, _queue.Queue)
+        assert isinstance(coord._translated_queue, _queue.Queue)
+
+    def test_byte_overflow_evicts_oldest_pcm(self) -> None:
+        """PCM 系のバイト超過時、古いものから退避される(設定値を少し超える前提)。"""
+        seen: list[tuple[list[int], str]] = []
+        coord, _ = _build(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(40)],
+            captured_queue_max_bytes=1,  # 必ず溢れる(1件は残る)
+            on_dropped=lambda sids, stage: seen.append((sids, stage)),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        time.sleep(0.3)
+        coord.stop()
+
+        # captured_queue 由来の dropped 通知が来ているはず
+        captured_drops = [s for s in seen if "captured_queue" in s[1]]
+        assert captured_drops, f"captured_queue のドロップが記録されていない: {seen}"
+        # 退避された seq_id は単調増加(古い順に退避されている)
+        all_dropped_seqs: list[int] = []
+        for sids, _ in captured_drops:
+            all_dropped_seqs.extend(sids)
+        assert all_dropped_seqs == sorted(all_dropped_seqs), (
+            f"退避順が古い順になっていない: {all_dropped_seqs}"
+        )
 
 
 # ============================================================
@@ -567,7 +606,7 @@ def _build_with_backends(
         tgt_lang="ja",
         on_utterance_done=on_done,
         read_timeout=0.01,
-        captured_queue_size=50, recognized_queue_size=50, translated_queue_size=50, synthesized_queue_size=50,
+        captured_queue_max_bytes=1_000_000, recognized_queue_size=50, translated_queue_size=50, synthesized_queue_max_bytes=1_000_000,
     )
     return coord, output
 
@@ -933,7 +972,7 @@ class TestPipelineQueueFullConcurrency:
             tgt_lang="ja",
             on_dropped=lambda sids, stage: seen_dropped.append((sids, stage)),
             read_timeout=0.01,
-            captured_queue_size=1, recognized_queue_size=1, translated_queue_size=50, synthesized_queue_size=50,
+            captured_queue_max_bytes=1, recognized_queue_size=1, translated_queue_size=50, synthesized_queue_max_bytes=1_000_000,
         )
 
         coord2.start(capture_source_id="dummy", output_device_id="dummy_out")
