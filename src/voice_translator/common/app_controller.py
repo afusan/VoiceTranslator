@@ -351,11 +351,13 @@ class AppController:
 
             # パイプラインのバッファ容量(config.yaml の pipeline セクションで上書き可)。
             captured_max_bytes = int(
-                self._config.get("pipeline", "captured_queue_max_bytes", default=500_000)
+                self._config.get(
+                    "pipeline", "captured_queue_max_bytes", default=10_000_000
+                )
             )
             synthesized_max_bytes = int(
                 self._config.get(
-                    "pipeline", "synthesized_queue_max_bytes", default=500_000
+                    "pipeline", "synthesized_queue_max_bytes", default=5_000_000
                 )
             )
             recognized_size = int(

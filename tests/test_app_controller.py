@@ -430,8 +430,8 @@ class TestPipelineQueueConfig:
         self, populated_registry, config
     ) -> None:
         ctrl = AppController(registry=populated_registry, config=config)
-        assert ctrl.get_setting("pipeline", "captured_queue_max_bytes") == 500_000
-        assert ctrl.get_setting("pipeline", "synthesized_queue_max_bytes") == 500_000
+        assert ctrl.get_setting("pipeline", "captured_queue_max_bytes") == 10_000_000
+        assert ctrl.get_setting("pipeline", "synthesized_queue_max_bytes") == 5_000_000
         assert ctrl.get_setting("pipeline", "recognized_queue_size") == 10
         assert ctrl.get_setting("pipeline", "translated_queue_size") == 10
 
