@@ -64,10 +64,12 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-# PyTorch の CUDA 12.1 ビルド。--extra cuda のときだけ参照される。
-# CUDA バージョンを上げたい場合はここの URL を `cu124` 等に変える。
+# PyTorch の CUDA 12.4 ビルド。--extra cuda のときだけ参照される。
+# cu121 だと torch 2.5.1 までしか無く、transformers の torch>=2.6 要求(CVE-2025-32434)を
+# 満たせないため cu124 を採用。CUDA バージョンを更に上げる場合はここを `cu126` 等に変える。
+# 必要なドライババージョン目安: cu124 -> 525+、cu126 -> 555+。
 name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu121"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [dependency-groups]
