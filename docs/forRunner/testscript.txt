@@ -6,20 +6,14 @@
 # 環境変更や新ランナー追加のたびに、ここを通しで叩き直して回帰確認に使う。
 #
 # 前提:
-#   - PowerShell 上で実行(コピペでそのまま動くようワンライナー)
+#   - cmd / PowerShell どちらでも各行をコピペでそのまま実行できる(変数を
+#       使わず全パスをハードコード)
 #   - 入力データは docs/forRunner/testData/ に同梱(本体 GUI で
 #       pipeline.dump.enabled: true にして 2026-05-28 に取得した dump の
 #       seq_0001 セット + run.json)。今後のミドルテストでも同じものを使う
-#   - 出力は ./tmp/runner_verify/ に書く(`.gitignore` 配下)
+#   - 出力先 tmp/runner_verify/ はランナー側で自動作成(mkdir 不要)
 #   - 観測時刻欄は参考(マシン: feature/dev-runners-and-dump 検証時)
 # =============================================================================
-
-
-# -----------------------------------------------------------------------------
-# 0. 出力ディレクトリ準備 + 入力サンプルの変数化
-# -----------------------------------------------------------------------------
-mkdir -p tmp/runner_verify
-$DUMP = "docs/forRunner/testData"
 
 
 # =============================================================================
@@ -32,24 +26,24 @@ $DUMP = "docs/forRunner/testData"
 # ---- A-1. runner_asr (CPU / int8) ------------------------------------------
 # 観測: transcribe 完了 2107 ms / lang=en / chars=112
 # device_resolved: cpu, compute_type_resolved: int8
-py -m uv run python -m voice_translator.dev.runner_asr --input $DUMP/seq_0001_vad.wav --device cpu --compute-type int8 --output tmp/runner_verify/asr_cpu_seq1.json -v
+py -m uv run python -m voice_translator.dev.runner_asr --input docs/forRunner/testData/seq_0001_vad.wav --device cpu --compute-type int8 --output tmp/runner_verify/asr_cpu_seq1.json -v
 
 
 # ---- A-2. runner_translator (CPU) ------------------------------------------
 # 観測: translate 完了 1766 ms / out_chars=61
 # 訳文はダンプ済み seq_0001_translate.json と byte-identical
-py -m uv run python -m voice_translator.dev.runner_translator --input $DUMP/seq_0001_asr.json --device cpu --tgt-lang ja --output tmp/runner_verify/tr_cpu_seq1.json -v
+py -m uv run python -m voice_translator.dev.runner_translator --input docs/forRunner/testData/seq_0001_asr.json --device cpu --tgt-lang ja --output tmp/runner_verify/tr_cpu_seq1.json -v
 
 
 # ---- A-3. runner_tts (SAPI; GPU/CPU 概念なし。CPU env で動けば十分) -------
 # 観測: synthesize 完了 287 ms / 183723 samples @ 22050 Hz
-py -m uv run python -m voice_translator.dev.runner_tts --input $DUMP/seq_0001_translate.json --output tmp/runner_verify/tts_seq1.wav -v
+py -m uv run python -m voice_translator.dev.runner_tts --input docs/forRunner/testData/seq_0001_translate.json --output tmp/runner_verify/tts_seq1.wav -v
 
 
 # ---- A-4. runner_pipeline (asr -> translate, CPU) --------------------------
 # 観測: stage translate 5954 ms (含モデルロード) / 1 unit
 # seq_0001_asr.json と seq_0001_translate.json がダンプ済みと一致
-py -m uv run python -m voice_translator.dev.runner_pipeline --from asr --to translate --input $DUMP/seq_0001_vad.wav --out-dir tmp/runner_verify/pipeline_cpu/ --device cpu --compute-type int8 --src-lang en --tgt-lang ja -v
+py -m uv run python -m voice_translator.dev.runner_pipeline --from asr --to translate --input docs/forRunner/testData/seq_0001_vad.wav --out-dir tmp/runner_verify/pipeline_cpu/ --device cpu --compute-type int8 --src-lang en --tgt-lang ja -v
 
 
 # =============================================================================
@@ -60,7 +54,7 @@ py -m uv run python -m voice_translator.dev.runner_pipeline --from asr --to tran
 # 観測: "FatalError: faster-whisper 推論失敗: Library cublas64_12.dll is not
 #       found or cannot be loaded"
 # これは「CPU env で cuda 強制」した場合の正しい失敗の仕方
-py -m uv run python -m voice_translator.dev.runner_asr --input $DUMP/seq_0001_vad.wav --device cuda --compute-type int8_float16 --output tmp/runner_verify/asr_should_fail.json -v
+py -m uv run python -m voice_translator.dev.runner_asr --input docs/forRunner/testData/seq_0001_vad.wav --device cuda --compute-type int8_float16 --output tmp/runner_verify/asr_should_fail.json -v
 
 
 # =============================================================================
@@ -86,19 +80,19 @@ py -m uv run --extra cuda python -c "import torch; print('torch:', torch.__versi
 # ---- D-1. runner_asr (GPU / int8_float16, 明示) ----------------------------
 # 観測: transcribe 完了 932 ms / lang=en / chars=112
 # CPU の 2107 ms に対し約 2.3× 高速。テキストは byte-identical
-py -m uv run --extra cuda python -m voice_translator.dev.runner_asr --input $DUMP/seq_0001_vad.wav --device cuda --compute-type int8_float16 --output tmp/runner_verify/asr_gpu_seq1.json -v
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr --input docs/forRunner/testData/seq_0001_vad.wav --device cuda --compute-type int8_float16 --output tmp/runner_verify/asr_gpu_seq1.json -v
 
 
 # ---- D-2. runner_translator (GPU 明示) -------------------------------------
 # 観測: translate 完了 730 ms (CPU の 1766 ms に対し約 2.4× 高速)
 # 訳文 byte-identical
-py -m uv run --extra cuda python -m voice_translator.dev.runner_translator --input $DUMP/seq_0001_asr.json --device cuda --tgt-lang ja --output tmp/runner_verify/tr_gpu_seq1.json -v
+py -m uv run --extra cuda python -m voice_translator.dev.runner_translator --input docs/forRunner/testData/seq_0001_asr.json --device cuda --tgt-lang ja --output tmp/runner_verify/tr_gpu_seq1.json -v
 
 
 # ---- D-3. runner_pipeline (asr -> translate, GPU) --------------------------
 # 観測: stage translate 5112 ms (含モデルロード) / 1 unit
 # 各段出力 byte-identical
-py -m uv run --extra cuda python -m voice_translator.dev.runner_pipeline --from asr --to translate --input $DUMP/seq_0001_vad.wav --out-dir tmp/runner_verify/pipeline_gpu/ --device cuda --compute-type int8_float16 --src-lang en --tgt-lang ja -v
+py -m uv run --extra cuda python -m voice_translator.dev.runner_pipeline --from asr --to translate --input docs/forRunner/testData/seq_0001_vad.wav --out-dir tmp/runner_verify/pipeline_gpu/ --device cuda --compute-type int8_float16 --src-lang en --tgt-lang ja -v
 
 
 # =============================================================================
@@ -112,13 +106,13 @@ py -m uv run --extra cuda python -m voice_translator.dev.runner_pipeline --from 
 # 出力 JSON の runner フィールドに:
 #   "device_requested": "auto", "device_resolved": "cuda",
 #   "compute_type_requested": "auto", "compute_type_resolved": "int8_float16"
-py -m uv run --extra cuda python -m voice_translator.dev.runner_asr --input $DUMP/seq_0001_vad.wav --output tmp/runner_verify/asr_gpu_default.json -v
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr --input docs/forRunner/testData/seq_0001_vad.wav --output tmp/runner_verify/asr_gpu_default.json -v
 
 
 # ---- E-2. GPU env で意図的に CPU 走行を強制(同 env での速度比較用) -------
 # 観測: transcribe 完了 2090 ms (D-1 と同じ env でも CPU 強制で CPU 速度に)
 # 出力 JSON: device_resolved=cpu, compute_type_resolved=int8
-py -m uv run --extra cuda python -m voice_translator.dev.runner_asr --input $DUMP/seq_0001_vad.wav --device cpu --compute-type int8 --output tmp/runner_verify/asr_force_cpu_on_gpu_env.json -v
+py -m uv run --extra cuda python -m voice_translator.dev.runner_asr --input docs/forRunner/testData/seq_0001_vad.wav --device cpu --compute-type int8 --output tmp/runner_verify/asr_force_cpu_on_gpu_env.json -v
 
 
 # =============================================================================
