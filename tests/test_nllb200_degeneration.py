@@ -3,9 +3,8 @@
 translations.jsonl L184 で観測された「同じ語句を延々と繰り返す」現象を
 **実モデル**(NLLB-200 distilled 600M)で再現し、修正後にゼロになることを確認する。
 
-実モデルを使うため遅い(モデル初期化 ~30s + 翻訳 ~2-3s × 10回)。`slow` マーカー付き。
-通常は `pytest -m "not slow"` で除外し、明示的に `pytest -m slow tests/test_nllb200_degeneration.py`
-で起動する。
+実モデルを使うため遅い(モデル初期化 ~30s + 翻訳 ~2-3s × 10回)。`large` マーカー付き。
+既定では除外され、明示的に `pytest -m large tests/test_nllb200_degeneration.py` で起動する。
 """
 
 from __future__ import annotations
@@ -90,7 +89,7 @@ class TestNgramHelpers:
 
 
 # ============================================================
-@pytest.mark.slow
+@pytest.mark.large
 class TestL184DegenerationRepro:
     """実モデルを使って L184 入力の退化を観測する。
 

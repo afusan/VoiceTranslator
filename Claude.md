@@ -78,6 +78,30 @@ docs/
 - **音声I/O テスト**: 実機依存を避けるため、**録音済みWAVを入力にしたE2Eテスト**を主軸にし、各バックエンドはsmallテストで個別検証する。
 - **カバレッジ目標**: [TBD: 実装が進んだ時点で数値設定]
 
+## テスト階層 (small / middle / large)
+Google テストピラミッドに対応した pytest マーカーで階層を表現する。
+
+| 階層 | マーカー | 内容 | 実行タイミング |
+|---|---|---|---|
+| **small** | (なし) | モック中心、I/O なし、< 1 秒/件 | 毎回(default) |
+| **middle** | `@pytest.mark.middle` | 実コンポーネントだが軽量(ConfigStore/Logger 実体、WAV ファイル読込 等) | リリース前 / 機能更新時 |
+| **large** | `@pytest.mark.large` | 実モデル/実デバイス必須(NLLB-200 推論、Whisper 推論、実マイク等) | 手動で明示実行のみ |
+
+### 実行コマンド
+```bash
+py -m uv run pytest                                 # small のみ(既定で middle/large 除外)
+py -m uv run pytest -m middle                       # middle のみ
+py -m uv run pytest -m large                        # large のみ
+py -m uv run pytest -m "middle or large"            # リリース前の確認用
+py -m uv run pytest -m "" --override-ini="addopts=" # 全部(addopts を強制 override)
+```
+
+### マーカー付与の方針
+- 新規テストは原則 small。実装が要求する場合のみ middle/large を選ぶ。
+- middle: 「実コンポーネントだが MVP 環境内で完結し、数秒以内に終わる」
+- large: 「外部リソース(モデル DL 済み前提 / 実デバイス)を必要とし、数十秒以上かかる」
+- large は **CI に組み込まない**(リモート CI 不要方針)。手元での明示確認のみ。
+
 # 実装について
 - `/src` 以下にコード・プロジェクトを配置する。
 - **基本は設計に沿う**。役割分担に従って実装する。
