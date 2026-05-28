@@ -303,6 +303,74 @@ class TestConfigDefaults:
         ctrl = AppController(registry=populated_registry, config=config)
         assert ctrl.get_setting("backends_config", "sapi", "rate") == 180
 
+    def test_process_time_default_off(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_setting("log", "process_time_enabled") is False
+
+
+class TestProcessTimeLoggerWiring:
+    """AppController から ProcessTimeLogger への配線確認。"""
+
+    def test_logger_enabled_when_config_true(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        import threading
+        from voice_translator.common.process_time_logger import ProcessTimeLogger
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        ctrl.set_setting("log", "process_time_enabled", True)
+
+        started = threading.Event()
+        ctrl.start_pipeline_async(on_started=lambda: started.set())
+        try:
+            assert started.wait(timeout=3.0)
+            assert isinstance(ctrl._process_time_logger, ProcessTimeLogger)
+            assert ctrl._process_time_logger.enabled is True
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_logger_disabled_when_config_false(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        import threading
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        # process_time_enabled は既定 False のままにする
+
+        started = threading.Event()
+        ctrl.start_pipeline_async(on_started=lambda: started.set())
+        try:
+            assert started.wait(timeout=3.0)
+            assert ctrl._process_time_logger.enabled is False
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_handle_utterance_done_invokes_logger(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        """完了通知時に CSV へ追記される(モック record で動作確認)。"""
+        from voice_translator.common.process_time_logger import ProcessTimeLogger
+
+        csv_path = tmp_path / "processtime.csv"
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl._process_time_logger = ProcessTimeLogger(csv_path, enabled=True)
+
+        record = _sample_record(seq_id=99)
+        ctrl._handle_utterance_done(record)
+
+        assert csv_path.exists(), "CSV が作成されていない"
+        with csv_path.open("r", encoding="utf-8") as f:
+            content = f.read()
+        # ヘッダ + データ 1 行
+        assert "seq_id" in content
+        assert "99" in content
+
 
 class TestLoadModels:
     """ロード/開始/停止 分離 の挙動テスト。"""

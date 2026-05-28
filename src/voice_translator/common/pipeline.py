@@ -294,6 +294,8 @@ class PipelineCoordinator:
 
             msg: PipelineMessage = item
             payload: RawPayload = msg.payload
+            # t_asr_start: backend 呼び出しの直前(キュー待ち時間と純処理時間を切り分けるため)
+            self._ledger.mark_time(msg.seq_id, "t_asr_start")
             try:
                 text, lang = self._asr.transcribe(payload.pcm, payload.src_lang_hint)
             except Exception as exc:  # noqa: BLE001
@@ -333,6 +335,7 @@ class PipelineCoordinator:
 
             msg: PipelineMessage = item
             payload: TranscribedPayload = msg.payload
+            self._ledger.mark_time(msg.seq_id, "t_translate_start")
             try:
                 tgt_text = self._translator.translate(
                     payload.src_text, payload.src_lang, self._tgt_lang
@@ -377,6 +380,7 @@ class PipelineCoordinator:
 
             msg: PipelineMessage = item
             payload: TranslatedPayload = msg.payload
+            self._ledger.mark_time(msg.seq_id, "t_tts_start")
             try:
                 pcm, samplerate = self._tts.synthesize(payload.tgt_text, payload.tgt_lang)
             except Exception as exc:  # noqa: BLE001
@@ -406,6 +410,7 @@ class PipelineCoordinator:
 
             msg: PipelineMessage = item
             payload: SynthesizedPayload = msg.payload
+            self._ledger.mark_time(msg.seq_id, "t_playback_start")
             try:
                 self._output.play(payload.tts_pcm, payload.tts_samplerate)
             except Exception as exc:  # noqa: BLE001

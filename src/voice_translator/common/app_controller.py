@@ -36,6 +36,7 @@ from .error_handler import ErrorHandler
 from .ledger import UtteranceLedger
 from .logger import TextLogger, TranslationLogger
 from .notification_throttle import NotificationThrottle
+from .process_time_logger import ProcessTimeLogger
 from .pipeline import PipelineCoordinator
 from .sequence import SequenceGenerator
 from .types import CaptureSource, LayerKind, ModelStatus, OutputDevice
@@ -58,6 +59,7 @@ class AppController:
         self._coord: PipelineCoordinator | None = None
         self._translation_logger: TranslationLogger | None = None
         self._text_logger: TextLogger | None = None
+        self._process_time_logger: ProcessTimeLogger | None = None
         self._ledger: UtteranceLedger | None = None
         self._sequence: SequenceGenerator | None = None
         self._loader_thread: threading.Thread | None = None
@@ -331,6 +333,12 @@ class AppController:
                 src_enabled=src_text_enabled,
                 tgt_enabled=tgt_text_enabled,
             )
+            process_time_enabled = bool(
+                self._config.get("log", "process_time_enabled", default=False)
+            )
+            self._process_time_logger = ProcessTimeLogger(
+                log_dir / "processtime.csv", enabled=process_time_enabled
+            )
 
             throttle_sec = float(
                 self._config.get("notifications", "throttle_sec", default=5.0)
@@ -415,6 +423,11 @@ class AppController:
                 self._translation_logger.write_record(record)
         except Exception:  # noqa: BLE001
             self._logger.exception("翻訳ログ(jsonl)書き出しに失敗")
+        try:
+            if self._process_time_logger is not None:
+                self._process_time_logger.write_record(record)
+        except Exception:  # noqa: BLE001
+            self._logger.exception("処理時間ログ(csv)書き出しに失敗")
         try:
             self._on_utterance_done(record)
         except Exception:  # noqa: BLE001

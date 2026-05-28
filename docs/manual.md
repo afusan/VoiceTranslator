@@ -235,6 +235,41 @@ pipeline:
   - メモリ消費を抑えたい → 各 `*_max_bytes` を 200_000 〜 300_000 に下げる
 - 設定変更後はアプリ再起動で反映(動作中の Coordinator には反映されない)。
 
+### 各レイヤの処理時間を CSV で記録する(プロファイル用)
+レイテンシのボトルネックを調査したいときに使う。`config.yaml` を編集して有効化:
+```yaml
+log:
+  directory: ./logs
+  process_time_enabled: true   # ./logs/processtime.csv に追記される
+```
+
+`processtime.csv` の各列(1 行 = 1 発話):
+
+| 列 | 意味 |
+|---|---|
+| `timestamp` | 書き込み時刻(ISO 形式) |
+| `seq_id` | 発話 ID(他ログと突き合わせ可) |
+| `src_lang` / `tgt_lang` | 言語ペア |
+| `utterance_ms` | `t_vad_end - t_capture`(発話の音声長 + VAD ラグ) |
+| `asr_wait_ms` | `captured_queue` で待たされた時間 |
+| `asr_proc_ms` | ASR の純処理時間(`transcribe` の所要) |
+| `translate_wait_ms` | `recognized_queue` で待たされた時間 |
+| `translate_proc_ms` | 翻訳の純処理時間 |
+| `tts_wait_ms` | `translated_queue` で待たされた時間 |
+| `tts_proc_ms` | TTS の純処理時間 |
+| `output_wait_ms` | `synthesized_queue` で待たされた時間 |
+| `output_proc_ms` | `output.play()` の所要時間 |
+| `total_ms` | `t_playback - t_capture`(端から端まで) |
+| `src_chars` / `tgt_chars` | テキスト長(参考値) |
+
+- 既定 **OFF**。プロファイルしたい時だけ ON にする(常時 ON でも書込みは軽量)。
+- 追記モード。起動ごとに継続される(ローテーションなし)。
+- 失敗等で欠損したマーカーがあると、その列は空欄。
+- ヒント:
+  - `*_proc_ms` が大きい段が処理ボトルネック
+  - `*_wait_ms` が大きい段は **直前のステージが詰まっている**(or バッファが小さい)
+  - 例: `translate_wait_ms` が大きいなら ASR の出力速度に翻訳が追いつけていない
+
 ### TTS の読み上げ速度を変える
 SAPI(pyttsx3) の rate を `config.yaml` で変更可能:
 ```yaml
