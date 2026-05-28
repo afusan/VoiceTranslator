@@ -38,11 +38,28 @@ py -m pip install --user uv                       # pip経由
 # or: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  # 公式
 
 # プロジェクトを取得後、依存と Python 3.11 を自動セットアップ
-py -m uv sync
+# CPU 専用環境(誰でも動く、推奨初手):
+py -m uv sync --extra cpu
+
+# NVIDIA GPU を持っているなら CUDA 版にする(自動で GPU 使用、+3GB):
+# py -m uv sync --extra cuda
 ```
 
 `uv sync` で `.venv/` フォルダに仮想環境が作られ、Python 3.11 と必要なライブラリが入ります。
 初回は数百MB〜数GBのダウンロードが入るので、ネット環境に注意してください。
+
+### `--extra cpu` と `--extra cuda` の選び方
+| 環境 | 推奨 | 備考 |
+|---|---|---|
+| Windows / Linux (NVIDIA GPU 無し) | `--extra cpu` | CPU でしか動かない |
+| Windows / Linux + NVIDIA GPU(RTX 等) | `--extra cuda` | 翻訳/ASR が 5〜15 倍速 |
+| macOS (Apple Silicon: M1/M2/M3) | `--extra cpu` | MPS が自動で使われる |
+| macOS (Intel) | `--extra cpu` | CPU のみ |
+| AMD GPU | `--extra cpu` | ROCm は本リリース非対応 |
+
+- **CUDA Toolkit のインストールは不要**(`--extra cuda` で取得する wheel に CUDA ランタイムが同梱されています)。NVIDIA ドライバが入っていれば動きます(`nvidia-smi` で確認)。
+- 2 つの extras は **排他**(同時に指定しないこと)。
+- 後から切り替えたい場合は再度 `uv sync --extra <別の方>` で OK(差分だけインストールされます)。
 
 ---
 
