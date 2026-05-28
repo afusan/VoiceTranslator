@@ -69,6 +69,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sapi": {
             "rate": 180,  # 読み上げ速度(WPM相当)。早口にするなら 220 等。
         },
+        "silero": {
+            # 発話区切り検出の細部。長文連続発話(ニュース読み上げ等)で 1 発話が肥大化して
+            # 翻訳/TTS が破綻するのを避けるため、特に max_speech_sec の上限が重要。
+            "threshold": 0.5,         # speech probability の判定しきい値(0〜1)
+            "min_silence_ms": 500,    # 発話終了とみなす無音期間(ms)。下げると早く区切れる
+            "speech_pad_ms": 100,     # 発話前後の余白(ms)
+            "max_speech_sec": 8.0,    # 1 発話の最大長(秒)。超えたら強制区切り。0 で無効化
+        },
     },
 }
 

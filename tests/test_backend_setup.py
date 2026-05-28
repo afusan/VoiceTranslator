@@ -102,3 +102,62 @@ class TestSapiRateConfigIntegration:
         registry.create(LayerKind.TTS, "sapi")
         # 不正値は既定 180 にフォールバック
         patched_backend_setup["SapiTtsBackend"].assert_called_with(rate=180)
+
+
+class TestSileroVadConfigIntegration:
+    """Silero VAD のパラメータが config から読まれることを検証。"""
+
+    def test_default_params_without_config(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)  # config なし
+        registry.create(LayerKind.VAD, "silero")
+        # 既定値で呼ばれる
+        patched_backend_setup["SileroVadBackend"].assert_called_with(
+            threshold=0.5,
+            min_silence_ms=500,
+            speech_pad_ms=100,
+            max_speech_sec=8.0,
+        )
+
+    def test_params_read_from_config(self, patched_backend_setup, tmp_path) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "silero", "threshold", 0.6)
+        config.set("backends_config", "silero", "min_silence_ms", 200)
+        config.set("backends_config", "silero", "speech_pad_ms", 50)
+        config.set("backends_config", "silero", "max_speech_sec", 5.0)
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.VAD, "silero")
+        patched_backend_setup["SileroVadBackend"].assert_called_with(
+            threshold=0.6,
+            min_silence_ms=200,
+            speech_pad_ms=50,
+            max_speech_sec=5.0,
+        )
+
+    def test_invalid_values_fall_back_to_defaults(
+        self, patched_backend_setup, tmp_path
+    ) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "silero", "threshold", "bad")
+        config.set("backends_config", "silero", "min_silence_ms", "bad")
+        config.set("backends_config", "silero", "max_speech_sec", None)
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.VAD, "silero")
+        patched_backend_setup["SileroVadBackend"].assert_called_with(
+            threshold=0.5,
+            min_silence_ms=500,
+            speech_pad_ms=100,
+            max_speech_sec=8.0,
+        )

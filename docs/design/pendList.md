@@ -72,11 +72,12 @@
 ---
 
 ## [2026-05-26] パイプラインステージのパラメータ GUI 化
-- **内容**: VAD の `min_silence_ms` / Whisper の `beam_size` 等、現状ハードコード/コンストラクタ既定値のパラメータをユーザが GUI から調整できるようにする。
+- **内容**: VAD の `min_silence_ms` / `max_speech_sec` / `threshold`、Whisper の `beam_size` 等、現状ハードコード/コンストラクタ既定値のパラメータをユーザが GUI から調整できるようにする。
 - **背景**: 値を変えるたびにコード書き換え+再起動が必要で試行錯誤しづらい。
 - **対応の見送り理由**: バックエンドを切替えるとパラメータの**有無/意味/値域**がバックエンドごとに違うため、素朴に GUI 化すると「切替えたら値が消える/効かない/意味が変わる」事故が起きる。設計検討が必要(プリセット方式 vs バックエンド固有パラメータ動的展開 vs ハイブリッド)。
 - **再検討トリガ**: バックエンドを実際に複数登録するフェーズ(Phase 2)に入った時。
 - **備考**: 当面は `ConfigStore` 経由で `config.yaml` を手編集で対応する。推奨設計はプリセット(quality: fast/balanced/accurate)+ Advanced 展開のハイブリッド。
+- **[追記 2026-05-28] VAD パラメータ群**: ボトルネック調査(`feature/vad-max-utterance-length`)で `min_silence_ms` / `max_speech_sec` を `config.yaml` から触れるようにした(`backends_config.silero.{min_silence_ms, max_speech_sec, threshold, speech_pad_ms}`)。**レイヤ別「設定」ダイアログから編集可** にする UI 連携はここに統合する(`layer_settings_schema` の VAD レイヤに `applies_when_backend="silero"` で追加)。本作業はサイドチャットで保留。
 
 ---
 
