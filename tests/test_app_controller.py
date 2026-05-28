@@ -303,6 +303,125 @@ class TestConfigDefaults:
         assert ctrl.get_setting("backends_config", "sapi", "rate") == 180
 
 
+class TestLoadModels:
+    """ロード/開始/停止 分離 の挙動テスト。"""
+
+    def test_load_models_populates_cache(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.is_loaded is False
+        ctrl.load_models()
+        assert ctrl.is_loaded is True
+        # 各レイヤがキャッシュに居る
+        for layer in LayerKind:
+            assert layer in ctrl._backends
+
+    def test_load_models_is_idempotent(
+        self, populated_registry, config
+    ) -> None:
+        """二度呼んでも余計なインスタンス化が走らない(キャッシュが効く)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        before = {layer: ctrl._backends[layer] for layer in LayerKind}
+        ctrl.load_models()
+        after = {layer: ctrl._backends[layer] for layer in LayerKind}
+        # 同一インスタンス(再生成されていない)
+        for layer in LayerKind:
+            assert before[layer] is after[layer]
+
+    def test_stop_pipeline_keeps_backends(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        """停止してもバックエンドは常駐し続ける(次回 Start でロード不要)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+
+        ctrl.start_pipeline()
+        try:
+            assert ctrl.is_running
+            assert ctrl.is_loaded
+        finally:
+            ctrl.stop_pipeline()
+
+        # 停止後も is_loaded のまま
+        assert ctrl.is_loaded
+        # 同一インスタンスが残っている
+        before = dict(ctrl._backends)
+        ctrl.start_pipeline()
+        try:
+            after = dict(ctrl._backends)
+            for layer in LayerKind:
+                assert before[layer] is after[layer], (
+                    f"{layer}: stop→start でバックエンドが作り直された"
+                )
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_backend_change_evicts_only_that_layer(
+        self, populated_registry, config
+    ) -> None:
+        """バックエンド名を変えると、当該レイヤだけがキャッシュから外れる。"""
+        # ASR にもう1つ実装を追加して切り替えできるようにする
+        populated_registry.register(
+            LayerKind.ASR, "alt_asr", _fake_simple_backend
+        )
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+
+        kept_layers = {l: ctrl._backends[l] for l in LayerKind if l != LayerKind.ASR}
+        old_asr = ctrl._backends[LayerKind.ASR]
+
+        ctrl.set_setting("backends", "asr", "alt_asr")
+        # ASR は破棄され、再ロードが起きる(別スレッドだが Mock の生成は瞬時)
+        import time
+        for _ in range(20):
+            if LayerKind.ASR in ctrl._backends:
+                break
+            time.sleep(0.05)
+        assert LayerKind.ASR in ctrl._backends, "ASR が再ロードされていない"
+        new_asr = ctrl._backends[LayerKind.ASR]
+        assert new_asr is not old_asr, "ASR インスタンスが置き換わっていない"
+        # 他レイヤは触られていない
+        for layer in LayerKind:
+            if layer == LayerKind.ASR:
+                continue
+            assert ctrl._backends[layer] is kept_layers[layer], (
+                f"{layer}: 設定変更で触らなくていいキャッシュが破棄された"
+            )
+
+    def test_load_models_async_invokes_on_done(
+        self, populated_registry, config
+    ) -> None:
+        import threading
+        ctrl = AppController(registry=populated_registry, config=config)
+        done = threading.Event()
+        ctrl.load_models_async(on_done=lambda: done.set())
+        assert done.wait(timeout=3.0), "on_done が呼ばれない"
+        assert ctrl.is_loaded
+
+    def test_start_after_preload_does_not_recreate_backends(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        """先に load_models しておけば、Start でバックエンドは作り直されない。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+
+        ctrl.load_models()
+        snapshot = dict(ctrl._backends)
+
+        ctrl.start_pipeline()
+        try:
+            for layer in LayerKind:
+                assert ctrl._backends[layer] is snapshot[layer]
+        finally:
+            ctrl.stop_pipeline()
+
+
 class TestHandleDropped:
     """AppController._handle_dropped(seq_ids, stage) のシグネチャ確認。
 

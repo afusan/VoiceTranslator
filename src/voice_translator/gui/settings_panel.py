@@ -60,9 +60,10 @@ class SettingsPanel(ctk.CTkFrame):
         )
 
         row = 1
-        # バックエンド選択 + ステータス
+        # レイヤ実装の選択 + モデルステータス
+        # ("バックエンド" 表記はユーザ向けには冗長なので外し、ラベル単体に統一)
         for layer, label in _LAYER_LABELS:
-            ctk.CTkLabel(self, text=f"{label} バックエンド:").grid(
+            ctk.CTkLabel(self, text=f"{label}:").grid(
                 row=row, column=0, sticky="w", padx=10, pady=2
             )
             names = self._controller.list_backends(layer) or ["(未登録)"]
@@ -81,6 +82,13 @@ class SettingsPanel(ctk.CTkFrame):
             status_label.grid(row=row, column=2, sticky="ew", padx=(4, 10), pady=2)
             self._status_labels[layer] = status_label
             row += 1
+
+        # レイヤ実装グループとデバイス選択グループの境界線(視覚的な区切り)
+        separator = ctk.CTkFrame(self, height=2, fg_color="#475569")
+        separator.grid(
+            row=row, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 8)
+        )
+        row += 1
 
         # 入力デバイス
         ctk.CTkLabel(self, text="入力デバイス:").grid(
