@@ -39,6 +39,7 @@ from .notification_throttle import NotificationThrottle
 from .process_time_logger import ProcessTimeLogger
 from .pipeline import PipelineCoordinator
 from .sequence import SequenceGenerator
+from .stage_dump import NullStageDumpWriter, StageDumpWriter
 from .types import CaptureSource, LayerKind, ModelStatus, OutputDevice
 
 
@@ -63,6 +64,9 @@ class AppController:
         self._ledger: UtteranceLedger | None = None
         self._sequence: SequenceGenerator | None = None
         self._loader_thread: threading.Thread | None = None
+        # ステージ間データダンプ(検証用)。pipeline.dump.enabled=true のとき有効。
+        # ライフサイクル: start_pipeline で生成・start_run、stop_pipeline で stop_run。
+        self._stage_dump: StageDumpWriter | NullStageDumpWriter | None = None
 
         # バックエンド実体のキャッシュ(レイヤごとに1つ)。
         # load_models() で埋め、backends 設定の変更時に該当レイヤを破棄して再ロードする。
@@ -394,6 +398,10 @@ class AppController:
                 self._config.get("pipeline", "translated_queue_size", default=10)
             )
 
+            # ステージ間ダンプ(検証用)。enabled=false なら NullStageDumpWriter を注入。
+            self._stage_dump = self._build_stage_dump()
+            self._stage_dump.start_run(self._build_dump_meta(input_id, output_id))
+
             self._coord = PipelineCoordinator(
                 capture=self._backends[LayerKind.CAPTURE],
                 vad=self._backends[LayerKind.VAD],
@@ -413,6 +421,7 @@ class AppController:
                 synthesized_queue_max_bytes=synthesized_max_bytes,
                 recognized_queue_size=recognized_size,
                 translated_queue_size=translated_size,
+                dump=self._stage_dump,
             )
         self._coord.start(
             capture_source_id=input_id, output_device_id=output_id
@@ -423,6 +432,44 @@ class AppController:
         if self._coord is not None:
             self._coord.stop()
             self._coord = None
+        if self._stage_dump is not None:
+            try:
+                self._stage_dump.stop_run()
+            except Exception:  # noqa: BLE001 - ダンプ停止失敗で本体は止めない
+                self._logger.exception("StageDumpWriter.stop_run に失敗")
+            self._stage_dump = None
+
+    def _build_stage_dump(self) -> StageDumpWriter | NullStageDumpWriter:
+        """ConfigStore の `pipeline.dump.*` に基づき writer を生成する。
+
+        enabled=false / 不正な設定の場合は NullStageDumpWriter を返す。
+        """
+        enabled = bool(self._config.get("pipeline", "dump", "enabled", default=False))
+        if not enabled:
+            return NullStageDumpWriter()
+        directory = self._config.get("pipeline", "dump", "directory", default="./logs/dumps")
+        stages = self._config.get(
+            "pipeline", "dump", "stages", default=["vad", "asr", "translate", "tts"]
+        )
+        max_runs = int(self._config.get("pipeline", "dump", "max_runs", default=20))
+        return StageDumpWriter(
+            dump_dir=Path(directory),
+            stages=stages if isinstance(stages, (list, tuple, set)) else (),
+            max_runs=max_runs,
+            logger=self._logger,
+        )
+
+    def _build_dump_meta(self, input_id: str, output_id: str) -> dict[str, Any]:
+        """run.json に乗せるメタ情報。後から「どの設定で取れたダンプか」を特定する用。"""
+        backends_snapshot = self._config.get("backends", default={}) or {}
+        backends_config = self._config.get("backends_config", default={}) or {}
+        languages = self._config.get("languages", default={}) or {}
+        return {
+            "backends": dict(backends_snapshot),
+            "backends_config": dict(backends_config),
+            "languages": dict(languages),
+            "devices": {"input": input_id, "output": output_id},
+        }
 
     # ---- 内部 ----
     def _create(self, layer: LayerKind):

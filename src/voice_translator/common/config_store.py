@@ -63,6 +63,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # テキスト系(recognized/translated)は **発話件数で制限**(中身が小さいためバイト換算は冗長)。
         "recognized_queue_size": 10,              # ASR → Translator(認識テキスト)
         "translated_queue_size": 10,              # Translator → TTS(翻訳テキスト)
+        # ステージ間データのダンプ機能(検証/再現用)。
+        # 有効時、各ステージ出力を <directory>/<run_id>/seq_NNNN_<stage>.{wav,json} に書き出す。
+        # 単体ランナー(voice_translator.dev.runner_*)の入力として使う。
+        # 詳細は docs/design/feature-dev-runners-and-dump/Plan.md を参照。
+        "dump": {
+            "enabled": False,                                       # ON/OFF
+            "directory": "./logs/dumps",                            # 出力ルート(run_id 配下に書く)
+            "stages": ["vad", "asr", "translate", "tts"],          # 書き出す対象
+            "max_runs": 20,                                         # 古い run の自動掃除上限(0で無効)
+        },
     },
     # 各バックエンド固有の設定値(GUI公開はまだ。手動で config.yaml 編集)
     "backends_config": {
