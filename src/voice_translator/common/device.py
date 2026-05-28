@@ -83,12 +83,14 @@ def resolve_ctranslate2_compute_type(
         preference: 明示指定があればそれを返す。"auto" のときに自動選択。
 
     Returns:
-        - GPU(`cuda`): `"float16"`(GPU で高速、VRAM 削減)
+        - GPU(`cuda`): `"int8_float16"`(重みは int8、計算は float16。
+          small モデル+短時間入力で float16 単独より速いケースが多いため既定にする。
+          float16 単独に戻したい場合は呼び出し側から明示指定する)
         - CPU: `"int8"`(CPU で最も実用的な量子化)
     """
     pref = (preference or "auto").lower().strip()
     if pref != "auto":
         return pref
     if device == "cuda":
-        return "float16"
+        return "int8_float16"
     return "int8"

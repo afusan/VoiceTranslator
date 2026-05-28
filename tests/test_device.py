@@ -122,8 +122,10 @@ class TestResolveComputeType:
         assert resolve_ctranslate2_compute_type("cuda", "float32") == "float32"
         assert resolve_ctranslate2_compute_type("cpu", "int8") == "int8"
 
-    def test_auto_picks_float16_for_cuda(self) -> None:
-        assert resolve_ctranslate2_compute_type("cuda", "auto") == "float16"
+    def test_auto_picks_int8_float16_for_cuda(self) -> None:
+        # GPU 既定は int8_float16(重み int8 / 演算 float16)。
+        # small モデル+短時間入力で float16 単独より速いケースが多いため。
+        assert resolve_ctranslate2_compute_type("cuda", "auto") == "int8_float16"
 
     def test_auto_picks_int8_for_cpu(self) -> None:
         assert resolve_ctranslate2_compute_type("cpu", "auto") == "int8"
