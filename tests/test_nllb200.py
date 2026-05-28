@@ -19,12 +19,19 @@ def fake_transformers(monkeypatch):
 
     fake_tokenizer = MagicMock(name="tokenizer")
     fake_tokenizer.src_lang = ""
-    fake_tokenizer.return_value = {"input_ids": MagicMock()}
+    # tokenizer(text, return_tensors="pt") の戻り値は **入力 dict**(input_ids 等)。
+    # 各テンソルは `.to(device)` で同じ MagicMock を返すように設定(GPU 移送のシミュレート)。
+    fake_input_tensor = MagicMock(name="input_tensor")
+    fake_input_tensor.to = MagicMock(return_value=fake_input_tensor)
+    fake_tokenizer.return_value = {"input_ids": fake_input_tensor}
     fake_tokenizer.convert_tokens_to_ids = MagicMock(return_value=42)
     fake_tokenizer.batch_decode = MagicMock(return_value=["こんにちは"])
 
     fake_model = MagicMock(name="model")
     fake_model.generate = MagicMock(return_value=MagicMock())
+    # `.to(device)` で同じ model を返す(PyTorch の挙動を簡易シミュレート)。
+    # これがないと .to() の戻り値が別 MagicMock になって、テスト側の assert が空振りする。
+    fake_model.to = MagicMock(return_value=fake_model)
 
     fake_module.AutoTokenizer = MagicMock()
     fake_module.AutoTokenizer.from_pretrained = MagicMock(return_value=fake_tokenizer)
@@ -167,3 +174,63 @@ class TestTranslate:
         backend = Nllb200TranslatorBackend()
         with pytest.raises(FatalError, match="翻訳失敗"):
             backend.translate("hi", "en", "ja")
+
+
+class TestDeviceSelection:
+    """device 引数の振る舞い: auto 解決と明示指定。"""
+
+    def test_explicit_cpu_used(self, fake_transformers) -> None:
+        _, _, fake_model = fake_transformers
+        from voice_translator.translator.nllb200_backend import (
+            Nllb200TranslatorBackend,
+        )
+
+        backend = Nllb200TranslatorBackend(device="cpu")
+        assert backend.device == "cpu"
+        # モデルが .to("cpu") されている
+        fake_model.to.assert_called_with("cpu")
+
+    def test_auto_resolves_to_cpu_when_no_accelerator(
+        self, fake_transformers, monkeypatch
+    ) -> None:
+        """auto + アクセラレータ無しの環境では cpu に落ちる。"""
+        # torch.cuda / mps を「無し」に固定
+        from types import SimpleNamespace
+        fake_torch = MagicMock(name="torch")
+        fake_torch.cuda.is_available = MagicMock(return_value=False)
+        fake_torch.backends = SimpleNamespace(mps=MagicMock())
+        fake_torch.backends.mps.is_available = MagicMock(return_value=False)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        from voice_translator.translator.nllb200_backend import (
+            Nllb200TranslatorBackend,
+        )
+        backend = Nllb200TranslatorBackend(device="auto")
+        assert backend.device == "cpu"
+
+    def test_to_failure_falls_back_to_cpu(self, fake_transformers) -> None:
+        """`.to(device)` で例外が出ても CPU に落として続行する。"""
+        _, _, fake_model = fake_transformers
+        # cuda 指定 → .to("cuda") が失敗 → CPU フォールバック
+        fake_model.to.side_effect = [RuntimeError("CUDA OOM"), fake_model]
+        from voice_translator.translator.nllb200_backend import (
+            Nllb200TranslatorBackend,
+        )
+
+        backend = Nllb200TranslatorBackend(device="cuda")
+        assert backend.device == "cpu"
+        # 2 回目の .to が "cpu" で呼ばれる
+        fake_model.to.assert_called_with("cpu")
+
+    def test_input_tensors_moved_to_device(self, fake_transformers) -> None:
+        """translate() 内で入力テンソルが device へ移送される。"""
+        _, fake_tokenizer, _ = fake_transformers
+        from voice_translator.translator.nllb200_backend import (
+            Nllb200TranslatorBackend,
+        )
+
+        backend = Nllb200TranslatorBackend(device="cpu")
+        backend.translate("hello", "en", "ja")
+        # tokenizer 戻り値の各テンソルが .to("cpu") で移送されている
+        input_tensor = fake_tokenizer.return_value["input_ids"]
+        input_tensor.to.assert_called_with("cpu")

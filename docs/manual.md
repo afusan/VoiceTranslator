@@ -270,6 +270,27 @@ log:
   - `*_wait_ms` が大きい段は **直前のステージが詰まっている**(or バッファが小さい)
   - 例: `translate_wait_ms` が大きいなら ASR の出力速度に翻訳が追いつけていない
 
+### GPU(CUDA / Apple Silicon)を使う
+NLLB-200(翻訳)と faster-whisper(ASR)は GPU があれば自動的に使用します。
+何もしなくても **`device: auto`** が既定で、CUDA → MPS → CPU の順に試行されます。
+
+明示的にデバイスを指定したい場合(動作確認 / トラブルシュート):
+```yaml
+backends_config:
+  nllb200:
+    device: auto          # "auto" / "cuda" / "mps" / "cpu"
+  faster_whisper:
+    device: auto          # "auto" / "cuda" / "cpu"(CTranslate2 は MPS 未対応)
+    compute_type: auto    # "auto" / "int8" / "float16" / "int8_float16" 等
+                          # auto なら GPU=float16、CPU=int8 が選ばれる
+```
+
+- **CUDA 想定**: NVIDIA GPU。`nvidia-smi` でドライバが認識されていれば自動検出されます。
+- **MPS 想定**: Apple Silicon(M1/M2/M3)。NLLB のみ対応(faster-whisper は CPU 落ち)。
+- **CPU 想定**: その他すべて。デフォルトでも問題なく動作しますが翻訳速度が遅め。
+- GPU で起動に失敗した場合は **自動的に CPU にフォールバック** します(ログに記録)。
+- 設定変更後はアプリ再起動で反映。
+
 ### VAD の発話区切り設定(長文連続発話で詰まるとき)
 ニュース放送のように **話者がほとんどポーズしない** 入力では、1 発話が数十秒〜数分の塊に
 なってしまい、翻訳/TTS/再生が破綻する(レイテンシが入力速度に追いつかなくなる)ことが

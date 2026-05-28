@@ -77,6 +77,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "speech_pad_ms": 100,     # 発話前後の余白(ms)
             "max_speech_sec": 8.0,    # 1 発話の最大長(秒)。超えたら強制区切り。0 で無効化
         },
+        "faster_whisper": {
+            # device: "auto" / "cuda" / "cpu"。auto なら CUDA があれば自動で使う(MPS は未対応)。
+            # compute_type: "auto" / "int8" / "float16" / "int8_float16" 等。auto なら device に応じて
+            #   GPU=float16, CPU=int8 を選ぶ。
+            "device": "auto",
+            "compute_type": "auto",
+        },
+        "nllb200": {
+            # device: "auto" / "cuda" / "mps" / "cpu"。auto なら cuda → mps → cpu の順で使う。
+            "device": "auto",
+        },
     },
 }
 

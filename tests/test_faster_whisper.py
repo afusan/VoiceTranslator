@@ -121,3 +121,73 @@ class TestTranscribe:
         backend = FasterWhisperAsrBackend()
         with pytest.raises(FatalError, match="推論失敗"):
             backend.transcribe(np.ones(160, dtype=np.float32))
+
+
+class TestDeviceSelection:
+    """device 引数の振る舞い: auto / 明示 / フォールバック。"""
+
+    def test_default_device_is_auto(self, fake_faster_whisper) -> None:
+        fake_module, _ = fake_faster_whisper
+        from voice_translator.asr.faster_whisper_backend import (
+            FasterWhisperAsrBackend,
+        )
+
+        backend = FasterWhisperAsrBackend()
+        # CTranslate2 自体に "auto" を渡すので、解決後も "auto" のまま
+        assert backend.device == "auto"
+        # compute_type は auto → device=auto では GPU 想定で "float16"
+        assert backend.compute_type == "float16"
+        fake_module.WhisperModel.assert_called_with(
+            "small", device="auto", compute_type="float16"
+        )
+
+    def test_explicit_cpu_picks_int8(self, fake_faster_whisper) -> None:
+        fake_module, _ = fake_faster_whisper
+        from voice_translator.asr.faster_whisper_backend import (
+            FasterWhisperAsrBackend,
+        )
+
+        backend = FasterWhisperAsrBackend(device="cpu", compute_type="auto")
+        assert backend.device == "cpu"
+        assert backend.compute_type == "int8"
+        fake_module.WhisperModel.assert_called_with(
+            "small", device="cpu", compute_type="int8"
+        )
+
+    def test_mps_falls_back_to_cpu(self, fake_faster_whisper) -> None:
+        """CTranslate2 は MPS 未対応 → CPU に落ちる(Apple Silicon ユーザの保険)。"""
+        fake_module, _ = fake_faster_whisper
+        from voice_translator.asr.faster_whisper_backend import (
+            FasterWhisperAsrBackend,
+        )
+
+        backend = FasterWhisperAsrBackend(device="mps")
+        assert backend.device == "cpu"
+
+    def test_gpu_init_failure_retries_on_cpu(self, monkeypatch) -> None:
+        """device=cuda で WhisperModel 初期化が失敗したら CPU で再試行する。"""
+        fake_module = MagicMock()
+        fake_model = MagicMock(name="cpu_model")
+        # 1 回目(cuda)は失敗、2 回目(cpu)は成功
+        call_log: list[dict] = []
+
+        def whisper_factory(*args, **kwargs):
+            call_log.append(kwargs)
+            if kwargs.get("device") == "cuda":
+                raise RuntimeError("CUDA not available")
+            return fake_model
+
+        fake_module.WhisperModel = MagicMock(side_effect=whisper_factory)
+        monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+
+        from voice_translator.asr.faster_whisper_backend import (
+            FasterWhisperAsrBackend,
+        )
+
+        backend = FasterWhisperAsrBackend(device="cuda")
+        assert backend.device == "cpu"
+        assert backend.compute_type == "int8"
+        # 2 回呼ばれている(cuda → cpu)
+        assert len(call_log) == 2
+        assert call_log[0]["device"] == "cuda"
+        assert call_log[1]["device"] == "cpu"

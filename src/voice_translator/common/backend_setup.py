@@ -56,8 +56,31 @@ def register_default_backends(
             max_speech_sec=vad_max_speech_sec,
         ),
     )
-    registry.register(LayerKind.ASR, "faster_whisper", FasterWhisperAsrBackend)
-    registry.register(LayerKind.TRANSLATOR, "nllb200", Nllb200TranslatorBackend)
+
+    # faster-whisper の device / compute_type を config から取る
+    fw_device = _read_str(
+        config, ("backends_config", "faster_whisper", "device"), default="auto"
+    )
+    fw_compute_type = _read_str(
+        config, ("backends_config", "faster_whisper", "compute_type"), default="auto"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "faster_whisper",
+        lambda: FasterWhisperAsrBackend(
+            device=fw_device, compute_type=fw_compute_type
+        ),
+    )
+
+    # NLLB-200 の device を config から取る
+    nllb_device = _read_str(
+        config, ("backends_config", "nllb200", "device"), default="auto"
+    )
+    registry.register(
+        LayerKind.TRANSLATOR,
+        "nllb200",
+        lambda: Nllb200TranslatorBackend(device=nllb_device),
+    )
 
     # SAPI は config から rate を取って渡す(設定なしなら既定 180)
     sapi_rate = _read_int(config, ("backends_config", "sapi", "rate"), default=180)
@@ -88,3 +111,17 @@ def _read_float(config: ConfigStore | None, keys: tuple[str, ...], *, default: f
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _read_str(config: ConfigStore | None, keys: tuple[str, ...], *, default: str) -> str:
+    """config から str 値を取り出す。空文字や None は default に置換。"""
+    if config is None:
+        return default
+    value: Any = config.get(*keys, default=default)
+    if value is None:
+        return default
+    try:
+        s = str(value).strip()
+    except Exception:  # noqa: BLE001
+        return default
+    return s or default

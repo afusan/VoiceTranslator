@@ -104,6 +104,79 @@ class TestSapiRateConfigIntegration:
         patched_backend_setup["SapiTtsBackend"].assert_called_with(rate=180)
 
 
+class TestFasterWhisperConfigIntegration:
+    """faster-whisper の device/compute_type が config から読まれることを検証。"""
+
+    def test_default_uses_auto(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        registry.create(LayerKind.ASR, "faster_whisper")
+        patched_backend_setup["FasterWhisperAsrBackend"].assert_called_with(
+            device="auto", compute_type="auto"
+        )
+
+    def test_device_read_from_config(self, patched_backend_setup, tmp_path) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "faster_whisper", "device", "cuda")
+        config.set("backends_config", "faster_whisper", "compute_type", "float16")
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.ASR, "faster_whisper")
+        patched_backend_setup["FasterWhisperAsrBackend"].assert_called_with(
+            device="cuda", compute_type="float16"
+        )
+
+
+class TestNllb200ConfigIntegration:
+    """NLLB-200 の device が config から読まれることを検証。"""
+
+    def test_default_uses_auto(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        registry.create(LayerKind.TRANSLATOR, "nllb200")
+        patched_backend_setup["Nllb200TranslatorBackend"].assert_called_with(
+            device="auto"
+        )
+
+    def test_device_read_from_config(self, patched_backend_setup, tmp_path) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "nllb200", "device", "cuda")
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.TRANSLATOR, "nllb200")
+        patched_backend_setup["Nllb200TranslatorBackend"].assert_called_with(
+            device="cuda"
+        )
+
+    def test_empty_string_falls_back_to_default(
+        self, patched_backend_setup, tmp_path
+    ) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "nllb200", "device", "   ")  # 空白のみ
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.TRANSLATOR, "nllb200")
+        patched_backend_setup["Nllb200TranslatorBackend"].assert_called_with(
+            device="auto"
+        )
+
+
 class TestSileroVadConfigIntegration:
     """Silero VAD のパラメータが config から読まれることを検証。"""
 
