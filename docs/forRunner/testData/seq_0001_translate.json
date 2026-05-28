@@ -1,0 +1,9 @@
+{
+  "seq_id": 1,
+  "stage": "translate",
+  "produced_at": "2026-05-28T17:35:15.904",
+  "src_lang": "en",
+  "tgt_lang": "ja",
+  "src_text": "David Muir ABC's World News Tonight America's most watched newscast now streaming same day with all the breaking",
+  "tgt_text": "デイビッド・ミュア ABCのワールド・ニュース 今夜 アメリカで最も視聴されたニュース放送が 今も同じ日に配信されています"
+}
