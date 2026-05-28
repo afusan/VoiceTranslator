@@ -113,6 +113,22 @@
 
 ---
 
+## [2026-05-28] Whisper モデルサイズ(`model_size`)の引き上げ検討 — small → medium 以上
+- **現状**: `FasterWhisperAsrBackend(model_size="small")` が既定。`small` は faster-whisper(Whisper)のモデルサイズ系列(`tiny / base / small / medium / large-v2 / large-v3`)の小さい方から3番目で、概ね VRAM ~500MB / 認識精度は実用ライン。`tests/` でも `"small"` 前提でモック値が組まれている。
+- **動機**: `refactor/asr-gpu-compute-type`(2026-05-28 マージ済)後の GPU プロファイルで `asr_proc_ms` が平均 754ms まで下がり、8秒発話に対し十分な余裕が出た。total レイテンシも 13.8s と発話長(7.5s)に近づき、パイプライン的にもキューが詰まらない。**この余裕を品質向上に振り向けられる**(特に英語以外、固有名詞、専門用語、雑音下)。
+- **副作用と制約**:
+  - メモリ/VRAM: medium ~1.5GB、large-v3 ~3GB+。**CPU floor 制約**(配布方針)があるため、CPU 走行時の所要時間とメモリも実測してから既定値を動かす。
+  - 起動時間: 初回モデルダウンロードがサイズに比例して長くなる。
+  - **device に応じてサイズを自動切替するのは避ける**(コードパス1本の方針に反する)。サイズは `config.yaml` 経由のユーザ選択または起動時環境検出による初期推奨値の提示 に留める。
+- **対応方針(案)**:
+  1. middle テスト相当で medium / large-v3 の `asr_proc_ms` と認識品質を CPU/GPU 双方で実測(計測手順は今回の `logs/cpu` `logs/gpu` `logs/gpu_v2` 方式を踏襲)。
+  2. 結果次第で `config_store` の既定値を変更、または "preset"(fast/balanced/accurate)としてまとめる(下の「パイプラインステージのパラメータ GUI 化」エントリと統合)。
+  3. `tests/test_faster_whisper.py` の `"small"` 直書きを定数化しておくと差し替えが楽。
+- **再検討トリガ**: 認識ミス頻発のフィードバック / 多言語サポート強化 / 大型GPU想定ユーザ向けプリセット追加の検討。
+- **関連項目**: 「パイプラインステージのパラメータ GUI 化」(プリセット方式 vs バックエンド固有展開の設計検討は共通)、「プロジェクト配布方針」(CPU floor との両立)。
+
+---
+
 ## [2026-05-28] 翻訳/LLM バックエンドの生成パラメータを設定可能にする
 - **問題の具体(発生事例)**: `translations.jsonl` L184 で、920文字の英文(イラン国内インターネット復旧の話題、`internet` / `online` / `restrictions` / `businesses` が密集して反復)を入力した際、`tgt_text` が「ウェブのインターネットは,インターネットの普及を 妨げている.」を約 28 回繰り返すなど、明確な **degenerate output**(同じ n-gram に吸着して max_length まで延々と回る現象)が発生した。L180 や L183 は同等の長文だが語彙が散らばっており崩れていない。
 - **直接の要因**: `Nllb200TranslatorBackend.translate()` の `generate()` 呼び出しが `forced_bos_token_id` と `max_length` しか渡しておらず、`num_beams=1`(greedy)/ `no_repeat_ngram_size=0` / `repetition_penalty=1.0` という HF デフォルトのまま。NLLB-200 distilled 600M は容量が小さく、greedy 探索が局所最適に落ちると抜け出せない。修正は `num_beams=4` / `no_repeat_ngram_size=3` / `repetition_penalty=1.1` / `early_stopping=True` を渡すだけで効くことが確認できる。
