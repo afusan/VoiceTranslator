@@ -3,13 +3,16 @@
 役割: 各レイヤ(capture/vad/asr/translator/tts/output)に対して
 複数バックエンド実装を「名前」で登録しておき、設定や GUI から
 名前で取り出してインスタンス化する。Phase 2 以降の差し替え基盤になる。
+
+Phase D で `capabilities` ヒントを optional 登録できるよう拡張。GUI が「未ロードでも
+☁ クラウドか / 認証情報が要るか」を判定するために使う(R-3 / R2-1 の状態管理とは別軸)。
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from .types import LayerKind
+from .types import BackendCapabilities, LayerKind
 
 # レイヤ + 名前 -> ファクトリ関数(引数なしでインスタンスを返す)
 BackendFactory = Callable[[], Any]
@@ -20,19 +23,35 @@ class BackendRegistry:
 
     役割: アプリ起動時に各実装を登録 → 設定/GUI から名前で取り出す。
     インスタンス生成はファクトリ経由(都度新規 or シングルトンは実装側で選択)。
+
+    Phase D 追加: `capabilities` ヒントを登録時に渡せるようにした。
+    指定されていれば backend を生成せずに `get_capability_hint(layer, name)` で参照できる。
     """
 
     def __init__(self) -> None:
         self._factories: dict[LayerKind, dict[str, BackendFactory]] = {
             layer: {} for layer in LayerKind
         }
+        self._capabilities: dict[LayerKind, dict[str, BackendCapabilities]] = {
+            layer: {} for layer in LayerKind
+        }
 
-    def register(self, layer: LayerKind, name: str, factory: BackendFactory) -> None:
+    def register(
+        self,
+        layer: LayerKind,
+        name: str,
+        factory: BackendFactory,
+        *,
+        capabilities: BackendCapabilities | None = None,
+    ) -> None:
         """指定レイヤに名前付きでバックエンドのファクトリを登録する。
 
         同名の登録は上書き(プラグイン的に差し替え可能)。
+        `capabilities` が指定されていれば `get_capability_hint` で参照できる。
         """
         self._factories[layer][name] = factory
+        if capabilities is not None:
+            self._capabilities[layer][name] = capabilities
 
     def is_registered(self, layer: LayerKind, name: str) -> bool:
         """指定レイヤ + 名前が登録済みか。"""
@@ -54,3 +73,13 @@ class BackendRegistry:
                 f"バックエンド未登録: layer={layer.value}, name={name}"
             ) from e
         return factory()
+
+    def get_capability_hint(
+        self, layer: LayerKind, name: str
+    ) -> BackendCapabilities | None:
+        """登録時に渡された capability ヒントを返す(Phase D)。
+
+        backend を生成せずに「クラウドか / 認証情報が要るか」を判定する用。
+        ヒント未登録なら None(=情報不明)。
+        """
+        return self._capabilities.get(layer, {}).get(name)

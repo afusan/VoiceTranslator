@@ -44,6 +44,7 @@ from voice_translator.output.backend import AudioOutputBackend
 from .backend_base import Subscription
 from .backend_registry import BackendRegistry
 from .config_store import ConfigStore
+from .credentials import CredentialsStore
 from .device_validator import DeviceValidator
 from .error_handler import ErrorHandler
 from .ledger import UtteranceLedger
@@ -114,6 +115,10 @@ class AppController:
         self._recent_durations: dict[LayerKind, deque[float]] = {
             layer: deque(maxlen=_RECENT_DURATIONS_MAXLEN) for layer in LayerKind
         }
+
+        # Phase D: クラウド backend 認証情報の保管。初回利用時に遅延初期化する
+        # (テスト時の `keyring.set_keyring(InMemoryKeyring())` のタイミングを尊重)。
+        self._credentials: CredentialsStore | None = None
 
     # ============================================================
     # コールバック登録
@@ -218,6 +223,47 @@ class AppController:
         if size is None:
             return ""
         return f" (~{size:.1f}GB)"
+
+    # ============================================================
+    # 認証情報(Phase D)
+    # ============================================================
+    def _credentials_store(self) -> CredentialsStore:
+        """`CredentialsStore` を遅延初期化して返す。
+
+        ConfigStore の `credentials.use_local_file` フラグを反映。テスト時に
+        `keyring.set_keyring(InMemoryKeyring())` した直後の状態を捕捉できるよう、
+        ロード/初回呼び出しのタイミングで生成する。
+        """
+        if self._credentials is None:
+            use_local = bool(
+                self._config.get("credentials", "use_local_file", default=False)
+            )
+            self._credentials = CredentialsStore(use_local_file=use_local)
+        return self._credentials
+
+    def get_credential(self, backend: str, key: str) -> str | None:
+        """指定 backend / key の認証情報を返す。未設定なら None。"""
+        return self._credentials_store().get(backend, key)
+
+    def set_credential(self, backend: str, key: str, value: str) -> None:
+        """指定 backend / key に認証情報を保存する。空文字は delete と同義。"""
+        self._credentials_store().set(backend, key, value)
+
+    def delete_credential(self, backend: str, key: str) -> None:
+        """指定 backend / key の認証情報を削除する。"""
+        self._credentials_store().delete(backend, key)
+
+    def has_credential(self, backend: str, key: str) -> bool:
+        """指定 backend / key の認証情報が設定済みか。"""
+        return self._credentials_store().get(backend, key) is not None
+
+    def get_backend_capability_hint(self, layer: LayerKind, name: str):
+        """登録時に指定された capability ヒントを返す(Phase D)。
+
+        backend 未生成でも `is_cloud` / `requires_credentials` 等を引ける。
+        ヒントが無ければ None(GUI は「不明だが既定 OFF 扱い」で動かす想定)。
+        """
+        return self._registry.get_capability_hint(layer, name)
 
     def _collect_recent_errors(self):
         """全 backend の直近エラーを timestamp 新しい順に並べて返す。

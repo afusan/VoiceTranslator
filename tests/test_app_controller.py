@@ -1056,6 +1056,81 @@ class TestPhaseC3StatusSummary:
         assert "Downloading" in summary
 
 
+class TestPhaseDCredentials:
+    """Phase D: AppController が CredentialsStore を仲介する。"""
+
+    def test_set_then_get_credential(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        from tests._fixtures import InMemoryKeyring
+        import keyring
+        keyring.set_keyring(InMemoryKeyring())
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_credential("openai", "api_key", "sk-test")
+        assert ctrl.get_credential("openai", "api_key") == "sk-test"
+        assert ctrl.has_credential("openai", "api_key") is True
+
+    def test_has_credential_returns_false_when_unset(
+        self, populated_registry, config
+    ) -> None:
+        from tests._fixtures import InMemoryKeyring
+        import keyring
+        keyring.set_keyring(InMemoryKeyring())
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.has_credential("openai", "api_key") is False
+
+    def test_delete_credential(
+        self, populated_registry, config
+    ) -> None:
+        from tests._fixtures import InMemoryKeyring
+        import keyring
+        keyring.set_keyring(InMemoryKeyring())
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_credential("a", "k", "v")
+        ctrl.delete_credential("a", "k")
+        assert ctrl.get_credential("a", "k") is None
+
+    def test_use_local_file_flag_respected(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """ConfigStore の credentials.use_local_file=True で file モードになる。"""
+        # cwd を tmp_path に移して local.secrets が散らからないように
+        monkeypatch.chdir(tmp_path)
+        config.set("credentials", "use_local_file", True)
+        ctrl = AppController(registry=populated_registry, config=config)
+        # 初回 set で内部 store が生成される
+        ctrl.set_credential("deepl", "api_key", "v")
+        assert ctrl._credentials is not None
+        assert ctrl._credentials.mode == "file"
+
+
+class TestPhaseDCapabilityHint:
+    """Phase D: BackendRegistry の capability hint。"""
+
+    def test_capability_hint_registered_returns_it(self) -> None:
+        from voice_translator.common.backend_registry import BackendRegistry
+        from voice_translator.common.types import BackendCapabilities
+
+        reg = BackendRegistry()
+        cap = BackendCapabilities(
+            is_cloud=True, requires_credentials=True,
+            service_name="OpenAI", terms_url="https://example.com/terms",
+        )
+        reg.register(LayerKind.ASR, "cloud_asr", lambda: None, capabilities=cap)
+        got = reg.get_capability_hint(LayerKind.ASR, "cloud_asr")
+        assert got is not None
+        assert got.is_cloud is True
+        assert got.service_name == "OpenAI"
+
+    def test_capability_hint_returns_none_when_not_registered(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        # 既存の mock backend は capability hint 無し
+        hint = ctrl.get_backend_capability_hint(LayerKind.ASR, "faster_whisper")
+        assert hint is None
+
+
 class TestHandleDropped:
     """AppController._handle_dropped(seq_ids, stage) のシグネチャ確認。
 

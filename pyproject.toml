@@ -17,6 +17,10 @@ dependencies = [
     "pyttsx3>=2.90",
     # GUI(Step 5):
     "customtkinter>=5.2",
+    # クラウド backend 認証情報の OS keychain 保管(Phase D):
+    # 失敗時は平文ファイル(`local.secrets`)に fallback するので、未インストール環境でも
+    # ローカル backend だけならアプリは動く。
+    "keyring>=24.0",
 ]
 
 # 配布方針: CPU を floor、GPU は opt-in(CLAUDE.md「配布方針」参照)。

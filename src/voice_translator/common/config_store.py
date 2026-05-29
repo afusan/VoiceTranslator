@@ -109,11 +109,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "device": "auto",
         },
     },
-    # Phase D で使うクラウド backend 同意の永続化(キー予約 - Phase B では未使用)。
+    # Phase D で使うクラウド backend 同意の永続化。
     # 構造: { "<backend_name>": True/False, "suppress_dialogs": bool }
     "consents": {
         # 一括 OFF。ユーザが「今後表示しない」を選んだとき True。Phase D で読まれる。
         "suppress_dialogs": False,
+    },
+    # Phase D / R2-7: 認証情報の保管経路を強制切替するフラグ。
+    # - False(既定): OS keychain を試し、失敗時に平文ファイルへ fallback
+    # - True       : 平文ファイルだけを使う(開発者ローカルの実 API 検証用)
+    "credentials": {
+        "use_local_file": False,
     },
 }
 

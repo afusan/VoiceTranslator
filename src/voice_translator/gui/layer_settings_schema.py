@@ -40,13 +40,18 @@ if TYPE_CHECKING:
 
 
 # サポートする型(入力欄の振る舞いを切り替える)
-FieldType = str  # "int" | "float" | "str" | "bool" | "dropdown" | "toggle" | "button" | "label_readonly"
+FieldType = str  # "int" | "float" | "str" | "bool" | "dropdown" | "toggle" | "button" | "label_readonly" | "password"
 
 
-# Phase C1 で追加した型集合(ダイアログ側 dispatch の switch に使う)
+# Phase C1 / D2 で追加した型集合(ダイアログ側 dispatch の switch に使う)
 _TEXT_TYPES = ("int", "float", "str", "bool")
-_NEW_TYPES = ("dropdown", "toggle", "button", "label_readonly")
+_NEW_TYPES = ("dropdown", "toggle", "button", "label_readonly", "password")
 ALL_FIELD_TYPES: tuple[str, ...] = _TEXT_TYPES + _NEW_TYPES
+
+
+# Phase D: password 型の `keys` は ("__credential__", backend_name, key_name) 形式で
+# 保存先を CredentialsStore に振り向ける。ConfigStore へは書かない。
+CREDENTIAL_KEYS_MARKER: str = "__credential__"
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,7 @@ _PARSERS: dict[FieldType, Callable[[str], Any]] = {
     "bool": lambda s: s.strip().lower() in ("1", "true", "yes", "on"),
     "toggle": lambda s: s.strip().lower() in ("1", "true", "yes", "on"),
     "dropdown": lambda s: s,  # dropdown は str 値で持つ(モデル名等)
+    "password": lambda s: s,  # password も str。ダイアログ側で空欄=未編集として扱う
 }
 
 

@@ -2,6 +2,10 @@
 
 役割: WAV ファイルから PCM を読んで AudioCaptureBackend として振る舞う
 WavReplayCapture 等、E2E テストで使う再現可能な部品を集約する。
+
+Phase D で追加: keyring の test double(`InMemoryKeyring` / `FailKeyring`)。
+実 keychain に触らずに credentials のテストを書くために使う。R-5 で「テスト時は
+実 keyring を触らない」方針。
 """
 
 from __future__ import annotations
@@ -20,6 +24,77 @@ from voice_translator.common.types import (
     CaptureSource,
     PcmChunk,
 )
+
+
+# ============================================================
+# keyring 用 test double(Phase D / R-5)
+# ============================================================
+# 実際の `KeyringBackend` を import して継承することで `keyring.set_keyring` の型検査を通す。
+# import 失敗(keyring 未インストール)時はクラス全体を None にし、テスト側で xfail を出す。
+try:
+    from keyring.backend import KeyringBackend as _KeyringBackend  # type: ignore
+    import keyring.errors as _keyring_errors  # type: ignore
+except Exception:  # noqa: BLE001
+    _KeyringBackend = None  # type: ignore
+    _keyring_errors = None  # type: ignore
+
+
+if _KeyringBackend is not None:
+
+    class InMemoryKeyring(_KeyringBackend):  # type: ignore[misc]
+        """インメモリの keyring 実装(`keyring.set_keyring` に注入して使う)。
+
+        実 OS keychain に触らず、テスト用に独立した password ストアを提供する。
+        """
+
+        priority = 1.0  # type: ignore[assignment]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._store: dict[tuple[str, str], str] = {}
+
+        def get_password(self, service: str, username: str) -> str | None:
+            return self._store.get((service, username))
+
+        def set_password(self, service: str, username: str, password: str) -> None:
+            self._store[(service, username)] = password
+
+        def delete_password(self, service: str, username: str) -> None:
+            try:
+                del self._store[(service, username)]
+            except KeyError as e:
+                raise _keyring_errors.PasswordDeleteError("no such password") from e
+
+
+    class FailKeyring(_KeyringBackend):  # type: ignore[misc]
+        """全操作が失敗する keyring 実装。
+
+        credentials の例外握り + 平文ファイル fallback が機能するかを検証する。
+        """
+
+        priority = 1.0  # type: ignore[assignment]
+
+        def get_password(self, service: str, username: str) -> str | None:  # noqa: ARG002
+            raise RuntimeError("keyring unavailable")
+
+        def set_password(self, service: str, username: str, password: str) -> None:  # noqa: ARG002
+            raise RuntimeError("keyring unavailable")
+
+        def delete_password(self, service: str, username: str) -> None:  # noqa: ARG002
+            raise RuntimeError("keyring unavailable")
+
+else:
+
+    class InMemoryKeyring:  # type: ignore[no-redef]
+        """keyring 未インストールのため使えないスタブ。"""
+
+        def __init__(self) -> None:  # pragma: no cover
+            raise RuntimeError("keyring がインストールされていません")
+
+
+    class FailKeyring:  # type: ignore[no-redef]
+        def __init__(self) -> None:  # pragma: no cover
+            raise RuntimeError("keyring がインストールされていません")
 
 
 class WavReplayCapture(AudioCaptureBackend):

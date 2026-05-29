@@ -28,6 +28,7 @@ import customtkinter as ctk
 from voice_translator.common.types import LayerKind, ModelStatus
 
 from .layer_settings_schema import (
+    CREDENTIAL_KEYS_MARKER,
     SettingField,
     parse_field_value,
     recent_durations_text,
@@ -149,6 +150,8 @@ class LayerSettingsDialog(ctk.CTkToplevel):
             self._add_button_row(field, row=row)
         elif ft == "label_readonly":
             self._add_label_readonly_row(field, row=row)
+        elif ft == "password":
+            self._add_password_row(field, row=row)
         else:
             # 想定外型: ラベルだけ出して値は触らない(将来の追加に保険)
             ctk.CTkLabel(self, text=f"{field.label}(未対応型: {ft})").grid(
@@ -241,6 +244,43 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         """
         return "—"  # 実値は `_refresh_reactive_labels` で上書きされる
 
+    # ---- password(認証情報入力、CredentialsStore へ書く)----
+    def _add_password_row(self, field: SettingField, *, row: int) -> None:
+        """`keys = ("__credential__", backend, key_name)` 形式で credentials に保存する。
+
+        既存値があればマスク表示。空のまま保存すると変更なし(誤って消さない設計)。
+        """
+        backend_name, key_name = self._parse_credential_keys(field.keys)
+        if backend_name is None:
+            # marker 不整合: テキストで縮退
+            self._add_text_row(field, row=row)
+            return
+
+        try:
+            current = self._controller.get_credential(backend_name, key_name)
+        except Exception:  # noqa: BLE001
+            current = None
+        placeholder = "●●●●●●●● (設定済み、変更時のみ入力)" if current else "(未設定)"
+
+        var = ctk.StringVar(value="")
+        ctk.CTkLabel(self, text=field.label).grid(
+            row=row, column=0, sticky="w", padx=12, pady=(8, 0)
+        )
+        entry = ctk.CTkEntry(
+            self, textvariable=var, show="*", placeholder_text=placeholder
+        )
+        entry.grid(row=row, column=1, sticky="ew", padx=12, pady=(8, 0))
+        self._add_help_row(field, row=row + 1)
+        # 保存時に空欄なら触らない、非空なら set_credential する用に保持
+        self._entries[field.keys] = (field, var)
+
+    @staticmethod
+    def _parse_credential_keys(keys: tuple[str, ...]) -> tuple[str | None, str | None]:
+        """`("__credential__", backend, key_name)` を分解する。形式不正は (None, None)。"""
+        if len(keys) >= 3 and keys[0] == CREDENTIAL_KEYS_MARKER:
+            return keys[1], keys[2]
+        return None, None
+
     def _add_help_row(self, field: SettingField, *, row: int) -> None:
         if not field.help_text:
             return
@@ -295,10 +335,19 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         """
         # 1) 全フィールドを変換(失敗があれば中止)
         new_values: list[tuple[tuple[str, ...], object]] = []
+        credential_updates: list[tuple[str, str, str]] = []  # (backend, key_name, value)
         for keys, (field, var) in self._entries.items():
             if field.field_type in ("button", "label_readonly"):
                 continue
             raw = var.get()
+            # password: 空欄=未編集として扱う(誤って既存値を消さない)
+            if field.field_type == "password":
+                if raw == "":
+                    continue
+                b, k = self._parse_credential_keys(keys)
+                if b is not None and k is not None:
+                    credential_updates.append((b, k, raw))
+                continue
             try:
                 value = parse_field_value(field.field_type, raw)
             except ValueError as e:
@@ -309,9 +358,18 @@ class LayerSettingsDialog(ctk.CTkToplevel):
                 return
             new_values.append((keys, value))
 
-        # 2) 書き戻し
+        # 2) 書き戻し(ConfigStore 経路)
         for keys, value in new_values:
             self._controller.set_setting(*keys, value)
+        # 認証情報(CredentialsStore 経路)
+        for backend, key_name, value in credential_updates:
+            try:
+                self._controller.set_credential(backend, key_name, value)
+            except Exception as e:  # noqa: BLE001
+                self._message_label.configure(
+                    text=f"認証情報保存に失敗: {e}", text_color="#dc2626"
+                )
+                return
 
         self._message_label.configure(
             text="保存しました。pipeline 値は次の「▶ 開始」で反映されます。",

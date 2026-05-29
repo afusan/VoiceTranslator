@@ -11,6 +11,7 @@ import customtkinter as ctk
 from voice_translator.common.app_controller import AppController
 from voice_translator.common.types import LayerKind, ModelStatus
 
+from .consent_dialog import ConsentDialog
 from .layer_settings_dialog import LayerSettingsDialog
 
 # GUIで切替対象とするレイヤと表示ラベル
@@ -213,9 +214,37 @@ class SettingsPanel(ctk.CTkFrame):
 
     # ============================================================
     def _on_backend_change(self, layer: LayerKind, value: str) -> None:
+        """backend 選択変更。クラウド backend なら同意ダイアログを先に通す(Phase D)。"""
+        if not self._gate_cloud_consent(layer, value):
+            # キャンセル: プルダウン表示を元の値に戻す
+            current = str(self._controller.get_setting("backends", layer.value, default=""))
+            var = self._backend_vars.get(layer)
+            if var is not None:
+                var.set(current)
+            return
         self._controller.set_setting("backends", layer.value, value)
         # set_setting 側でステータスは更新されるが、ラベル反映は明示的に行う
         self._sync_all_status_labels()
+
+    def _gate_cloud_consent(self, layer: LayerKind, backend_name: str) -> bool:
+        """クラウド backend なら同意ダイアログで gate する。同意あり/不要なら True。
+
+        capability hint が未登録(=従来のローカル backend)なら無条件 True。
+        """
+        try:
+            hint = self._controller.get_backend_capability_hint(layer, backend_name)
+        except Exception:  # noqa: BLE001
+            hint = None
+        if hint is None or not hint.is_cloud:
+            return True
+        # ConsentDialog.maybe_show が既存同意 / suppress を見て即時 True を返す可能性あり
+        return ConsentDialog.maybe_show(
+            self,
+            self._controller,
+            backend_name=backend_name,
+            service_name=hint.service_name or backend_name,
+            terms_url=hint.terms_url,
+        )
 
     def _populate_devices_into_dropdowns(self) -> None:
         try:
