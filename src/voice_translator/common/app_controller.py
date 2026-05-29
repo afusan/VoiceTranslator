@@ -702,6 +702,15 @@ class AppController:
             translated_size = int(
                 self._config.get("pipeline", "translated_queue_size", default=10)
             )
+            max_retries = int(
+                self._config.get("pipeline", "max_retries", default=3)
+            )
+            retry_base_sec = float(
+                self._config.get("pipeline", "retry_base_sec", default=0.5)
+            )
+            retry_max_sec = float(
+                self._config.get("pipeline", "retry_max_sec", default=8.0)
+            )
 
             # ステージ間ダンプ(検証用)。enabled=false なら NullStageDumpWriter を注入。
             self._stage_dump = self._build_stage_dump()
@@ -726,6 +735,9 @@ class AppController:
                 synthesized_queue_max_bytes=synthesized_max_bytes,
                 recognized_queue_size=recognized_size,
                 translated_queue_size=translated_size,
+                max_retries=max_retries,
+                retry_base_sec=retry_base_sec,
+                retry_max_sec=retry_max_sec,
                 dump=self._stage_dump,
             )
         self._coord.start(

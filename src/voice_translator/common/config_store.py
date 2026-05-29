@@ -63,6 +63,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # テキスト系(recognized/translated)は **発話件数で制限**(中身が小さいためバイト換算は冗長)。
         "recognized_queue_size": 10,              # ASR → Translator(認識テキスト)
         "translated_queue_size": 10,              # Translator → TTS(翻訳テキスト)
+        # Phase E: backend が RecoverableError を投げたときのリトライ機構。
+        # max_retries=3 + base 0.5s/max 8.0s で「0.5s, 1.0s, 2.0s」の指数バックオフ。
+        # 全失敗で復帰不能と判定しパイプライン停止。FatalError は初回で即停止。
+        "max_retries": 3,
+        "retry_base_sec": 0.5,
+        "retry_max_sec": 8.0,
         # ステージ間データのダンプ機能(検証/再現用)。
         # 有効時、各ステージ出力を <directory>/<run_id>/seq_NNNN_<stage>.{wav,json} に書き出す。
         # 単体ランナー(voice_translator.dev.runner_*)の入力として使う。
