@@ -19,12 +19,18 @@ from __future__ import annotations
 import threading
 from collections import deque
 from time import time
-from typing import Callable
+from typing import Callable, Protocol
 
 from .types import ErrorRecord, ModelInfo, ModelStatus
 
 # 状態変化の購読コールバック型。引数は遷移後の新ステータス。
 StatusListener = Callable[[ModelStatus], None]
+
+
+class _SubscriptionOwner(Protocol):
+    """`Subscription` の解除先プロトコル(BackendBase / AppController など)。"""
+
+    def _remove_listener(self, token: int) -> None: ...
 
 # エラー履歴のリングバッファ長(暫定)。Phase C のステータステキストボックスで集約表示する想定。
 _ERROR_LOG_MAXLEN = 5
@@ -33,14 +39,17 @@ _ERROR_LOG_MAXLEN = 5
 class Subscription:
     """状態変化購読の解除トークン。
 
-    役割: `BackendBase.subscribe()` の戻り値。ダイアログの dismiss 等で明示的に
-    `unsubscribe()` してリーク・死んだ widget 参照を防ぐ(R2-6)。
+    役割: `BackendBase.subscribe()` / `AppController.add_status_listener()` の戻り値。
+    ダイアログの dismiss 等で明示的に `unsubscribe()` してリーク・死んだ widget 参照を防ぐ(R2-6)。
+
+    所有者(owner)は `_remove_listener(token)` を実装するオブジェクトなら何でもよい
+    (BackendBase / AppController の両方で使える)。
     """
 
-    def __init__(self, owner: "BackendBase", token: int) -> None:
+    def __init__(self, owner: _SubscriptionOwner, token: int) -> None:
         # 所有者への循環参照を避けるため、解除時に直接 dict 操作するための弱い結合は持たないが、
         # Subscription を捨てれば listener も孤立して回収されるので、明示 unsubscribe を推奨。
-        self._owner = owner
+        self._owner: _SubscriptionOwner | None = owner
         self._token = token
         self._active = True
 
@@ -48,10 +57,11 @@ class Subscription:
         """購読を解除する。複数回呼ばれても安全(2 回目以降は no-op)。"""
         if not self._active:
             return
-        self._owner._remove_listener(self._token)
+        if self._owner is not None:
+            self._owner._remove_listener(self._token)
         self._active = False
         # owner 参照を切って循環参照の温床を残さない
-        self._owner = None  # type: ignore[assignment]
+        self._owner = None
 
     @property
     def is_active(self) -> bool:

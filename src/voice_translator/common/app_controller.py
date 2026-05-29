@@ -3,15 +3,26 @@
 役割: GUI のイベント(開始/停止/設定変更)を受け、BackendRegistry から
 バックエンドを取り出し、DeviceValidator でチェック、PipelineCoordinator を
 組み立てて起動・停止する。Loader スレッドでモデル初期化を非同期化し、
-UI をブロックしないようにする。モデルの状態は ModelStatus で公開し、
-GUI から listener 経由で受け取れる。
+UI をブロックしないようにする。モデルの状態は各 backend が保有し、
+AppController は購読 → UI に re-broadcast する(R2-1)。
 
-ロード/開始-停止 分離(本変更):
+ロード/開始-停止 分離:
 - バックエンド実体は `self._backends` にキャッシュし、毎回の Start で作り直さない。
-- `load_models[_async]()` でまとめてロード(冪等)。
+- `load_models[_async]()` でまとめてロード、`load_model_layer(layer)` で個別ロード(冪等)。
 - `start_pipeline[_async]()` はロード済みのバックエンドで Coordinator を組み立てるだけ。
 - `stop_pipeline()` は Coordinator を止めるだけ(バックエンドは在駐継続)。
 - `set_setting("backends", layer, name)` は該当レイヤのキャッシュを破棄し、新名で再ロードを発火する。
+
+状態管理(Phase A2):
+- `_model_status` dict は廃止。状態の真実は backend 側にある(`backend.get_status()`)。
+- backend をロードしたら `backend.subscribe(...)` でその後の変化を購読し、UI に re-broadcast する。
+- UI 側の購読は `add_status_listener(callback) -> Subscription`(multi-listener、R2-6)。
+- 旧 `on_status_change` callback は `set_callbacks` 経由で互換維持。
+
+処理時間バッファ(Phase A2):
+- レイヤ別に直近 5 件の処理時間(ms)をリングバッファで保持。
+- `_handle_utterance_done(record)` から timeline を読んで push。
+- `get_recent_durations(layer)` で UI が参照(Phase C の詳細ダイアログ等)。
 
 コールバックシグネチャ:
 - on_utterance_done(record: dict)  : UtteranceLedger.pop() の戻り値 dict を受ける
@@ -23,12 +34,14 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
 from voice_translator.capture.backend import AudioCaptureBackend
 from voice_translator.output.backend import AudioOutputBackend
 
+from .backend_base import Subscription
 from .backend_registry import BackendRegistry
 from .config_store import ConfigStore
 from .device_validator import DeviceValidator
@@ -41,6 +54,12 @@ from .pipeline import PipelineCoordinator
 from .sequence import SequenceGenerator
 from .stage_dump import NullStageDumpWriter, StageDumpWriter
 from .types import CaptureSource, LayerKind, ModelStatus, OutputDevice
+
+# 直近処理時間リングバッファのサイズ(レイヤごと)。
+_RECENT_DURATIONS_MAXLEN = 5
+
+# 状態変化リスナの型(UI 側用、layer + status を受ける)。
+UiStatusListener = Callable[[LayerKind, ModelStatus], None]
 
 
 class AppController:
@@ -71,6 +90,8 @@ class AppController:
         # バックエンド実体のキャッシュ(レイヤごとに1つ)。
         # load_models() で埋め、backends 設定の変更時に該当レイヤを破棄して再ロードする。
         self._backends: dict[LayerKind, Any] = {}
+        # backend ごとの状態変化購読(load 時に subscribe、eviction で unsubscribe)。
+        self._backend_subscriptions: dict[LayerKind, Subscription] = {}
         # _backends と self._coord の生成・破棄を排他的に行う(ロード/起動の競合防止)
         self._load_lock = threading.Lock()
 
@@ -81,13 +102,17 @@ class AppController:
         self._on_utterance_done: Callable[[dict], None] = lambda r: None
         self._on_fatal: Callable[..., None] = lambda m, **_kw: None
         self._on_warn: Callable[..., None] = lambda m, **_kw: None
-        self._on_status_change: Callable[[LayerKind, ModelStatus], None] = lambda l, s: None
+        # 旧 single callback(後方互換)。新規コードは add_status_listener() を使う。
+        self._on_status_change: UiStatusListener = lambda l, s: None
 
-        # モデル状態の初期化: 全レイヤ INIT(まだロード処理を起動していない)。
-        # キャッシュ有無で初期 LOADED を出すと "Loaded→Loading→Loaded" の不自然な
-        # 遷移になるため、in-memory ロードの実態を素直に表す。
-        self._model_status: dict[LayerKind, ModelStatus] = {
-            layer: ModelStatus.INIT for layer in LayerKind
+        # UI 側からの multi-listener(R2-6)。トークン辞書 + ロック。
+        self._ui_status_listeners: dict[int, UiStatusListener] = {}
+        self._next_listener_token: int = 0
+        self._listeners_lock = threading.Lock()
+
+        # レイヤ別 直近処理時間(ms)のリングバッファ。Phase C の詳細ダイアログで使う。
+        self._recent_durations: dict[LayerKind, deque[float]] = {
+            layer: deque(maxlen=_RECENT_DURATIONS_MAXLEN) for layer in LayerKind
         }
 
     # ============================================================
@@ -99,7 +124,7 @@ class AppController:
         on_utterance_done: Callable[[dict], None] | None = None,
         on_fatal: Callable[..., None] | None = None,
         on_warn: Callable[..., None] | None = None,
-        on_status_change: Callable[[LayerKind, ModelStatus], None] | None = None,
+        on_status_change: UiStatusListener | None = None,
     ) -> None:
         if on_utterance_done is not None:
             self._on_utterance_done = on_utterance_done
@@ -110,14 +135,39 @@ class AppController:
         if on_status_change is not None:
             self._on_status_change = on_status_change
 
+    # ---- UI 側の multi-listener(R2-6 / Phase A2)----
+    def add_status_listener(self, callback: UiStatusListener) -> Subscription:
+        """UI 側から状態変化を購読する(複数同時 OK)。解除は `Subscription.unsubscribe()`。"""
+        with self._listeners_lock:
+            token = self._next_listener_token
+            self._next_listener_token += 1
+            self._ui_status_listeners[token] = callback
+        return Subscription(self, token)
+
+    def _remove_listener(self, token: int) -> None:
+        """`Subscription` の解除フック。AppController 直結 listener 用。"""
+        with self._listeners_lock:
+            self._ui_status_listeners.pop(token, None)
+
     # ============================================================
     # モデルステータス
     # ============================================================
     def get_model_status(self, layer: LayerKind) -> ModelStatus:
-        return self._model_status.get(layer, ModelStatus.INIT)
+        """指定レイヤの現状態を返す。未ロードなら INIT(backend の真実は backend 側)。"""
+        backend = self._backends.get(layer)
+        if backend is None:
+            return ModelStatus.INIT
+        try:
+            return backend.get_status()
+        except Exception:  # noqa: BLE001 - mock や仕様逸脱 backend に対する保険
+            return ModelStatus.INIT
 
     def get_all_model_statuses(self) -> dict[LayerKind, ModelStatus]:
-        return dict(self._model_status)
+        return {layer: self.get_model_status(layer) for layer in LayerKind}
+
+    def get_recent_durations(self, layer: LayerKind) -> list[float]:
+        """指定レイヤの直近処理時間(ms、古い→新しい順、最大 5 件)。"""
+        return list(self._recent_durations[layer])
 
     def get_layer_device(self, layer: LayerKind) -> str | None:
         """指定レイヤのバックエンドが報告するデバイス名を返す。
@@ -138,12 +188,29 @@ class AppController:
             return None
         return value or None
 
-    def _set_status(self, layer: LayerKind, status: ModelStatus) -> None:
-        self._model_status[layer] = status
+    def _emit_status(self, layer: LayerKind, status: ModelStatus) -> None:
+        """状態変化を UI 側 listener へ伝搬する。
+
+        旧 single callback と新 multi-listener の両方に届ける。listener の例外は
+        他の listener / 本体を止めない(ログだけ残す)。
+        """
+        # 旧 single callback(後方互換)
         try:
             self._on_status_change(layer, status)
         except Exception:  # noqa: BLE001
-            self._logger.exception("status listener error")
+            self._logger.exception("on_status_change callback で例外")
+        # 新 multi-listener
+        with self._listeners_lock:
+            listeners = list(self._ui_status_listeners.values())
+        for cb in listeners:
+            try:
+                cb(layer, status)
+            except Exception:  # noqa: BLE001
+                self._logger.exception("UI status listener で例外")
+
+    def _on_backend_status_changed(self, layer: LayerKind, status: ModelStatus) -> None:
+        """backend.subscribe 由来の通知ハンドラ。UI に re-broadcast する。"""
+        self._emit_status(layer, status)
 
     # ============================================================
     # 列挙
@@ -177,9 +244,9 @@ class AppController:
                 layer_changed = None
             if layer_changed is not None:
                 with self._load_lock:
-                    self._backends.pop(layer_changed, None)
+                    self._evict_backend_locked(layer_changed)
                 # 該当レイヤは INIT に戻す(まだロード起動前の状態)
-                self._set_status(layer_changed, ModelStatus.INIT)
+                self._emit_status(layer_changed, ModelStatus.INIT)
                 # バックグラウンドで即座にロードを試みる(GUI 側で進捗が見える)
                 threading.Thread(
                     target=lambda: self._safe_load_layer(layer_changed),
@@ -195,9 +262,10 @@ class AppController:
         # 設定再読込ではバックエンド名が変わっている可能性があるので、キャッシュを全破棄して
         # INIT に戻す。GUI 側で自動ロードを再度発火する想定。
         with self._load_lock:
-            self._backends.clear()
+            for layer in list(self._backends.keys()):
+                self._evict_backend_locked(layer)
         for layer in LayerKind:
-            self._set_status(layer, ModelStatus.INIT)
+            self._emit_status(layer, ModelStatus.INIT)
 
     # ============================================================
     # ロード / 起動 / 停止
@@ -219,22 +287,79 @@ class AppController:
     def load_models(self) -> None:
         """全レイヤのバックエンドを生成しキャッシュする(冪等)。
 
-        既にロード済みのレイヤは触らない。各レイヤごとに status を LOADING → LOADED に
-        更新するので、GUI 側で進捗を観測できる。
+        既にロード済みのレイヤは触らない。各レイヤごとに `_emit_status` で LOADING →
+        (backend 由来の最終状態) を通知するので、GUI 側で進捗を観測できる。
         """
         with self._load_lock:
             for layer in LayerKind:
-                if layer in self._backends:
-                    continue
-                self._set_status(layer, ModelStatus.LOADING)
-                try:
-                    inst = self._create(layer)
-                except Exception:
-                    # 失敗したらステータスを戻して例外を伝播(GUI 側で on_failed が拾う)
-                    self._set_status(layer, ModelStatus.NOT_DOWNLOADED)
-                    raise
-                self._backends[layer] = inst
-                self._set_status(layer, ModelStatus.LOADED)
+                self._load_layer_locked(layer)
+
+    def load_model_layer(self, layer: LayerKind) -> None:
+        """単一レイヤだけをロードする(冪等)。Phase B 以降の手動ロードボタンの入口。
+
+        既にロード済みなら何もしない。失敗時は例外を伝播し、状態は NOT_DOWNLOADED に戻す。
+        """
+        with self._load_lock:
+            self._load_layer_locked(layer)
+
+    def _load_layer_locked(self, layer: LayerKind) -> None:
+        """`load_lock` を保持中の caller から呼ぶ実体。
+
+        既ロードならスキップ。LOADING を emit → backend 生成 → subscribe → backend 現状を emit。
+        失敗時は NOT_DOWNLOADED を emit して例外を伝播。
+        """
+        if layer in self._backends:
+            return
+        self._emit_status(layer, ModelStatus.LOADING)
+        try:
+            inst = self._create(layer)
+        except Exception:
+            self._emit_status(layer, ModelStatus.NOT_DOWNLOADED)
+            raise
+        self._backends[layer] = inst
+        # backend のその後の状態変化を購読(将来 DOWNLOADING on reload / MISSING_CREDENTIALS 等)
+        self._subscribe_backend(layer, inst)
+        # 生成時点での backend 状態(通常 LOADED)を最終通知
+        final_status = self._safe_backend_status(inst)
+        self._emit_status(layer, final_status)
+
+    def _subscribe_backend(self, layer: LayerKind, backend: Any) -> None:
+        """backend の状態変化購読を登録する(失敗しても本体は止めない)。"""
+        try:
+            sub = backend.subscribe(
+                lambda s, _layer=layer: self._on_backend_status_changed(_layer, s)
+            )
+        except Exception:  # noqa: BLE001 - subscribe を持たない仕様逸脱 backend に対する保険
+            self._logger.exception("backend.subscribe に失敗 layer=%s", layer.value)
+            return
+        # Subscription でない値が返るケース(古い backend、テストモック)も握る
+        self._backend_subscriptions[layer] = sub
+
+    @staticmethod
+    def _safe_backend_status(backend: Any) -> ModelStatus:
+        """`get_status()` を呼び、ModelStatus でない値や例外時は LOADED 扱いにする。
+
+        Phase A1 で導入した `BackendBase` を継承していれば必ず `ModelStatus` が返るが、
+        既存のテストモックやプロトコル逸脱 backend に対する保険として LOADED で握る
+        (load 完了時点では LOADED とみなして UI を進める方が運用上素直)。
+        """
+        try:
+            status = backend.get_status()
+        except Exception:  # noqa: BLE001
+            return ModelStatus.LOADED
+        if isinstance(status, ModelStatus):
+            return status
+        return ModelStatus.LOADED
+
+    def _evict_backend_locked(self, layer: LayerKind) -> None:
+        """`load_lock` 保持中の caller から呼ぶ。subscribe 解除 + キャッシュ削除。"""
+        sub = self._backend_subscriptions.pop(layer, None)
+        if sub is not None:
+            try:
+                sub.unsubscribe()
+            except Exception:  # noqa: BLE001
+                self._logger.exception("subscription.unsubscribe に失敗 layer=%s", layer.value)
+        self._backends.pop(layer, None)
 
     def load_models_async(
         self,
@@ -268,20 +393,12 @@ class AppController:
     def _safe_load_layer(self, layer: LayerKind) -> None:
         """指定レイヤを単独でロードし直す(バックエンド差し替え時に使う)。
 
-        例外は握りつぶし(ログのみ)・status は元に戻す。
+        例外は握りつぶし(ログのみ)・status は `_load_layer_locked` 側で適切に発火する。
         """
-        with self._load_lock:
-            if layer in self._backends:
-                return
-            self._set_status(layer, ModelStatus.LOADING)
-            try:
-                inst = self._create(layer)
-            except Exception:  # noqa: BLE001
-                self._logger.exception("レイヤ %s の再ロードに失敗", layer.value)
-                self._set_status(layer, ModelStatus.NOT_DOWNLOADED)
-                return
-            self._backends[layer] = inst
-            self._set_status(layer, ModelStatus.LOADED)
+        try:
+            self.load_model_layer(layer)
+        except Exception:  # noqa: BLE001
+            self._logger.exception("レイヤ %s の再ロードに失敗", layer.value)
 
     # ---- 起動 ----
     def start_pipeline_async(
@@ -484,6 +601,8 @@ class AppController:
         record は UtteranceLedger.pop() の戻り値 dict。
         seq_id / timeline / src_text / src_lang / tgt_text / tgt_lang などを含む。
         """
+        # レイヤ別 処理時間リングバッファに push(GUI の詳細ダイアログ用、Phase C)
+        self._push_recent_durations(record)
         try:
             if self._translation_logger is not None:
                 self._translation_logger.write_record(record)
@@ -498,6 +617,28 @@ class AppController:
             self._on_utterance_done(record)
         except Exception:  # noqa: BLE001
             self._logger.exception("UI 通知コールバックで例外")
+
+    def _push_recent_durations(self, record: dict) -> None:
+        """`timeline` から各レイヤの処理時間(ms)を取り出してリングバッファに積む。
+
+        欠損したマーカー(失敗等)は当該レイヤだけスキップ。CAPTURE は明確な開始時刻が
+        ないため VAD と一体扱いとし、`t_capture → t_vad_end` を VAD レイヤに記録する。
+        """
+        tl = record.get("timeline", {}) or {}
+
+        def _push(layer: LayerKind, start_key: str, end_key: str) -> None:
+            start = tl.get(start_key)
+            end = tl.get(end_key)
+            if start is None or end is None:
+                return
+            ms = (end - start) * 1000.0
+            self._recent_durations[layer].append(ms)
+
+        _push(LayerKind.VAD, "t_capture", "t_vad_end")
+        _push(LayerKind.ASR, "t_asr_start", "t_asr")
+        _push(LayerKind.TRANSLATOR, "t_translate_start", "t_translate")
+        _push(LayerKind.TTS, "t_tts_start", "t_tts")
+        _push(LayerKind.OUTPUT, "t_playback_start", "t_playback")
 
     def _handle_dropped(self, seq_ids: list[int], stage_name: str) -> None:
         """キューあふれで捨てられた発話の seq_id 通知。

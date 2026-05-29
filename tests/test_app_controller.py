@@ -19,8 +19,23 @@ from voice_translator.common.errors import FatalError
 from voice_translator.common.types import (
     CaptureSource,
     LayerKind,
+    ModelStatus,
     OutputDevice,
 )
+
+
+def _attach_backend_base_protocol(inst: MagicMock) -> None:
+    """Phase A2 で AppController が backend に求める I/F をモックに生やす。
+
+    - `get_status()` は LOADED を返す(load 完了直後の正常状態)
+    - `subscribe(callback)` は unsubscribe を持つ MagicMock を返す
+    既存テストの mock factory に注入することで「初期化手順の追加はテスト側で吸収」する
+    (CLAUDE.md テスト変更時の方針)。
+    """
+    inst.get_status = MagicMock(return_value=ModelStatus.LOADED)
+    sub = MagicMock(name="subscription")
+    sub.unsubscribe = MagicMock()
+    inst.subscribe = MagicMock(return_value=sub)
 
 
 # ============================================================
@@ -34,6 +49,7 @@ def _fake_capture_factory():
     inst.start = MagicMock()
     inst.stop = MagicMock()
     inst.read_chunk = MagicMock(return_value=None)
+    _attach_backend_base_protocol(inst)
     return inst
 
 
@@ -45,6 +61,7 @@ def _fake_output_factory():
     inst.start = MagicMock()
     inst.stop = MagicMock()
     inst.play = MagicMock()
+    _attach_backend_base_protocol(inst)
     return inst
 
 
@@ -56,6 +73,7 @@ def _fake_simple_backend():
     inst.transcribe = MagicMock(return_value=("hello", "en"))
     inst.translate = MagicMock(return_value="こんにちは")
     inst.synthesize = MagicMock(return_value=(b"audio", 16000))
+    _attach_backend_base_protocol(inst)
     return inst
 
 
@@ -572,6 +590,246 @@ class TestPipelineQueueConfig:
             assert ctrl._coord._translated_queue.maxsize == 3
         finally:
             ctrl.stop_pipeline()
+
+
+class TestPhaseA2StatusDelegation:
+    """Phase A2: AppController._model_status は廃止、状態の真実は backend 側にある。"""
+
+    def test_get_model_status_delegates_to_backend(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        # mock backend は LOADED を返すよう仕込んである
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.LOADED
+
+    def test_get_model_status_returns_init_when_not_loaded(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        # ロード前は backend 不在 → INIT
+        for layer in LayerKind:
+            assert ctrl.get_model_status(layer) == ModelStatus.INIT
+
+    def test_subscribe_called_on_load(
+        self, populated_registry, config
+    ) -> None:
+        """ロード時に AppController が各 backend の subscribe を呼ぶ。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        for layer in LayerKind:
+            backend = ctrl._backends[layer]
+            assert backend.subscribe.called, f"{layer}: subscribe 未呼び出し"
+
+    def test_eviction_unsubscribes(
+        self, populated_registry, config
+    ) -> None:
+        """backend 差し替え時に旧 backend の subscription が解除される。"""
+        populated_registry.register(LayerKind.ASR, "alt_asr", _fake_simple_backend)
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        old_sub = ctrl._backend_subscriptions[LayerKind.ASR]
+
+        ctrl.set_setting("backends", "asr", "alt_asr")
+        # 再ロード完了を待つ
+        import time
+        for _ in range(20):
+            if LayerKind.ASR in ctrl._backends and (
+                ctrl._backend_subscriptions.get(LayerKind.ASR) is not old_sub
+            ):
+                break
+            time.sleep(0.05)
+        assert old_sub.unsubscribe.called, "旧 backend の subscription が解除されていない"
+
+
+class TestPhaseA2MultiListener:
+    """`add_status_listener` で複数 UI listener を扱える(R2-6)。"""
+
+    def test_listener_invoked_on_load(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        events: list[tuple[LayerKind, ModelStatus]] = []
+        sub = ctrl.add_status_listener(lambda l, s: events.append((l, s)))
+        try:
+            ctrl.load_models()
+        finally:
+            sub.unsubscribe()
+        # 各レイヤで LOADING と LOADED が観測される
+        for layer in LayerKind:
+            seen = [s for (l, s) in events if l == layer]
+            assert ModelStatus.LOADING in seen
+            assert seen[-1] == ModelStatus.LOADED
+
+    def test_unsubscribe_stops_notifications(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        events: list[tuple[LayerKind, ModelStatus]] = []
+        sub = ctrl.add_status_listener(lambda l, s: events.append((l, s)))
+        sub.unsubscribe()
+        ctrl.load_models()
+        assert events == []
+
+    def test_multiple_listeners_all_notified(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        seen_a: list[tuple[LayerKind, ModelStatus]] = []
+        seen_b: list[tuple[LayerKind, ModelStatus]] = []
+        ctrl.add_status_listener(lambda l, s: seen_a.append((l, s)))
+        ctrl.add_status_listener(lambda l, s: seen_b.append((l, s)))
+        ctrl.load_models()
+        assert seen_a == seen_b
+        assert len(seen_a) > 0
+
+    def test_old_single_callback_still_works(
+        self, populated_registry, config
+    ) -> None:
+        """旧 set_callbacks(on_status_change=...) の経路も維持されている。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        events: list[tuple[LayerKind, ModelStatus]] = []
+        ctrl.set_callbacks(on_status_change=lambda l, s: events.append((l, s)))
+        ctrl.load_models()
+        for layer in LayerKind:
+            seen = [s for (l, s) in events if l == layer]
+            assert seen[-1] == ModelStatus.LOADED
+
+    def test_listener_exception_does_not_break_others(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        seen: list[tuple[LayerKind, ModelStatus]] = []
+
+        def bad(_l, _s):
+            raise RuntimeError("listener bug")
+
+        ctrl.add_status_listener(bad)
+        ctrl.add_status_listener(lambda l, s: seen.append((l, s)))
+        ctrl.load_models()
+        assert len(seen) > 0  # 後の listener が呼ばれている
+
+
+class TestPhaseA2LoadModelLayer:
+    """`load_model_layer(layer)` の単体ロード。"""
+
+    def test_single_layer_loaded(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        assert LayerKind.ASR in ctrl._backends
+        # 他レイヤは未ロード
+        for layer in LayerKind:
+            if layer == LayerKind.ASR:
+                continue
+            assert layer not in ctrl._backends
+
+    def test_idempotent(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        before = ctrl._backends[LayerKind.ASR]
+        ctrl.load_model_layer(LayerKind.ASR)
+        after = ctrl._backends[LayerKind.ASR]
+        assert before is after
+
+    def test_failure_propagates_and_emits_not_downloaded(
+        self, populated_registry, config
+    ) -> None:
+        """ロード失敗時は例外伝播 + status=NOT_DOWNLOADED 通知。"""
+        def _failing_factory():
+            raise RuntimeError("model not found")
+
+        populated_registry.register(LayerKind.ASR, "broken", _failing_factory)
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("backends", "asr", "broken")  # 再ロードは別スレッドで失敗
+        # set_setting 由来の再ロードが完了するのを待ち、最終状態が NOT_DOWNLOADED であること
+        import time
+        for _ in range(20):
+            if ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT:
+                # まだロードが始まっていない or 終わっていない
+                time.sleep(0.05)
+            else:
+                break
+        # 失敗ロードなので backend は不在
+        assert LayerKind.ASR not in ctrl._backends
+
+
+class TestPhaseA2RecentDurations:
+    """`get_recent_durations(layer)` のリングバッファ動作。"""
+
+    def test_initial_empty(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        for layer in LayerKind:
+            assert ctrl.get_recent_durations(layer) == []
+
+    def test_handle_utterance_done_pushes_durations(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        t0 = monotonic()
+        record = {
+            "seq_id": 1,
+            "src_text": "x",
+            "src_lang": "en",
+            "tgt_text": "y",
+            "tgt_lang": "ja",
+            "timeline": {
+                "t_capture": t0,
+                "t_vad_end": t0 + 0.1,
+                "t_asr_start": t0 + 0.1,
+                "t_asr": t0 + 0.3,
+                "t_translate_start": t0 + 0.3,
+                "t_translate": t0 + 0.5,
+                "t_tts_start": t0 + 0.5,
+                "t_tts": t0 + 0.7,
+                "t_playback_start": t0 + 0.7,
+                "t_playback": t0 + 0.8,
+            },
+        }
+        ctrl._handle_utterance_done(record)
+        # VAD: 100ms, ASR: 200ms, Translator: 200ms, TTS: 200ms, Output: 100ms
+        assert ctrl.get_recent_durations(LayerKind.VAD) == pytest.approx([100.0], rel=0.01)
+        assert ctrl.get_recent_durations(LayerKind.ASR) == pytest.approx([200.0], rel=0.01)
+        assert ctrl.get_recent_durations(LayerKind.TRANSLATOR) == pytest.approx([200.0], rel=0.01)
+        assert ctrl.get_recent_durations(LayerKind.TTS) == pytest.approx([200.0], rel=0.01)
+        assert ctrl.get_recent_durations(LayerKind.OUTPUT) == pytest.approx([100.0], rel=0.01)
+
+    def test_missing_timeline_marker_is_skipped(
+        self, populated_registry, config
+    ) -> None:
+        """timeline に欠落があれば該当レイヤだけスキップ。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        t0 = monotonic()
+        record = {
+            "seq_id": 1,
+            "timeline": {
+                "t_asr_start": t0,
+                "t_asr": t0 + 0.1,
+                # 他のマーカーは欠落
+            },
+        }
+        ctrl._handle_utterance_done(record)
+        assert len(ctrl.get_recent_durations(LayerKind.ASR)) == 1
+        # 他レイヤは何も積まれていない
+        assert ctrl.get_recent_durations(LayerKind.VAD) == []
+        assert ctrl.get_recent_durations(LayerKind.TRANSLATOR) == []
+
+    def test_ring_buffer_keeps_only_recent(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        for i in range(8):
+            t0 = monotonic()
+            record = {
+                "seq_id": i,
+                "timeline": {
+                    "t_asr_start": t0,
+                    "t_asr": t0 + (i + 1) * 0.01,  # 10, 20, 30,...ms
+                },
+            }
+            ctrl._handle_utterance_done(record)
+        durations = ctrl.get_recent_durations(LayerKind.ASR)
+        assert len(durations) == 5
+        # 直近 5 件(seq_id=3..7、つまり 40..80 ms 近辺)
+        assert durations[0] == pytest.approx(40.0, rel=0.01)
+        assert durations[-1] == pytest.approx(80.0, rel=0.01)
 
 
 class TestHandleDropped:
