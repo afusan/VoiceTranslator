@@ -75,6 +75,11 @@ Phase B 以降が必要とする backend 側 API を全て揃える。実 backen
 5. **既存 backend (`FasterWhisperAsrBackend`、`Nllb200TranslatorBackend`、`SapiTtsBackend`、`SileroVadBackend`、その他) を新 capability で申告し直す**:
    - 主にローカル backend なので `is_cloud=False` / `requires_credentials=False` 等の既定値で十分
    - faster-whisper / NLLB は `list_recommended_models()` を実装(暫定値で OK)
+6. **AppController の拡張**(Phase C UI が利用する基盤):
+   - `load_model_layer(layer)` 公開メソッド追加(既存の `_safe_load_layer` を公開化 or 新規)
+   - 状態変化リスナーの **multi-listener 対応**(`add_status_listener(callback)` / `remove_status_listener(callback)`)— 複数の LayerSettingsDialog が同時購読可能に
+   - layer 別 **直近処理時間リングバッファ**(`deque(maxlen=5)`)を保持、`get_recent_durations(layer)` で UI に提供。push は既存 `_handle_utterance_done(record)` 内
+   - 関連リスク: [knownRisks R-2 / R-9](knownRisks.md) の解消方針に準拠
 
 ### A.4 影響範囲
 - `src/voice_translator/common/types.py`(BackendCapabilities / ModelStatus / 新 dataclass)
@@ -151,13 +156,16 @@ Phase B 以降が必要とする backend 側 API を全て揃える。実 backen
 1. **SettingsPanel への追加**:
    - クラウド backend のプルダウン項目に **☁ バッジ** を表示(`is_cloud=True` を見る)
    - LOADED 状態の表示は維持
-2. **`LayerSettingsDialog` の大幅拡張**:
-   - **モデル選択ドロップダウン**(`list_recommended_models()` から)
-     - 各モデル名の隣に「目安: RAM 2GB / VRAM 1GB」「✓ 推奨 / ⚠ 重い / ✗ 不可」アイコン
-   - **[Load Model] ボタン**(クリックで該当 backend だけロード実行)
-   - **[Auto-load: ON/OFF] トグル**
-   - **直近 5 件処理時間平均 + 目安時間**表示(該当レイヤが動作したことがあれば)
-   - 「明らかにダメな容量」を選択時は警告ダイアログ
+2. **`LayerSettingsDialog` の大幅拡張**(スキーマ拡張方針、knownRisks R-2 参照):
+   - **スキーマ側の拡張**: `FieldType` に `"dropdown"` / `"toggle"` / `"button"` / `"label_readonly"` 等を追加、`SettingField` に `options_fn` / `action_fn` / `reactive_to` 属性を追加
+   - **ダイアログ側の dispatch 拡張**: 新 `FieldType` ごとに `_add_<type>_row` を追加(既存の `_add_field_row` と並列に多態化)
+   - 追加する画面要素:
+     - **モデル選択ドロップダウン**(`list_recommended_models()` から)、各モデル名の隣に「目安: RAM 2GB / VRAM 1GB」「✓ 推奨 / ⚠ 重い / ✗ 不可」アイコン
+     - **[Load Model] ボタン**(クリックで `AppController.load_model_layer(layer)` 呼び出し)
+     - **[Auto-load: ON/OFF] トグル**
+     - **直近 5 件処理時間平均 + 目安時間**表示(`AppController.get_recent_durations(layer)` から)
+     - 「明らかにダメな容量」を選択時は警告ダイアログ
+   - **状態変化への追随**: ダイアログ開閉時に `AppController.add_status_listener` / `remove_status_listener` で購読し、Load ボタンや状態ラベルを動的更新(`widget.after(0, ...)` でメインスレッドにマーシャル)
 3. **ステータステキストボックス**(全レイヤのエラー集約):
    - MainWindow か ControlPanel の適切な場所に追加
    - 各レイヤの `get_recent_errors()` を定期的に取得して集約表示
