@@ -65,9 +65,14 @@ Phase B 以降が必要とする backend 側 API を全て揃える。実 backen
    - 各モデルの推奨/リソース情報を返す仕組み(後述)
 2. **モデル申告 API を backend に追加**(モデル選択肢を持つ backend 用):
    - `list_recommended_models() -> list[ModelInfo]` のようなメソッド
-   - `ModelInfo` は `{name, display_name, ram_gb, vram_gb_if_gpu, target_proc_ms_per_sec_audio}` 程度の dataclass
+   - `ModelInfo` は `{name, display_name, ram_gb, vram_gb_if_gpu, download_size_gb, target_proc_ms_per_sec_audio}` 程度の dataclass
+   - `download_size_gb` は DL 中のステータス表示用(R-3 対応)、不明なら `None`
    - モデルを持たない backend(SAPI、Silero 等)は空リスト返却
-3. **`ModelStatus.MISSING_CREDENTIALS` を追加**(`types.py` の enum)
+3. **`ModelStatus` の拡張**(`types.py` の enum):
+   - `MISSING_CREDENTIALS` を追加(認証情報不足、論点 1 / R-1)
+   - `DOWNLOADING` を追加(モデル DL 中、R-3)
+   - 想定遷移: `INIT → DOWNLOADING → LOADING → LOADED`(DL 不要なら DOWNLOADING をスキップ)
+   - 失敗時: `NOT_DOWNLOADED`(DL 失敗、再試行可) / `MISSING_CREDENTIALS`(認証不足、再認証要)
 4. **backend ベースクラスにエラー保持機構を追加**:
    - `record_error(exc, *, context=None)` と `get_recent_errors() -> list[ErrorRecord]`
    - 内部はリングバッファ(暫定 5 件)
@@ -166,10 +171,11 @@ Phase B 以降が必要とする backend 側 API を全て揃える。実 backen
      - **直近 5 件処理時間平均 + 目安時間**表示(`AppController.get_recent_durations(layer)` から)
      - 「明らかにダメな容量」を選択時は警告ダイアログ
    - **状態変化への追随**: ダイアログ開閉時に `AppController.add_status_listener` / `remove_status_listener` で購読し、Load ボタンや状態ラベルを動的更新(`widget.after(0, ...)` でメインスレッドにマーシャル)
-3. **ステータステキストボックス**(全レイヤのエラー集約):
+3. **ステータステキストボックス**(全レイヤのエラー集約 + 進捗表示):
    - MainWindow か ControlPanel の適切な場所に追加
    - 各レイヤの `get_recent_errors()` を定期的に取得して集約表示
    - 「どのレイヤ・どの backend で何が起きたか」を必ず明示
+   - **DL 中の進捗表示**(R-3): `DOWNLOADING` 状態のレイヤがあれば「`<layer> (<backend> / <model>): モデルダウンロード中 (~XGB)。しばらくお待ちください`」を表示。`ModelInfo.download_size_gb` を参照、`None` ならサイズ非表示
 4. **hw 検出ヘルパ**:
    - `common/hw_info.py` 等で `detect_hw() -> HwInfo(ram_gb, has_gpu, vram_gb)` を提供
    - `psutil` + `torch.cuda` で取得
