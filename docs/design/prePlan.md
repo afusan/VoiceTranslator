@@ -28,3 +28,25 @@
 - **全レイヤのステータス可視化**:
   - **ステータス表示用のテキストボックスを追加**(エラー文を含むサマリを 1 箇所に集約)
   - レイヤ状態が変わったら、各レイヤでエラーを取り直してテキストボックスを更新するイメージ
+
+---
+
+## 論点 2: クラウド backend 利用時の「同意」UX
+
+**問題**: クラウド backend に切替えると音声/テキストが外部 API に送信される。ユーザに意識させずに切替えられるのはプライバシ事故源。バックエンドは「ローカル動作」と「クラウド動作」に明確に二分されるので、`BackendCapabilities.is_cloud: bool` で判別する。
+
+**決定**:
+- **方式**: (a) 初回モーダル + (b) 常時バッジ の併用
+  - 初回モーダル: 該当 backend を初めて選んだとき同意ダイアログを出す
+  - 常時バッジ: クラウド backend に ☁ アイコンを SettingsPanel のプルダウン項目・状態ラベル等で常時表示
+- **同意の粒度**: backend 単位(`consents.<backend>: true`)
+  - 例: `consents.openai_whisper_api: true` / `consents.deepl_api: true`
+- **同意取り消し UI**: 当面は作らない(別 backend に切替えれば実害なし。要望が出てから対応)
+- **「今後表示しない」master switch**: `config.yaml` に `consents.suppress_dialogs: true` を追加。有効時は全クラウド backend で同意ダイアログをスキップして即切替
+- **同意ダイアログ文言**: 全 backend 共通テンプレートに placeholder 差し込み方式。送信先 / 送信データ種別 / 利用規約 URL を表示
+  - `BackendCapabilities` に `service_name: str | None` と `terms_url: str | None` を追加し、ダイアログから参照
+- **キャンセル時の挙動**:
+  - 操作を**取り消し**(set_setting を呼ばない、ConfigStore は変化なし)
+  - SettingsPanel のプルダウン表示値だけを元の値に戻す(視覚的に「変更されてない」を明示)
+  - 同意確認は `set_setting` を呼ぶ**前**に挟む(後から呼ぶとロールバック処理が必要になる)
+  - 初回起動で「previous」が無いケースは `DEFAULT_CONFIG` の初期値に戻す
