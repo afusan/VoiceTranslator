@@ -113,8 +113,9 @@ class TestFasterWhisperConfigIntegration:
         registry = BackendRegistry()
         register_default_backends(registry)
         registry.create(LayerKind.ASR, "faster_whisper")
+        # model_size はデフォルト "small"(Phase: model dropdown 対応)
         patched_backend_setup["FasterWhisperAsrBackend"].assert_called_with(
-            device="auto", compute_type="auto"
+            model_size="small", device="auto", compute_type="auto"
         )
 
     def test_device_read_from_config(self, patched_backend_setup, tmp_path) -> None:
@@ -129,7 +130,40 @@ class TestFasterWhisperConfigIntegration:
         register_default_backends(registry, config)
         registry.create(LayerKind.ASR, "faster_whisper")
         patched_backend_setup["FasterWhisperAsrBackend"].assert_called_with(
-            device="cuda", compute_type="float16"
+            model_size="small", device="cuda", compute_type="float16"
+        )
+
+    def test_model_size_read_from_config(
+        self, patched_backend_setup, tmp_path
+    ) -> None:
+        """設定から model_size を変更すると、その値で WhisperModel が呼ばれる。"""
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "faster_whisper", "model_size", "medium")
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.ASR, "faster_whisper")
+        patched_backend_setup["FasterWhisperAsrBackend"].assert_called_with(
+            model_size="medium", device="auto", compute_type="auto"
+        )
+
+    def test_empty_model_size_falls_back_to_default(
+        self, patched_backend_setup, tmp_path
+    ) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "faster_whisper", "model_size", "  ")
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.ASR, "faster_whisper")
+        patched_backend_setup["FasterWhisperAsrBackend"].assert_called_with(
+            model_size="small", device="auto", compute_type="auto"
         )
 
 

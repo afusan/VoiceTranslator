@@ -57,7 +57,11 @@ def register_default_backends(
         ),
     )
 
-    # faster-whisper の device / compute_type を config から取る
+    # faster-whisper の model_size / device / compute_type を config から取る。
+    # model_size は GUI 詳細ダイアログの dropdown から切り替え可能(Phase C 拡張)。
+    fw_model_size = _read_str(
+        config, ("backends_config", "faster_whisper", "model_size"), default="small"
+    )
     fw_device = _read_str(
         config, ("backends_config", "faster_whisper", "device"), default="auto"
     )
@@ -68,7 +72,9 @@ def register_default_backends(
         LayerKind.ASR,
         "faster_whisper",
         lambda: FasterWhisperAsrBackend(
-            device=fw_device, compute_type=fw_compute_type
+            model_size=fw_model_size,
+            device=fw_device,
+            compute_type=fw_compute_type,
         ),
     )
 

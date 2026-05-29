@@ -1056,6 +1056,35 @@ class TestPhaseC3StatusSummary:
         assert "Downloading" in summary
 
 
+class TestReloadModelLayer:
+    """`reload_model_layer(layer)` の挙動。既ロード時は evict → 作り直し。"""
+
+    def test_reload_creates_new_instance(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        old = ctrl._backends[LayerKind.ASR]
+        ctrl.reload_model_layer(LayerKind.ASR)
+        new = ctrl._backends[LayerKind.ASR]
+        assert new is not old, "reload で新インスタンスに置き換わるはず"
+
+    def test_reload_on_unloaded_layer_just_loads(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert LayerKind.ASR not in ctrl._backends
+        ctrl.reload_model_layer(LayerKind.ASR)
+        assert LayerKind.ASR in ctrl._backends
+
+    def test_reload_unsubscribes_old_subscription(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        old_sub = ctrl._backend_subscriptions[LayerKind.ASR]
+        ctrl.reload_model_layer(LayerKind.ASR)
+        assert old_sub.unsubscribe.called
+
+
 class TestPhaseDCredentials:
     """Phase D: AppController が CredentialsStore を仲介する。"""
 

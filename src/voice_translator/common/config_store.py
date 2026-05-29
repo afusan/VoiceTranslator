@@ -108,6 +108,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             #   GPU=int8_float16, CPU=int8 を選ぶ。
             "device": "auto",
             "compute_type": "auto",
+            # model_size: tiny / base / small / medium / large-v3 等。Whisper のサイズ別 repo に
+            #   対応する。GUI の詳細ダイアログから dropdown で選択可。値変更後にレイヤを
+            #   再ロードしないと新しいサイズが反映されない(詳細ダイアログの「(再)ロード」ボタン)。
+            "model_size": "small",
         },
         "nllb200": {
             "auto_load": False,

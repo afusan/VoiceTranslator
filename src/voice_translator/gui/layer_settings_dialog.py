@@ -27,9 +27,12 @@ import customtkinter as ctk
 
 from voice_translator.common.types import LayerKind, ModelStatus
 
+from voice_translator.common.types import ModelInfo
+
 from .layer_settings_schema import (
     CREDENTIAL_KEYS_MARKER,
     SettingField,
+    format_model_option,
     parse_field_value,
     recent_durations_text,
     visible_fields,
@@ -69,6 +72,8 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         self._layer = layer
         # text/toggle/dropdown は (field, var) を保持。button/label は別途。
         self._entries: dict[tuple[str, ...], tuple[SettingField, ctk.StringVar]] = {}
+        # dropdown 用: 表示文字列 → 内部値(モデル名等)の変換 map。ModelInfo 表示用。
+        self._dropdown_value_maps: dict[tuple[str, ...], dict[str, str]] = {}
         # label_readonly: (field, label widget) を保持し、状態変化で再描画する
         self._reactive_labels: list[tuple[SettingField, ctk.CTkLabel]] = []
         # AppController 状態変化購読(R2-6)
@@ -187,17 +192,42 @@ class LayerSettingsDialog(ctk.CTkToplevel):
 
     # ---- dropdown(プルダウン)----
     def _add_dropdown_row(self, field: SettingField, *, row: int) -> None:
-        if field.options_fn is None:
-            options = [str(field.default) if field.default is not None else ""]
-        else:
+        """選択肢を実行時に options_fn から取得する。
+
+        ModelInfo のリストが返った場合は display_name + リソース目安 + fit アイコンで整形し、
+        内部値(モデル名)とは分離して保持する。文字列リストならそのまま表示=値。
+        """
+        raw_opts: list = []
+        if field.options_fn is not None:
             try:
-                raw_opts = field.options_fn(self._controller, self._layer)
+                raw_opts = list(field.options_fn(self._controller, self._layer))
             except Exception:  # noqa: BLE001
                 raw_opts = []
-            options = [str(o) for o in raw_opts] or ["(選択肢なし)"]
+
+        # display_text → internal_value のマップを作る
+        display_to_value: dict[str, str] = {}
+        if raw_opts and all(isinstance(o, ModelInfo) for o in raw_opts):
+            for m in raw_opts:
+                display_to_value[format_model_option(m)] = m.name
+        else:
+            for o in raw_opts:
+                s = str(o)
+                display_to_value[s] = s
+
+        if not display_to_value:
+            # 選択肢が空 → 既定値だけ出す(編集はできるがほぼ機能しない)
+            fallback = str(field.default) if field.default is not None else ""
+            display_to_value[fallback or "(選択肢なし)"] = fallback
+
+        options = list(display_to_value.keys())
+
+        # 現在の内部値 → 表示テキスト
         current_value = self._controller.get_setting(*field.keys, default=field.default)
-        initial = str(current_value) if current_value is not None else options[0]
-        var = ctk.StringVar(value=initial if initial in options else options[0])
+        current_value_str = "" if current_value is None else str(current_value)
+        value_to_display = {v: d for d, v in display_to_value.items()}
+        initial_display = value_to_display.get(current_value_str, options[0])
+
+        var = ctk.StringVar(value=initial_display)
         ctk.CTkLabel(self, text=field.label).grid(
             row=row, column=0, sticky="w", padx=12, pady=(8, 0)
         )
@@ -206,6 +236,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         )
         self._add_help_row(field, row=row + 1)
         self._entries[field.keys] = (field, var)
+        self._dropdown_value_maps[field.keys] = display_to_value
 
     # ---- button(アクションボタン)----
     def _add_button_row(self, field: SettingField, *, row: int) -> None:
@@ -347,6 +378,12 @@ class LayerSettingsDialog(ctk.CTkToplevel):
                 b, k = self._parse_credential_keys(keys)
                 if b is not None and k is not None:
                     credential_updates.append((b, k, raw))
+                continue
+            # dropdown: 表示文字列 → 内部値(モデル名等)に変換
+            if field.field_type == "dropdown":
+                value_map = self._dropdown_value_maps.get(keys, {})
+                value = value_map.get(raw, raw)
+                new_values.append((keys, value))
                 continue
             try:
                 value = parse_field_value(field.field_type, raw)

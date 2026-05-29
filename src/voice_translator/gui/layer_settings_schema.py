@@ -138,13 +138,22 @@ def format_model_option(m: ModelInfo, hw=None) -> str:
 
 
 def load_model_action(controller: "AppController", layer: LayerKind) -> None:
-    """指定レイヤの backend をバックグラウンドでロードする(button.action_fn 用)。
+    """指定レイヤの backend をバックグラウンドで(再)ロードする(button.action_fn 用)。
 
-    UI をブロックしないようバックグラウンドスレッドで `load_model_layer` を呼ぶ。
-    ロード状況は backend / AppController の `subscribe` 経由で UI へ通知される。
+    既にロード済みなら一度 evict してから作り直す(`reload_model_layer`)。これにより
+    詳細ダイアログでモデル選択を変えた後、本ボタンで設定値を反映できる。
+    UI をブロックしないようバックグラウンドスレッドで実行する。ロード状況は backend /
+    AppController の `subscribe` 経由で UI へ通知される。
     """
+    def _run() -> None:
+        try:
+            controller.reload_model_layer(layer)
+        except Exception:  # noqa: BLE001
+            # 失敗は backend の record_error + emit_status(NOT_DOWNLOADED) で吸収済み
+            pass
+
     threading.Thread(
-        target=lambda: controller._safe_load_layer(layer),
+        target=_run,
         daemon=True,
         name=f"vt_dialog_load_{layer.value}",
     ).start()
@@ -181,17 +190,29 @@ def _auto_load_toggle(backend_name: str) -> "SettingField":
 
 
 def _load_model_button(layer: LayerKind) -> "SettingField":
-    """指定レイヤを手動ロードするボタン(Phase C2)。"""
+    """指定レイヤを手動(再)ロードするボタン(Phase C2 / モデル切替時の反映に使う)。"""
     return SettingField(
         keys=(),
-        label="モデルをロード",
+        label="モデルを(再)ロード",
         field_type="button",
         action_fn=load_model_action,
         help_text=(
-            "今すぐこのレイヤの backend をバックグラウンドでロードする。"
-            "ロード状況はステータスラベルに反映される。"
+            "今すぐこのレイヤの backend をバックグラウンドで(再)ロードする。"
+            "既にロード済みでも一度 evict して新しい設定値で作り直す。"
         ),
     )
+
+
+def _faster_whisper_model_options(
+    controller: "AppController", layer: LayerKind  # noqa: ARG001
+) -> list[ModelInfo]:
+    """faster-whisper の推奨モデル一覧を返す(dropdown の options_fn)。
+
+    インスタンスを生成せずに class method 経由で取得する。これによりモデル選択肢が
+    backend ロード前でも引ける(ダイアログ起動時に即時表示できる)。
+    """
+    from voice_translator.asr.faster_whisper_backend import FasterWhisperAsrBackend
+    return FasterWhisperAsrBackend.recommended_models()
 
 
 def _recent_durations_label(layer: LayerKind) -> "SettingField":
@@ -238,6 +259,19 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             help_text=(
                 "ASR が出力した認識テキストを翻訳段に渡すキューの上限件数。"
                 "テキストは1発話で数百バイトと小さいため件数で管理する。"
+            ),
+        ),
+        SettingField(
+            keys=("backends_config", "faster_whisper", "model_size"),
+            label="Whisper モデル",
+            field_type="dropdown",
+            default="small",
+            applies_when_backend="faster_whisper",
+            options_fn=_faster_whisper_model_options,
+            help_text=(
+                "Whisper のモデルサイズ。大きいほど精度が上がるが、RAM/VRAM と処理時間が増える。"
+                "✓ 推奨 / ⚠ 重い / ✗ 不可 アイコンは現環境(RAM/VRAM)との適合度の目安。"
+                "変更後は「モデルを(再)ロード」ボタンで反映する。"
             ),
         ),
         _auto_load_toggle("faster_whisper"),

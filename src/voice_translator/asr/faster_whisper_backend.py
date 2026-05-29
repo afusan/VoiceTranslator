@@ -182,4 +182,9 @@ class FasterWhisperAsrBackend(AsrBackend):
 
     def list_recommended_models(self) -> list[ModelInfo]:
         """Whisper の代表サイズ一覧を返す。"""
+        return self.recommended_models()
+
+    @classmethod
+    def recommended_models(cls) -> list[ModelInfo]:
+        """インスタンス無しでも推奨モデル一覧を引ける(GUI 詳細ダイアログの dropdown 用)。"""
         return list(_RECOMMENDED_MODELS)

@@ -200,12 +200,17 @@ class TestRecentDurationsText:
 
 
 class TestLoadModelAction:
-    def test_spawns_thread_and_invokes_safe_load(self) -> None:
-        """`load_model_action` はバックグラウンドで `_safe_load_layer` を呼ぶ。"""
+    def test_spawns_thread_and_invokes_reload(self) -> None:
+        """`load_model_action` はバックグラウンドで `reload_model_layer` を呼ぶ。
+
+        (旧仕様の `_safe_load_layer` は既ロード時に no-op だったため、モデル選択を
+        変えても反映されなかった。今は強制的に evict → 再ロードする `reload_model_layer`
+        を呼ぶよう書き換えた)
+        """
         import time
         called: list[LayerKind] = []
         ctrl = MagicMock()
-        ctrl._safe_load_layer = MagicMock(side_effect=lambda l: called.append(l))
+        ctrl.reload_model_layer = MagicMock(side_effect=lambda l: called.append(l))
 
         load_model_action(ctrl, LayerKind.ASR)
         # スレッドの完了を少し待つ
@@ -244,6 +249,32 @@ class TestVisibleFields:
         # silero 時に出る auto_load トグルが、other_vad 時には消える
         assert any(f.field_type == "toggle" for f in with_silero)
         assert not any(f.field_type == "toggle" for f in with_other)
+
+
+class TestFasterWhisperModelDropdown:
+    """faster-whisper の model_size を選ぶ dropdown が ASR に出ること。"""
+
+    def test_model_dropdown_visible_with_faster_whisper(self) -> None:
+        fields = visible_fields(LayerKind.ASR, current_backend="faster_whisper")
+        dropdowns = [f for f in fields if f.field_type == "dropdown"]
+        assert len(dropdowns) == 1
+        f = dropdowns[0]
+        assert f.keys == ("backends_config", "faster_whisper", "model_size")
+        assert f.options_fn is not None
+
+    def test_model_dropdown_hidden_for_other_backend(self) -> None:
+        fields = visible_fields(LayerKind.ASR, current_backend="some_other_asr")
+        assert not any(f.field_type == "dropdown" for f in fields)
+
+    def test_options_fn_returns_model_info_list(self) -> None:
+        """options_fn は ModelInfo のリストを返し、small/medium/large 等を含む。"""
+        fields = visible_fields(LayerKind.ASR, current_backend="faster_whisper")
+        dropdown = next(f for f in fields if f.field_type == "dropdown")
+        models = dropdown.options_fn(MagicMock(), LayerKind.ASR)
+        assert len(models) >= 3
+        names = [m.name for m in models]
+        assert "small" in names
+        assert "medium" in names
 
 
 class TestExpectedFields:

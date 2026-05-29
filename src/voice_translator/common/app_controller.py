@@ -415,6 +415,18 @@ class AppController:
         with self._load_lock:
             self._load_layer_locked(layer)
 
+    def reload_model_layer(self, layer: LayerKind) -> None:
+        """単一レイヤを強制的に作り直す(既ロードでも evict してから load)。
+
+        backends_config の値(faster-whisper model_size 等)を変更したあとに、設定を
+        反映させるために使う。パイプライン動作中はキャッシュ参照されている backend を
+        差し替えないので、停止 → 再開で新インスタンスが入る。
+        """
+        with self._load_lock:
+            self._evict_backend_locked(layer)
+            self._emit_status(layer, ModelStatus.INIT)
+            self._load_layer_locked(layer)
+
     def _load_layer_locked(self, layer: LayerKind) -> None:
         """`load_lock` を保持中の caller から呼ぶ実体。
 
