@@ -55,6 +55,15 @@
 - 本ブランチをチェックアウト済み、全テスト pass
 - [prePlan 論点 7](prePlan.md) + [knownRisks2 R2-1](knownRisks2.md) の分散管理方針を把握
 
+### A1.2.5 着手前に読むべき既存コード(参照ファイル)
+- `src/voice_translator/common/types.py` — `BackendCapabilities` / `ModelStatus` / `LayerKind` 定義の現状
+- `src/voice_translator/common/errors.py` — `AppError` 階層(`FatalError` / `RecoverableError` / `SkipError` / `WarnError`)の定義。docstring 拡張対象
+- `src/voice_translator/common/cache_check.py` — モデルキャッシュ判定の既存関数群(`check_faster_whisper` 等)。DOWNLOADING 判定で再利用
+- `src/voice_translator/common/app_controller.py` — `_model_status` の現状実装(A2 で簡略化、A1 では触らない)
+- `src/voice_translator/{asr,vad,translator,tts,capture,output}/backend.py` — 各レイヤの抽象 I/F。capability/notify を生やす対象
+- `src/voice_translator/asr/faster_whisper_backend.py` 等 — 既存 backend の `except` 節 grep 対象(R2-5)
+- `tests/test_*.py` — 既存テストの fixture パターンを把握(テスト変更時の方針に従う)
+
 ### A1.3 作業
 1. **`BackendCapabilities` を拡張**(prePlan 論点 7 + R-6 解消方針):
    - `is_cloud: bool`(既定 False)

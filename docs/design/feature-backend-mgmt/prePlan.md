@@ -16,7 +16,7 @@
 | 4+5 | パラメータ公開 | パネルは backend 選択のみ。モデル選択は詳細ダイアログ内。preset 概念は導入せずモデル選択で兼ねる。個別パラメータは defaults + `config.yaml` 手編集 |
 | 新 | ロード方式・リソース可視化 | 起動時 auto-load 既定 OFF、詳細に Load ボタン + Auto-load トグル + 目安リソース。開始ボタンは常時押せ未ロードはその場でロード。直近 5 件処理時間表示 |
 | 6 | プロファイル自動調整 | **見送り**(可視化のみ実装、提案 UI は別機会) |
-| 7 | `BackendCapabilities` 拡張 | `is_cloud` / `requires_credentials` / `service_name` / `terms_url` / `is_retryable_on_error` / 推奨モデル + リソース申告 を追加。コスト目安は不要 |
+| 7 | `BackendCapabilities` 拡張 | `is_cloud` / `requires_credentials` / `service_name` / `terms_url` / 推奨モデル + リソース申告 を追加。コスト目安は不要。リトライ判定は既存 `AppError` severity を活用するため `is_retryable_on_error` は追加しない(knownRisks R-6 で確定) |
 | 8 | テスト戦略 | 新 backend 追加時は `docs/forRunner/` の手順で検証、必要なら middle 追加。通常機能追加では実行しない、モデル追加等の限定的タイミングで手動実行 |
 | 9 | 状態管理 | `MISSING_CREDENTIALS` 追加(論点 1)以外は既存仕組みで対応、追加事項なし |
 
@@ -78,8 +78,8 @@
 - **リトライ方針**(backend ごとに違う):
   - **ネットワーク経由のテキスト系 API**(クラウド翻訳・クラウド ASR 等): 3 回まで指数バックオフでリトライ → それでも失敗なら停止
   - **それ以外**(ローカル backend、デバイス I/O、認証失敗、ロード失敗 等): リトライせず即停止
-  - 判定は backend 自身が `BackendCapabilities.is_retryable_on_error: bool` 等で申告する形が綺麗
-  - 既存の `ErrorHandler` の severity(RECOVERABLE / FATAL / SKIP / WARN)とどう組み合わせるかは実装時に整理
+  - 判定は **backend 自身が catch 時に適切な `AppError` サブクラス(`FatalError` / `RecoverableError` / `SkipError` / `WarnError`)に包んで raise する** 方式に確定(knownRisks R-6)
+  - 既存の `ErrorHandler.handle` の severity 分岐に「`RECOVERABLE` の場合は 3 回リトライ(指数バックオフ)」を組み込む。新規 flag/enum 不要
 - **観測性**(エラーをユーザに見せる経路):
   - **各 backend が直近 N 件のエラーを内部に保持**(N は暫定 5〜10)
   - backend に `get_recent_errors()` のような問い合わせ口を追加
@@ -158,7 +158,7 @@
 | `requires_credentials: bool` | 認証入力 UI の動的表示、key 未設定検知 | 論点 1 |
 | `service_name: str \| None` | 同意ダイアログ内の送信先表示 | 論点 2 |
 | `terms_url: str \| None` | 同意ダイアログ内の利用規約リンク | 論点 2 |
-| `is_retryable_on_error: bool` | 失敗時にリトライするかの判定 | 論点 3 |
+| ~~`is_retryable_on_error: bool`~~ | **追加しない**(knownRisks R-6 解消方針)。backend が catch 時に `AppError` 階層に包む方式に変更 | 論点 3 |
 | 推奨モデル一覧 + 各モデルの `{ram_gb, vram_gb_if_gpu}` + 目安処理時間 | UI 表示、リソース判定、目安時間表示 | 論点 4-5 / 新 |
 
 **保留**: コスト目安(`estimated_cost_per_min` 等)は追加しない。正確な算出が難しく、ユーザの実感とずれやすい。要望が出てから検討。
