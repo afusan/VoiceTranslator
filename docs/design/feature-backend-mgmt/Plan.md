@@ -2,13 +2,13 @@
 
 > ブランチ: `feature/backend-mgmt`
 > 起票日: 2026-05-29
-> 関連: [../prePlan.md](../prePlan.md)(全論点の決定根拠) / [../Architecture.html](../Architecture.html) / [../Class.md](../Class.md) / [../pendList.md](../pendList.md)
+> 関連: [prePlan.md](prePlan.md)(全論点の決定根拠) / [../Architecture.html](../Architecture.html) / [../Class.md](../Class.md) / [../pendList.md](../pendList.md)
 
 ## 1. 目的
 
 レイヤ内のバックエンド/モデル/パラメータ調整 + 認証情報サポート + クラウド backend 対応 + 失敗時のリトライ/停止/可視化、を一式まとめて実装する。
 
-各論点の議論詳細・決定根拠は [../prePlan.md](../prePlan.md) を参照(本 Plan は実装計画のみ)。
+各論点の議論詳細・決定根拠は [prePlan.md](prePlan.md) を参照(本 Plan は実装計画のみ)。
 
 ## 2. 全体方針
 
@@ -28,7 +28,7 @@
    - **前提**: 完了している Phase / 設計の決定事項
    - **作業**: 具体的なタスク
    - **完了条件**: ここまでできれば Phase 完了
-5. **設計の決定根拠が必要なときは** [../prePlan.md](../prePlan.md) の該当論点を参照
+5. **設計の決定根拠が必要なときは** [prePlan.md](prePlan.md) の該当論点を参照
 6. **既存コード理解が必要なら**: `src/voice_translator/common/{app_controller,backend_registry,backend_setup,config_store}.py` を読む
 
 ## 4. 進捗ステータス
@@ -52,7 +52,7 @@ Phase B 以降が必要とする backend 側 API を全て揃える。実 backen
 ### A.2 前提
 - 本ブランチをチェックアウト済み
 - 全テスト pass の状態
-- [prePlan 論点 7](../prePlan.md) の `BackendCapabilities` 拡張内容を把握
+- [prePlan 論点 7](prePlan.md) の `BackendCapabilities` 拡張内容を把握
 
 ### A.3 作業
 1. **`BackendCapabilities` を拡張**(prePlan 論点 7 の表通り):
