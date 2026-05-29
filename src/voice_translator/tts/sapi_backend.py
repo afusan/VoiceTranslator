@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 
 from voice_translator.common.errors import FatalError, SkipError
-from voice_translator.common.types import BackendCapabilities
+from voice_translator.common.types import BackendCapabilities, ModelStatus
 
 from .backend import TtsBackend
 
@@ -36,10 +36,14 @@ class SapiTtsBackend(TtsBackend):
         voice_lang_hint: str = "ja",
         flush_delay_sec: float = 0.1,
     ) -> None:
+        super().__init__()  # BackendBase: status=INIT
+        # SAPI は OS 同梱、DL なし。直接 LOADING → LOADED で十分。
+        self._set_status(ModelStatus.LOADING)
         # init はテストのために遅延もしない(失敗を即時 FATAL にしたい)
         try:
             import pyttsx3  # type: ignore  # noqa: F401
         except Exception as e:  # noqa: BLE001
+            self.record_error(e, context="pyttsx3 import")
             raise FatalError(f"pyttsx3 のロードに失敗: {e}", cause=e) from e
         self._rate = rate
         self._voice_lang_hint = voice_lang_hint
@@ -49,6 +53,7 @@ class SapiTtsBackend(TtsBackend):
         # 詳細は docs/design/pendList.md [2026-05-27] SAPI 音節繰り返し を参照。
         # 将来 TTS バックエンドを差し替えたら本パラメータごと削除する。
         self._flush_delay_sec = max(0.0, float(flush_delay_sec))
+        self._set_status(ModelStatus.LOADED)
 
     # ----------------------------------------------------------
     def synthesize(self, text: str, tgt_lang: str) -> tuple[np.ndarray, int]:
@@ -96,6 +101,8 @@ class SapiTtsBackend(TtsBackend):
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
             supported_languages=(),  # SAPI 側にインストールされた声に依存
+            is_cloud=False,
+            requires_credentials=False,
             notes=(
                 "Windows SAPI(pyttsx3)。Mac/Linux では別TTS推奨。WAV経由でPCM取得。"
                 f" flush_delay_sec={self._flush_delay_sec} で暫定 flush 待機中。"

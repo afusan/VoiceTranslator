@@ -9,14 +9,61 @@ from __future__ import annotations
 
 from typing import Any
 
+from voice_translator.common.cache_check import check_faster_whisper
 from voice_translator.common.device import (
     resolve_ctranslate2_compute_type,
     resolve_ctranslate2_device,
 )
 from voice_translator.common.errors import FatalError, SkipError
-from voice_translator.common.types import BackendCapabilities
+from voice_translator.common.types import BackendCapabilities, ModelInfo, ModelStatus
 
 from .backend import AsrBackend
+
+
+# faster-whisper 推奨モデルの目安値(暫定)。GUI の選択ドロップダウン + リソース目安表示用。
+# 正確な値はモデル/環境で変動するが、ユーザが「明らかにダメ」を回避できる程度の目安として使う。
+_RECOMMENDED_MODELS: tuple[ModelInfo, ...] = (
+    ModelInfo(
+        name="tiny",
+        display_name="tiny (~75MB, 軽量)",
+        ram_gb=0.5,
+        vram_gb_if_gpu=0.5,
+        download_size_gb=0.08,
+        target_proc_ms_per_sec_audio=50.0,
+    ),
+    ModelInfo(
+        name="base",
+        display_name="base (~140MB)",
+        ram_gb=0.7,
+        vram_gb_if_gpu=0.7,
+        download_size_gb=0.15,
+        target_proc_ms_per_sec_audio=80.0,
+    ),
+    ModelInfo(
+        name="small",
+        display_name="small (~460MB, 既定)",
+        ram_gb=1.5,
+        vram_gb_if_gpu=1.0,
+        download_size_gb=0.46,
+        target_proc_ms_per_sec_audio=150.0,
+    ),
+    ModelInfo(
+        name="medium",
+        display_name="medium (~1.5GB)",
+        ram_gb=3.0,
+        vram_gb_if_gpu=2.0,
+        download_size_gb=1.5,
+        target_proc_ms_per_sec_audio=300.0,
+    ),
+    ModelInfo(
+        name="large-v3",
+        display_name="large-v3 (~2.9GB, 高精度)",
+        ram_gb=5.0,
+        vram_gb_if_gpu=4.0,
+        download_size_gb=2.9,
+        target_proc_ms_per_sec_audio=600.0,
+    ),
+)
 
 
 class FasterWhisperAsrBackend(AsrBackend):
@@ -34,6 +81,7 @@ class FasterWhisperAsrBackend(AsrBackend):
         compute_type: str = "auto",
         beam_size: int = 1,
     ) -> None:
+        super().__init__()  # BackendBase: status=INIT
         try:
             from faster_whisper import WhisperModel  # type: ignore
         except Exception as e:  # noqa: BLE001
@@ -44,6 +92,15 @@ class FasterWhisperAsrBackend(AsrBackend):
         self._compute_type = resolve_ctranslate2_compute_type(
             self._device, compute_type
         )
+
+        # キャッシュ事前判定で DOWNLOADING / LOADING を出し分ける(R-3 / R2-1)。
+        # WhisperModel コンストラクタ内で実際の DL + メモリ展開が走るため、
+        # 中間状態は購読者(Phase A2 以降)が拾える前提で正しい遷移を残す。
+        cache_status = check_faster_whisper(model_size)
+        if cache_status == ModelStatus.LOADED:
+            self._set_status(ModelStatus.LOADING)
+        else:
+            self._set_status(ModelStatus.DOWNLOADING)
 
         try:
             self._model = WhisperModel(
@@ -60,11 +117,13 @@ class FasterWhisperAsrBackend(AsrBackend):
                         model_size, device="cpu", compute_type="int8"
                     )
                 except Exception as e2:  # noqa: BLE001
+                    self.record_error(e2, context="model load (cpu fallback)")
                     raise FatalError(
                         f"faster-whisper モデルの初期化に失敗 (size={model_size}): {e2}",
                         cause=e2,
                     ) from e2
             else:
+                self.record_error(e, context="model load")
                 raise FatalError(
                     f"faster-whisper モデルの初期化に失敗 (size={model_size}): {e}",
                     cause=e,
@@ -72,6 +131,7 @@ class FasterWhisperAsrBackend(AsrBackend):
 
         self._model_size = model_size
         self._beam_size = beam_size
+        self._set_status(ModelStatus.LOADED)
 
     @property
     def device(self) -> str:
@@ -115,5 +175,11 @@ class FasterWhisperAsrBackend(AsrBackend):
         return BackendCapabilities(
             supported_languages=(),  # Whisper は約100言語対応。明示列挙は省略。
             requires_gpu=False,      # int8/CPU で動作。GPUにすれば高速。
+            is_cloud=False,
+            requires_credentials=False,
             notes=f"faster-whisper model={self._model_size}, task=transcribe 固定",
         )
+
+    def list_recommended_models(self) -> list[ModelInfo]:
+        """Whisper の代表サイズ一覧を返す。"""
+        return list(_RECOMMENDED_MODELS)

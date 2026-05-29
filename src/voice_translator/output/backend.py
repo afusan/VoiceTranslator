@@ -11,13 +11,15 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from voice_translator.common.backend_base import BackendBase
 from voice_translator.common.types import BackendCapabilities, OutputDevice
 
 
-class AudioOutputBackend(ABC):
+class AudioOutputBackend(BackendBase, ABC):
     """音声出力バックエンドの抽象基底。
 
     実装は soundcard 等(MVPは soundcard)。
+    `BackendBase` から状態管理/購読/エラー履歴の機能を継承する。
     """
 
     @abstractmethod
