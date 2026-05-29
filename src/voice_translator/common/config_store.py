@@ -75,11 +75,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     # 各バックエンド固有の設定値(GUI公開はまだ。手動で config.yaml 編集)
+    # 全 backend 共通の新キー(Phase B):
+    #   `auto_load: bool`(既定 False) — 起動時にこの backend を選択中のレイヤを自動ロード。
+    #     ユーザは詳細ダイアログから手動 ON にする。OFF のままなら起動ボタン押下時にロードする。
     "backends_config": {
+        "soundcard": {
+            "auto_load": False,
+        },
         "sapi": {
+            "auto_load": False,
             "rate": 180,  # 読み上げ速度(WPM相当)。早口にするなら 220 等。
         },
         "silero": {
+            "auto_load": False,
             # 発話区切り検出の細部。長文連続発話(ニュース読み上げ等)で 1 発話が肥大化して
             # 翻訳/TTS が破綻するのを避けるため、特に max_speech_sec の上限が重要。
             "threshold": 0.5,         # speech probability の判定しきい値(0〜1)
@@ -88,6 +96,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "max_speech_sec": 8.0,    # 1 発話の最大長(秒)。超えたら強制区切り。0 で無効化
         },
         "faster_whisper": {
+            "auto_load": False,
             # device: "auto" / "cuda" / "cpu"。auto なら CUDA があれば自動で使う(MPS は未対応)。
             # compute_type: "auto" / "int8" / "float16" / "int8_float16" 等。auto なら device に応じて
             #   GPU=int8_float16, CPU=int8 を選ぶ。
@@ -95,9 +104,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "compute_type": "auto",
         },
         "nllb200": {
+            "auto_load": False,
             # device: "auto" / "cuda" / "mps" / "cpu"。auto なら cuda → mps → cpu の順で使う。
             "device": "auto",
         },
+    },
+    # Phase D で使うクラウド backend 同意の永続化(キー予約 - Phase B では未使用)。
+    # 構造: { "<backend_name>": True/False, "suppress_dialogs": bool }
+    "consents": {
+        # 一括 OFF。ユーザが「今後表示しない」を選んだとき True。Phase D で読まれる。
+        "suppress_dialogs": False,
     },
 }
 

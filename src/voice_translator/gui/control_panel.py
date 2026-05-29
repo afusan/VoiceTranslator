@@ -1,8 +1,13 @@
 """ControlPanel: 動作開始/停止と直近結果の表示UI(customtkinter)。
 
 役割: Start/Stop トグル、モデル状態の集約観測、直近の翻訳テキスト表示、レイテンシ表示。
-モデルロードはアプリ起動時/設定変更時に自動で走るので、開始ボタンは "全レイヤ LOADED" の
-ときだけ有効化する。AppController.start_pipeline_async() を使い、UIをブロックしない。
+
+Phase B 以降のロード方式変更:
+- 開始ボタンは常時押下可(状態によらず)。
+- 押下時に未ロードの backend があれば、AppController が Loader スレッドでまとめてロード → Coordinator 起動。
+- MISSING_CREDENTIALS のレイヤがあるときだけボタンを disable(ロードしても意味がないため)。
+
+`AppController.start_pipeline_async()` を使い、UIをブロックしない。
 """
 
 from __future__ import annotations
@@ -191,10 +196,15 @@ class ControlPanel(ctk.CTkFrame):
         self._sync_ready_state()
 
     def _sync_ready_state(self) -> None:
-        """全レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。
+        """各レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。
 
-        idle 以外(running / starting / stopping)のときはここでは触らない
-        (それぞれのフローで管理されるため)。
+        Phase B: 「全レイヤ LOADED でないと開始ボタン無効」を撤回。
+        開始ボタンは常時押下可で、押された時点で未ロードならまとめてロードする。
+        MISSING_CREDENTIALS / DOWNLOADING のときだけ無効化する:
+          - MISSING_CREDENTIALS: ロードしても意味なし(API key 未設定)
+          - DOWNLOADING: 進行中のロードを待つ(押下しても何も起きない)
+
+        idle 以外(running / starting / stopping)のときは触らない(各フローで管理)。
         """
         if self._state != "idle":
             return
@@ -203,17 +213,23 @@ class ControlPanel(ctk.CTkFrame):
         if not statuses:
             return
 
-        if any(s in (ModelStatus.INIT, ModelStatus.LOADING) for s in statuses):
-            # INIT(未着手) / LOADING(進行中) はどちらも「準備中」とまとめて表示
-            self._toggle_btn.configure(text="モデル準備中…", state="disabled")
-            self._status_label.configure(text="モデル準備中…")
-        elif any(s == ModelStatus.NOT_DOWNLOADED for s in statuses):
-            self._toggle_btn.configure(text="モデル未準備", state="disabled")
-            self._status_label.configure(text="モデル未準備(設定/ネット接続を確認)")
+        if any(s == ModelStatus.MISSING_CREDENTIALS for s in statuses):
+            self._toggle_btn.configure(text="認証情報未設定", state="disabled")
+            self._status_label.configure(
+                text="認証情報未設定(詳細ダイアログで設定してください)"
+            )
+        elif any(s == ModelStatus.DOWNLOADING for s in statuses):
+            self._toggle_btn.configure(text="モデル DL 中…", state="disabled")
+            self._status_label.configure(text="モデルダウンロード中…")
         else:
-            # 全部 LOADED — device サマリも併記して「GPU 動いてる?」が一目で分かるように
+            # 開始ボタンは常時押下可。ロード状況は補助情報としてラベルに出す。
             self._toggle_btn.configure(text="▶ 開始", state="normal")
-            self._status_label.configure(text="停止中")
+            if any(s in (ModelStatus.INIT, ModelStatus.NOT_DOWNLOADED) for s in statuses):
+                self._status_label.configure(text="停止中(押下時にロードします)")
+            elif any(s == ModelStatus.LOADING for s in statuses):
+                self._status_label.configure(text="停止中(ロード中)")
+            else:
+                self._status_label.configure(text="停止中")
 
         # アクセラレータ表示は ready_state とは独立に常に更新する
         self._refresh_accel_label()

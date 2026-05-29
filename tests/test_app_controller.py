@@ -832,6 +832,144 @@ class TestPhaseA2RecentDurations:
         assert durations[-1] == pytest.approx(80.0, rel=0.01)
 
 
+class TestPhaseBAutoLoad:
+    """Phase B: auto_load 既定 OFF / 起動時は対象レイヤだけロード。"""
+
+    def test_default_no_auto_load_layers(self, populated_registry, config) -> None:
+        """既定では全 backend が auto_load=False なので対象レイヤは無い。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_auto_load_layers() == []
+
+    def test_auto_load_layer_picked_up(self, populated_registry, config) -> None:
+        """選択中 backend の auto_load を True にするとそのレイヤが対象になる。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("backends_config", "faster_whisper", "auto_load", True)
+        layers = ctrl.get_auto_load_layers()
+        assert layers == [LayerKind.ASR]
+
+    def test_auto_load_layer_changes_with_backend_switch(
+        self, populated_registry, config
+    ) -> None:
+        """別 backend に切り替えると、その backend の auto_load 設定が効く。"""
+        populated_registry.register(LayerKind.ASR, "alt_asr", _fake_simple_backend)
+        ctrl = AppController(registry=populated_registry, config=config)
+        # faster_whisper.auto_load = True
+        ctrl.set_setting("backends_config", "faster_whisper", "auto_load", True)
+        assert ctrl.get_auto_load_layers() == [LayerKind.ASR]
+        # alt_asr へ切替(設定では auto_load 未指定 = False)
+        ctrl.set_setting("backends", "asr", "alt_asr")
+        assert ctrl.get_auto_load_layers() == []
+
+    def test_load_auto_load_layers_async_no_target_fires_on_done(
+        self, populated_registry, config
+    ) -> None:
+        """対象レイヤなしなら即時 on_done。"""
+        import threading
+        ctrl = AppController(registry=populated_registry, config=config)
+        done = threading.Event()
+        ctrl.load_auto_load_layers_async(on_done=lambda: done.set())
+        assert done.wait(timeout=1.0)
+        # 何もロードされていない
+        assert not ctrl._backends
+
+    def test_load_auto_load_layers_async_loads_only_target(
+        self, populated_registry, config
+    ) -> None:
+        """auto_load=True のレイヤだけがロードされる。"""
+        import threading
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("backends_config", "faster_whisper", "auto_load", True)
+        ctrl.set_setting("backends_config", "nllb200", "auto_load", True)
+
+        done = threading.Event()
+        ctrl.load_auto_load_layers_async(on_done=lambda: done.set())
+        assert done.wait(timeout=3.0)
+        assert LayerKind.ASR in ctrl._backends
+        assert LayerKind.TRANSLATOR in ctrl._backends
+        # 他は未ロード
+        for layer in (LayerKind.CAPTURE, LayerKind.VAD, LayerKind.TTS, LayerKind.OUTPUT):
+            assert layer not in ctrl._backends
+
+
+class TestPhaseBStartButtonAlwaysOk:
+    """Phase B: 開始ボタンは未ロード状態でも押せて、押下時に必要分だけロード→起動する。"""
+
+    def test_start_async_loads_then_starts_when_nothing_preloaded(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        """事前 load_models 無しでも、Start でロード→起動が一気通貫で完了する。"""
+        import threading
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        assert not ctrl.is_loaded  # 未ロード
+
+        started = threading.Event()
+        ctrl.start_pipeline_async(on_started=lambda: started.set())
+        try:
+            assert started.wait(timeout=3.0)
+            assert ctrl.is_running
+            assert ctrl.is_loaded  # 起動時に裏でロードされた
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_start_sync_loads_when_not_preloaded(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        ctrl.start_pipeline()  # 同期版でも自動ロードされること
+        try:
+            assert ctrl.is_running
+            assert ctrl.is_loaded
+        finally:
+            ctrl.stop_pipeline()
+
+
+class TestPhaseBMissingCredentialsGate:
+    """Phase B: MISSING_CREDENTIALS のレイヤがあると start を gate する(Phase D で本格化)。"""
+
+    def test_start_raises_when_layer_missing_credentials(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        ctrl.load_model_layer(LayerKind.ASR)
+        # backend の get_status を MISSING_CREDENTIALS に差し替え
+        ctrl._backends[LayerKind.ASR].get_status = MagicMock(
+            return_value=ModelStatus.MISSING_CREDENTIALS
+        )
+
+        with pytest.raises(FatalError, match="認証情報"):
+            ctrl.start_pipeline()
+
+
+class TestPhaseBConfigDefaults:
+    """Phase B: backends_config.<backend>.auto_load と consents.* の既定値。"""
+
+    def test_auto_load_defaults_false_for_all_backends(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        for backend_name in (
+            "soundcard", "sapi", "silero", "faster_whisper", "nllb200"
+        ):
+            assert (
+                ctrl.get_setting("backends_config", backend_name, "auto_load") is False
+            ), f"{backend_name}: auto_load の既定が False でない"
+
+    def test_consents_suppress_dialogs_default_false(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_setting("consents", "suppress_dialogs") is False
+
+
 class TestHandleDropped:
     """AppController._handle_dropped(seq_ids, stage) のシグネチャ確認。
 

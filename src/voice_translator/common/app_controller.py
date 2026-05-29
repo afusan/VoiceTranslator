@@ -401,6 +401,77 @@ class AppController:
             self._logger.exception("レイヤ %s の再ロードに失敗", layer.value)
 
     # ---- 起動 ----
+    def get_auto_load_layers(self) -> list[LayerKind]:
+        """選択中 backend に `auto_load=True` が指定されているレイヤを返す(Phase B)。
+
+        ユーザは詳細ダイアログから per-backend で auto_load を ON にする。
+        該当する backend が選ばれているレイヤだけが起動時に自動ロードされる。
+        """
+        layers: list[LayerKind] = []
+        for layer in LayerKind:
+            backend_name = self._config.get("backends", layer.value)
+            if not backend_name:
+                continue
+            if self._config.get(
+                "backends_config", backend_name, "auto_load", default=False
+            ):
+                layers.append(layer)
+        return layers
+
+    def load_auto_load_layers_async(
+        self,
+        *,
+        on_done: Callable[[], None] | None = None,
+        on_failed: Callable[[str], None] | None = None,
+    ) -> None:
+        """`auto_load=True` のレイヤだけを Loader スレッドで順次ロードする(Phase B 起動シーケンス)。
+
+        対象レイヤなしなら即時 on_done。既ロード中なら何もしない。
+        """
+        if self.is_loading:
+            return
+        layers = self.get_auto_load_layers()
+        on_done = on_done or (lambda: None)
+        on_failed = on_failed or (lambda _msg: None)
+        if not layers:
+            on_done()
+            return
+
+        def _target() -> None:
+            try:
+                for layer in layers:
+                    self.load_model_layer(layer)
+            except Exception as exc:  # noqa: BLE001
+                self._logger.exception("auto-load レイヤのロード失敗")
+                on_failed(str(exc))
+                return
+            on_done()
+
+        self._loader_thread = threading.Thread(
+            target=_target, name="vt_auto_loader", daemon=True
+        )
+        self._loader_thread.start()
+
+    def _check_missing_credentials_gate(self) -> None:
+        """MISSING_CREDENTIALS のレイヤがあれば即時 FatalError(Phase B / D)。
+
+        ロードしても意味がない layer(認証情報不足)で start を押せてしまうのを防ぐ。
+        Phase B では BackendBase 側でこの状態を立てる手段がまだ無いので、実質 no-op。
+        Phase D の credentials 実装で動き始める。
+        """
+        missing: list[LayerKind] = []
+        for layer in LayerKind:
+            if self.get_model_status(layer) == ModelStatus.MISSING_CREDENTIALS:
+                missing.append(layer)
+        if not missing:
+            return
+        names = ", ".join(l.value for l in missing)
+        from .errors import FatalError
+        raise FatalError(
+            f"認証情報が未設定のレイヤがあります: {names}。"
+            "詳細ダイアログから API キーを入力してください。"
+        )
+
     def start_pipeline_async(
         self,
         *,
@@ -409,9 +480,11 @@ class AppController:
     ) -> None:
         """Loader スレッドでロード(必要なら)+ パイプラインを起動する(非同期)。
 
+        Phase B: 開始ボタンは常時押下可。押された時点で未ロードの backend があれば
+        Loader スレッドでロード → Coordinator 起動。
         - 既に動作中 / ロード中なら何もしない。
         - DeviceValidator は呼び出し元スレッドで先にチェックする(即時に失敗を返したい)。
-        - 既にロード済みなら "起動だけ" になり、ほぼ即座に on_started が呼ばれる。
+        - MISSING_CREDENTIALS のレイヤがあれば即時失敗(ロードしても意味がない)。
         """
         if self.is_running or self.is_loading:
             return
@@ -420,13 +493,14 @@ class AppController:
         input_id = self._config.get("devices", "input")
         output_id = self._config.get("devices", "output")
         DeviceValidator.validate(input_id, output_id)
+        self._check_missing_credentials_gate()
 
         on_started = on_started or (lambda: None)
         on_failed = on_failed or (lambda _msg: None)
 
         def _loader_target() -> None:
             try:
-                self.load_models()  # 未ロードのみ作る
+                self.load_models()  # Phase B: 実質ロードが走る局面が増える
                 self._start_coord(input_id, output_id)
             except Exception as exc:  # noqa: BLE001
                 self._logger.exception("Loader 失敗")
@@ -446,6 +520,7 @@ class AppController:
         input_id = self._config.get("devices", "input")
         output_id = self._config.get("devices", "output")
         DeviceValidator.validate(input_id, output_id)
+        self._check_missing_credentials_gate()
         self.load_models()
         self._start_coord(input_id, output_id)
 

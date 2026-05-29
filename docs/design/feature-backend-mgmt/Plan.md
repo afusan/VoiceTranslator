@@ -38,8 +38,8 @@
 
 - [x] **Phase A1**: 型 + backend 基盤(状態・エラー履歴・notify を backend 側に集約) — 完了 2026-05-29
 - [x] **Phase A2**: AppController 統合(状態購読 + layer 別 load + 処理時間 buffer) — 完了 2026-05-29
-- [ ] **Phase B**: ロード方式の変更(起動時 auto-load OFF、開始ボタンの動作変更) ← **次の着手**
-- [ ] **Phase C**: UI 拡張(SettingsPanel バッジ + LayerSettingsDialog 詳細 + ステータステキストボックス)
+- [x] **Phase B**: ロード方式の変更(起動時 auto-load OFF、開始ボタンの動作変更) — 完了 2026-05-29
+- [ ] **Phase C**: UI 拡張(SettingsPanel バッジ + LayerSettingsDialog 詳細 + ステータステキストボックス) ← **次の着手**
 - [ ] **Phase D**: 認証情報・同意 UX(keyring + 平文ファイル、同意モーダル)
 - [ ] **Phase E**: 失敗時リトライ・停止挙動の実装
 - [ ] **Phase F**: 実クラウド backend 追加で動作検証(オプション、別ブランチでも可)
