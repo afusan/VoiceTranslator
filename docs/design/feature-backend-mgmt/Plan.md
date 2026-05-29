@@ -36,7 +36,8 @@
 
 このセクションは Phase 完了のたびに更新する。
 
-- [ ] **Phase A**: 基盤拡張(BackendCapabilities / ModelStatus / Backend エラー保持)
+- [ ] **Phase A1**: 型 + backend 基盤(状態・エラー履歴・notify を backend 側に集約)
+- [ ] **Phase A2**: AppController 統合(状態購読 + layer 別 load + 処理時間 buffer)
 - [ ] **Phase B**: ロード方式の変更(起動時 auto-load OFF、開始ボタンの動作変更)
 - [ ] **Phase C**: UI 拡張(SettingsPanel バッジ + LayerSettingsDialog 詳細 + ステータステキストボックス)
 - [ ] **Phase D**: 認証情報・同意 UX(keyring + 平文ファイル、同意モーダル)
@@ -45,64 +46,101 @@
 
 ---
 
-## Phase A: 基盤拡張 — BackendCapabilities / ModelStatus / エラー保持
+## Phase A1: 型 + backend 基盤 — 状態とエラーを backend 側に集約
 
-### A.1 目的
-Phase B 以降が必要とする backend 側 API を全て揃える。実 backend の追加はまだしない。
+### A1.1 目的
+状態・エラー履歴・notify 機構を **backend 側に集約**する(従来 AppController が持っていた `_model_status` を分散化)。既存 UI / AppController の挙動は無変更で、後続 Phase が乗る基盤を整える。
 
-### A.2 前提
-- 本ブランチをチェックアウト済み
-- 全テスト pass の状態
-- [prePlan 論点 7](prePlan.md) の `BackendCapabilities` 拡張内容を把握
+### A1.2 前提
+- 本ブランチをチェックアウト済み、全テスト pass
+- [prePlan 論点 7](prePlan.md) + [knownRisks2 R2-1](knownRisks2.md) の分散管理方針を把握
 
-### A.3 作業
+### A1.3 作業
 1. **`BackendCapabilities` を拡張**(prePlan 論点 7 + R-6 解消方針):
    - `is_cloud: bool`(既定 False)
    - `requires_credentials: bool`(既定 False)
    - `service_name: str | None`
    - `terms_url: str | None`
-   - ~~`is_retryable_on_error: bool`~~ ← **不要**(R-6 で削除方針確定。backend が `AppError` 階層に包んで raise する)
-   - 各モデルの推奨/リソース情報を返す仕組み(後述)
-2. **モデル申告 API を backend に追加**(モデル選択肢を持つ backend 用):
-   - `list_recommended_models() -> list[ModelInfo]` のようなメソッド
-   - `ModelInfo` は `{name, display_name, ram_gb, vram_gb_if_gpu, download_size_gb, target_proc_ms_per_sec_audio}` 程度の dataclass
-   - `download_size_gb` は DL 中のステータス表示用(R-3 対応)、不明なら `None`
-   - モデルを持たない backend(SAPI、Silero 等)は空リスト返却
-3. **`ModelStatus` の拡張**(`types.py` の enum):
-   - `MISSING_CREDENTIALS` を追加(認証情報不足、論点 1 / R-1)
-   - `DOWNLOADING` を追加(モデル DL 中、R-3)
-   - 想定遷移: `INIT → DOWNLOADING → LOADING → LOADED`(DL 不要なら DOWNLOADING をスキップ)
-   - 失敗時: `NOT_DOWNLOADED`(DL 失敗、再試行可) / `MISSING_CREDENTIALS`(認証不足、再認証要)
-4. **backend ベースクラスにエラー保持機構を追加**:
-   - `record_error(exc, *, context=None)` と `get_recent_errors() -> list[ErrorRecord]`
-   - 内部はリングバッファ(暫定 5 件)
-   - 既存 backend を破壊しないよう、ベースクラスにのみ追加(各 backend で個別実装は不要)
-5. **既存 backend (`FasterWhisperAsrBackend`、`Nllb200TranslatorBackend`、`SapiTtsBackend`、`SileroVadBackend`、その他) を新 capability で申告し直す**:
-   - 主にローカル backend なので `is_cloud=False` / `requires_credentials=False` 等の既定値で十分
-   - faster-whisper / NLLB は `list_recommended_models()` を実装(暫定値で OK)
-6. **AppController の拡張**(Phase C UI が利用する基盤):
-   - `load_model_layer(layer)` 公開メソッド追加(既存の `_safe_load_layer` を公開化 or 新規)
-   - 状態変化リスナーの **multi-listener 対応**(`add_status_listener(callback)` / `remove_status_listener(callback)`)— 複数の LayerSettingsDialog が同時購読可能に
-   - layer 別 **直近処理時間リングバッファ**(`deque(maxlen=5)`)を保持、`get_recent_durations(layer)` で UI に提供。push は既存 `_handle_utterance_done(record)` 内
-   - 関連リスク: [knownRisks R-2 / R-9](knownRisks.md) の解消方針に準拠
+   - ~~`is_retryable_on_error: bool`~~ ← 不要(R-6 で削除確定。backend が `AppError` 階層に包んで raise する)
+2. **`ModelInfo` dataclass 新規**:
+   - `{name, display_name, ram_gb, vram_gb_if_gpu, download_size_gb, target_proc_ms_per_sec_audio}`
+   - `download_size_gb` は DL 中の表示用(R-3)。不明なら `None`
+3. **`ModelStatus` 拡張**(`types.py` の enum):
+   - `MISSING_CREDENTIALS`(認証情報不足、論点 1)
+   - `DOWNLOADING`(モデル DL 中、R-3)
+   - 想定遷移: `INIT → DOWNLOADING → LOADING → LOADED`(DL 不要なら DOWNLOADING スキップ)
+4. **backend ベースクラスに「自分の状態・エラー履歴・notify 機構」を追加**(R2-1 解消方針):
+   - **状態**: `current_status: ModelStatus` を保有、`get_status() -> ModelStatus` で公開
+   - **状態変化通知**: `subscribe(callback) -> Subscription` で購読、`Subscription.unsubscribe()` で解除(R2-6 の Subscription パターン)
+   - **エラー履歴**: `record_error(exc, *, context=None)` で記録、`get_recent_errors() -> list[ErrorRecord]` で取得。内部リングバッファ(暫定 5 件)
+   - **モデル一覧**: `list_recommended_models() -> list[ModelInfo]`(モデル選択肢を持つ backend 用、無い backend は空リスト)
+5. **既存 backend を新仕様に追従**:
+   - 各 backend が `BackendCapabilities` の新フィールドを正しく申告
+   - faster-whisper / NLLB は `list_recommended_models()` を実装
+   - ロード処理内で `current_status` を `DOWNLOADING → LOADING → LOADED` と更新(キャッシュ判定は `cache_check` モジュール流用、R-3 / R2-1)
+   - **R2-5 対応**: 既存 backend の `except` 節を grep して、雑な `FatalError` 包みを HTTP コード / 例外型で `RecoverableError` / `SkipError` に分ける
+6. **ドキュメント追記**:
+   - `errors.py` docstring に「backend 実装者は HTTP/ネットワークエラーを適切な severity に分けて包むこと」を明記(R2-5)
+   - `Class.md` 関連箇所も更新
 
-### A.4 影響範囲
-- `src/voice_translator/common/types.py`(BackendCapabilities / ModelStatus / 新 dataclass)
-- `src/voice_translator/{asr,vad,translator,tts,capture,output}/backend.py`(ベース I/F 拡張)
-- 各 backend 実装ファイル(申告内容の追加)
-- `tests/test_*.py`(新フィールドが取れることの確認)
+### A1.4 影響範囲
+- `src/voice_translator/common/types.py`(BackendCapabilities / ModelStatus / ModelInfo)
+- `src/voice_translator/{asr,vad,translator,tts,capture,output}/backend.py`(ベース I/F)
+- 各 backend 実装ファイル
+- `src/voice_translator/common/errors.py`(docstring)
 
-### A.5 完了条件
-- 全 backend が新 capability を返せる
-- `ModelStatus.MISSING_CREDENTIALS` が enum に存在
-- backend ベースが `record_error` / `get_recent_errors` を提供
-- `pytest -q` → all pass(既存テストは無変更で通ること)
-- 新規追加テスト 5〜10 件
+### A1.5 完了条件
+- 全 backend が新 capability + 状態管理 + notify 機構を持つ
+- `ModelStatus` enum に新 2 値が追加
+- 既存挙動(GUI / Coordinator / AppController)は無変更で動作 → `pytest -q` 全 pass(初期化手順の追加だけで吸収可能なら fixture 修正で対応、テスト消すのは NG)
+- 新規テスト 5〜15 件
 
-### A.6 次セッションへの引き継ぎ
-- 進捗ステータスの Phase A にチェック
+### A1.6 次セッションへの引き継ぎ
+- 進捗ステータスの Phase A1 にチェック
+- 「Phase A2 から開始可能」と書く
+
+---
+
+## Phase A2: AppController 統合 — backend 状態の購読 + layer 別 load + 処理時間 buffer
+
+### A2.1 目的
+A1 で backend 側に集約した状態を AppController が購読し、UI に re-broadcast する。layer 単位ロードと処理時間バッファも追加。
+
+### A2.2 前提
+- Phase A1 完了
+- backend が `subscribe(callback)` / `get_status()` を提供している状態
+
+### A2.3 作業
+1. **AppController から `_model_status` dict を削除**:
+   - 状態の真実は backend 側にあるので、AppController が dict を持つ必要なし
+   - `get_model_status(layer)` は内部で `self._backends[layer].get_status()` を呼ぶよう変更
+2. **backend 状態の購読**:
+   - backend ロード時に AppController が `backend.subscribe(self._on_backend_status_changed)` を呼ぶ
+   - 受け取った変化を `on_status_change` callback として UI 側に re-broadcast
+3. **multi-listener 機構**(R2-6):
+   - UI 側からの購読を受け付ける `add_status_listener(callback) -> Subscription` / `remove_status_listener` を追加
+   - 内部で複数 listener を保持、状態変化時に全 listener に dispatch
+4. **layer 単位ロード**:
+   - `load_model_layer(layer)` 公開メソッド(既存 `_safe_load_layer` を整理 or 新規)
+   - 該当 backend だけをロードするフロー
+5. **layer 別 直近処理時間リングバッファ**:
+   - `deque(maxlen=5)` × 6 layer を AppController が保有
+   - 既存 `_handle_utterance_done(record)` 内で push
+   - `get_recent_durations(layer) -> list[float]` で UI に提供
+
+### A2.4 影響範囲
+- `src/voice_translator/common/app_controller.py`
+- `tests/test_app_controller.py` 等(挙動変更に追従、テスト消すのは NG / シナリオを温存して書き換え)
+
+### A2.5 完了条件
+- AppController が backend 状態を購読、UI に re-broadcast できる
+- `load_model_layer(layer)` で個別ロード可能
+- `get_recent_durations(layer)` で直近 5 件の処理時間を取得可能
+- `pytest -q` 全 pass
+
+### A2.6 次セッションへの引き継ぎ
+- 進捗ステータスの Phase A2 にチェック
 - 「Phase B から開始可能」と書く
-- 追加した capability の例(faster-whisper の `list_recommended_models()` 等)を Plan.md にメモしておくと参照しやすい
 
 ---
 

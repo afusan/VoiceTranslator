@@ -130,6 +130,18 @@
 
 ---
 
+## [2026-05-29] AppController の責務分離(リファクタ予約)
+- **背景**: `feature/backend-mgmt` の Phase A2 で AppController に layer 単位 load / multi-listener / 処理時間 buffer 等の orchestration 責務が追加される。R2-1 解消の分散化で `_model_status` dict は消えるものの、全体としては引き続き肥大化傾向
+- **方針案**(将来のリファクタ時):
+  - `ModelLoaderService`(ロード処理)
+  - `StatusBroadcaster`(listener 管理 + re-broadcast)
+  - `LatencyBuffer`(layer 別 処理時間)
+  - AppController は composition でこれらを保有する形に整理
+- **見送り理由**: 動かしてから整理する方が安全(早すぎる抽象化を避ける)
+- **再検討トリガ**: `feature/backend-mgmt` ブランチ完了後 / さらに新機能で AppController が肥大化したタイミング
+
+---
+
 ## [2026-05-29] リトライ機構の効果検証 — 効果薄なら撤回も検討
 - **背景**: `feature/backend-mgmt` の Phase E でクラウド backend(ネットワーク経由テキスト系 API)に 3 回リトライ機構を実装予定。だが「リトライ中も上流の capture が動き続けてキューが詰まる」という構造的な懸念がある(knownRisks R-4)
 - **検証案**: Phase F で DeepL 等の実クラウド backend を 1 つ繋いだ時、わざとネット切断 / レート制限を再現してリトライ機構の挙動を観察
