@@ -970,6 +970,92 @@ class TestPhaseBConfigDefaults:
         assert ctrl.get_setting("consents", "suppress_dialogs") is False
 
 
+class TestPhaseC3StatusSummary:
+    """Phase C3: 全レイヤ状態 + 最近のエラー集約テキスト。"""
+
+    def test_summary_lists_all_layers(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        summary = ctrl.get_status_summary()
+        for layer in LayerKind:
+            assert f"[{layer.value}]" in summary, f"{layer} 未含有"
+            # backend 名(faster_whisper 等)も載っている
+        assert "faster_whisper" in summary
+        assert "Loaded" in summary
+
+    def test_summary_includes_backend_name(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        summary = ctrl.get_status_summary()
+        # 未ロードでも backend 名 + INIT は出る
+        assert "faster_whisper" in summary
+        assert "Init" in summary
+
+    def test_summary_groups_errors(self, populated_registry, config) -> None:
+        """各 backend の get_recent_errors を集約して末尾に追記する。"""
+        from voice_translator.common.types import ErrorRecord
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        # 該当 backend にエラー履歴を仕込む
+        fake_record = ErrorRecord(
+            timestamp=1000.0,
+            message="model not found",
+            exc_type="OSError",
+            context="model load",
+        )
+        ctrl._backends[LayerKind.ASR].get_recent_errors = MagicMock(
+            return_value=[fake_record]
+        )
+        summary = ctrl.get_status_summary()
+        assert "最近のエラー:" in summary
+        assert "OSError" in summary
+        assert "model not found" in summary
+        assert "[asr]" in summary
+
+    def test_summary_omits_error_section_when_no_errors(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        summary = ctrl.get_status_summary()
+        # backend のエラー履歴が空のとき「最近のエラー:」セクションは出ない
+        assert "最近のエラー:" not in summary
+
+    def test_summary_shows_downloading_size_hint(
+        self, populated_registry, config
+    ) -> None:
+        """DOWNLOADING 状態のレイヤがあると、list_recommended_models 先頭の size を併記。"""
+        from voice_translator.common.types import ModelInfo
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        ctrl._backends[LayerKind.ASR].get_status = MagicMock(
+            return_value=ModelStatus.DOWNLOADING
+        )
+        ctrl._backends[LayerKind.ASR].list_recommended_models = MagicMock(
+            return_value=[
+                ModelInfo(name="small", display_name="Small", download_size_gb=0.46),
+            ]
+        )
+        summary = ctrl.get_status_summary()
+        # ~0.5GB 表示が含まれる(0.46GB → "~0.5GB" の表示)
+        assert "0.5GB" in summary
+
+    def test_summary_handles_missing_list_recommended_models(
+        self, populated_registry, config
+    ) -> None:
+        """list_recommended_models が例外でも summary は落ちない(縮退)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        ctrl._backends[LayerKind.ASR].get_status = MagicMock(
+            return_value=ModelStatus.DOWNLOADING
+        )
+        ctrl._backends[LayerKind.ASR].list_recommended_models = MagicMock(
+            side_effect=RuntimeError("boom")
+        )
+        # 例外で落ちないこと
+        summary = ctrl.get_status_summary()
+        assert "Downloading" in summary
+
+
 class TestHandleDropped:
     """AppController._handle_dropped(seq_ids, stage) のシグネチャ確認。
 

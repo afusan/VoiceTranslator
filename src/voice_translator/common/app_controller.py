@@ -169,6 +169,73 @@ class AppController:
         """指定レイヤの直近処理時間(ms、古い→新しい順、最大 5 件)。"""
         return list(self._recent_durations[layer])
 
+    def get_status_summary(self) -> str:
+        """全レイヤの状態 + 直近エラーを 1 つのテキストにまとめる(Phase C3)。
+
+        ステータステキストボックスに 1 ブロックで貼れる形を返す。
+        - 各レイヤの「現状態 + (DOWNLOADING 時は DL サイズ目安)」を 1 行ずつ
+        - 末尾に「最近のエラー」を新しい順で集約(最大 5 件)
+
+        backend が `BackendBase` 由来でない場合(モック等)はベストエフォートで縮退する。
+        """
+        lines: list[str] = []
+        for layer in LayerKind:
+            backend_name = self._config.get("backends", layer.value, default="-")
+            status = self.get_model_status(layer)
+            tail = self._dl_size_hint(layer) if status == ModelStatus.DOWNLOADING else ""
+            lines.append(
+                f"[{layer.value}] {backend_name}: {status.value}{tail}"
+            )
+
+        errors = self._collect_recent_errors()
+        if errors:
+            lines.append("")
+            lines.append("最近のエラー:")
+            # 新しい順に最大 5 件
+            for layer, rec in errors[:5]:
+                ctx = f" ({rec.context})" if rec.context else ""
+                lines.append(
+                    f"  [{layer.value}] {rec.exc_type}: {rec.message}{ctx}"
+                )
+        return "\n".join(lines)
+
+    def _dl_size_hint(self, layer: LayerKind) -> str:
+        """DOWNLOADING 時に表示する「~XGB」ヒント。取得失敗時は空文字。"""
+        backend = self._backends.get(layer)
+        if backend is None:
+            return ""
+        backend_name = self._config.get("backends", layer.value, default=None)
+        # 選択中モデル名を推定: ASR は model_size、Translator は model_name 等の慣習
+        # 暫定: list_recommended_models の先頭を「目安サイズ」として表示
+        try:
+            models = backend.list_recommended_models()
+        except Exception:  # noqa: BLE001
+            return ""
+        if not models:
+            return ""
+        # 先頭(=デフォルト想定)モデルの download_size_gb を表示
+        size = models[0].download_size_gb
+        if size is None:
+            return ""
+        return f" (~{size:.1f}GB)"
+
+    def _collect_recent_errors(self):
+        """全 backend の直近エラーを timestamp 新しい順に並べて返す。
+
+        戻り値: `list[tuple[LayerKind, ErrorRecord]]`。
+        """
+        items = []
+        for layer, backend in self._backends.items():
+            try:
+                records = backend.get_recent_errors()
+            except Exception:  # noqa: BLE001
+                continue
+            for rec in records:
+                items.append((layer, rec))
+        # 新しいもの順
+        items.sort(key=lambda lr: getattr(lr[1], "timestamp", 0.0), reverse=True)
+        return items
+
     def get_layer_device(self, layer: LayerKind) -> str | None:
         """指定レイヤのバックエンドが報告するデバイス名を返す。
 

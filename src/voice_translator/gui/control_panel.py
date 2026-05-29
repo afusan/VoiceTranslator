@@ -71,22 +71,36 @@ class ControlPanel(ctk.CTkFrame):
             row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 4)
         )
 
+        # ステータステキストボックス(Phase C3): 全レイヤ状態 + 最近のエラー集約
+        ctk.CTkLabel(self, text="ステータス:").grid(
+            row=3, column=0, sticky="w", padx=10, pady=(6, 0)
+        )
+        self._status_text = ctk.CTkTextbox(self, height=140, wrap="word")
+        self._status_text.grid(
+            row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=4
+        )
+        self._status_text.configure(state="disabled")
+
         # 履歴ラベル + クリアボタン(同じ行に配置)
         ctk.CTkLabel(self, text="最近の翻訳:").grid(
-            row=3, column=0, sticky="w", padx=10, pady=(8, 0)
+            row=5, column=0, sticky="w", padx=10, pady=(8, 0)
         )
         self._clear_btn = ctk.CTkButton(
             self, text="クリア", width=80, command=self._on_clear_history
         )
-        self._clear_btn.grid(row=3, column=2, sticky="e", padx=10, pady=(8, 0))
+        self._clear_btn.grid(row=5, column=2, sticky="e", padx=10, pady=(8, 0))
 
-        self._history_text = ctk.CTkTextbox(self, height=360, wrap="word")
-        self._history_text.grid(row=4, column=0, columnspan=3, sticky="nsew", padx=10, pady=4)
+        self._history_text = ctk.CTkTextbox(self, height=260, wrap="word")
+        self._history_text.grid(row=6, column=0, columnspan=3, sticky="nsew", padx=10, pady=4)
         self._history_text.configure(state="disabled")
 
         self.columnconfigure(1, weight=1)
         # 履歴ボックスをウィンドウ拡大時に伸ばす
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(6, weight=1)
+
+        # 初期状態を反映 + 定期更新を仕掛ける
+        self._refresh_status_text()
+        self._schedule_status_refresh()
 
     # ============================================================
     def _on_toggle(self) -> None:
@@ -194,6 +208,39 @@ class ControlPanel(ctk.CTkFrame):
     def _apply_layer_status(self, layer: LayerKind, status: ModelStatus) -> None:
         self._layer_statuses[layer] = status
         self._sync_ready_state()
+        # ステータステキストボックスにも反映(Phase C3)
+        self._refresh_status_text()
+
+    # ============================================================
+    # ステータステキストボックス(Phase C3)
+    # ============================================================
+    _STATUS_REFRESH_INTERVAL_MS = 3000  # 3 秒ごとにエラー履歴等を再フェッチ
+
+    def _refresh_status_text(self) -> None:
+        """`AppController.get_status_summary()` を取得してテキストボックスを更新する。"""
+        try:
+            summary = self._controller.get_status_summary()
+        except Exception as e:  # noqa: BLE001
+            summary = f"(ステータス取得に失敗: {e})"
+        try:
+            self._status_text.configure(state="normal")
+            self._status_text.delete("1.0", "end")
+            self._status_text.insert("end", summary)
+            self._status_text.configure(state="disabled")
+        except Exception:  # noqa: BLE001
+            # widget が破棄済み等の場合は無視
+            pass
+
+    def _schedule_status_refresh(self) -> None:
+        """周期的にステータスを再描画する。`on_status_change` の通知漏れに対する保険。"""
+        try:
+            self.after(self._STATUS_REFRESH_INTERVAL_MS, self._tick_status_refresh)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _tick_status_refresh(self) -> None:
+        self._refresh_status_text()
+        self._schedule_status_refresh()
 
     def _sync_ready_state(self) -> None:
         """各レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。
