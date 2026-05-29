@@ -130,6 +130,18 @@
 
 ---
 
+## [2026-05-29] リトライ機構の効果検証 — 効果薄なら撤回も検討
+- **背景**: `feature/backend-mgmt` の Phase E でクラウド backend(ネットワーク経由テキスト系 API)に 3 回リトライ機構を実装予定。だが「リトライ中も上流の capture が動き続けてキューが詰まる」という構造的な懸念がある(knownRisks R-4)
+- **検証案**: Phase F で DeepL 等の実クラウド backend を 1 つ繋いだ時、わざとネット切断 / レート制限を再現してリトライ機構の挙動を観察
+- **判定基準**:
+  - リトライ中もキュー詰まりが許容範囲内 → 採用継続
+  - キュー詰まり / drop が頻発して体感が悪い → **リトライ機構ごと撤回**(失敗即停止に倒す)
+- **撤回した場合の影響**: backend の severity 設計はそのまま使えるので、ErrorHandler 側で「RECOVERABLE → リトライ」を「RECOVERABLE → SKIP / FATAL に格上げ」に変えるだけで吸収可能
+- **見送り理由**: 設計段階で結論を出せない。実機の挙動を見ないと判断不能
+- **再検討トリガ**: Phase F の動作確認時(feature/backend-mgmt の最終フェーズ)
+
+---
+
 ## [2026-05-28] Whisper モデルサイズ(`model_size`)の引き上げ検討 — small → medium 以上
 - **現状**: `FasterWhisperAsrBackend(model_size="small")` が既定。`small` は faster-whisper(Whisper)のモデルサイズ系列(`tiny / base / small / medium / large-v2 / large-v3`)の小さい方から3番目で、概ね VRAM ~500MB / 認識精度は実用ライン。`tests/` でも `"small"` 前提でモック値が組まれている。
 - **動機**: `refactor/asr-gpu-compute-type`(2026-05-28 マージ済)後の GPU プロファイルで `asr_proc_ms` が平均 754ms まで下がり、8秒発話に対し十分な余裕が出た。total レイテンシも 13.8s と発話長(7.5s)に近づき、パイプライン的にもキューが詰まらない。**この余裕を品質向上に振り向けられる**(特に英語以外、固有名詞、専門用語、雑音下)。

@@ -56,12 +56,12 @@ Phase B 以降が必要とする backend 側 API を全て揃える。実 backen
 - [prePlan 論点 7](prePlan.md) の `BackendCapabilities` 拡張内容を把握
 
 ### A.3 作業
-1. **`BackendCapabilities` を拡張**(prePlan 論点 7 の表通り):
+1. **`BackendCapabilities` を拡張**(prePlan 論点 7 + R-6 解消方針):
    - `is_cloud: bool`(既定 False)
    - `requires_credentials: bool`(既定 False)
    - `service_name: str | None`
    - `terms_url: str | None`
-   - `is_retryable_on_error: bool`(既定 False)
+   - ~~`is_retryable_on_error: bool`~~ ← **不要**(R-6 で削除方針確定。backend が `AppError` 階層に包んで raise する)
    - 各モデルの推奨/リソース情報を返す仕組み(後述)
 2. **モデル申告 API を backend に追加**(モデル選択肢を持つ backend 用):
    - `list_recommended_models() -> list[ModelInfo]` のようなメソッド
