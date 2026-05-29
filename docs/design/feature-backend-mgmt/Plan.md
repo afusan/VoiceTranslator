@@ -30,6 +30,7 @@
    - **完了条件**: ここまでできれば Phase 完了
 5. **設計の決定根拠が必要なときは** [prePlan.md](prePlan.md) の該当論点を参照
 6. **既存コード理解が必要なら**: `src/voice_translator/common/{app_controller,backend_registry,backend_setup,config_store}.py` を読む
+7. **着手前にリスク確認** — [knownRisks.md](knownRisks.md) で当該 Phase に関連する高優先度リスク(R-x)を見る
 
 ## 4. 進捗ステータス
 
