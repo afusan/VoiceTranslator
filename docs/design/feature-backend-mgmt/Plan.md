@@ -215,9 +215,14 @@ Phase B 以降が必要とする backend 側 API を全て揃える。実 backen
    - `get_credential(backend_name, key_name) -> str | None`
    - `set_credential(backend_name, key_name, value) -> None`
    - `delete_credential(backend_name, key_name) -> None`
-   - 内部実装: 第一 = `keyring` ライブラリ経由、第二 = 平文ファイル
+   - 内部実装: 起動時に keyring 生存確認 → 可なら keyring、不可なら平文ファイル(prePlan 論点 1 / R-5)
    - **平文ファイルの名前を確定**(候補: `local.secrets` / `app.secrets` / `secrets.local`)
    - ファイルは `.gitignore` に追加
+   - **3 層運用**(R-5):
+     - テスト: `keyring.set_keyring(InMemoryKeyring())` / `FailKeyring()` で test double 注入
+     - 開発者ローカル(実 API 検証用): 平文ファイル直接書き込みで OK(keyring 経由しない)
+     - エンドユーザ: keyring(第一)→ 平文ファイル(fallback)
+   - `tests/_fixtures.py` に `fake_keyring` / `failing_keyring` の fixture を追加
 2. **LayerSettingsDialog に認証入力フィールド**:
    - backend が `requires_credentials=True` のとき、key 入力フィールドを動的表示
    - 入力値を `credentials.set_credential()` で保管
