@@ -122,13 +122,22 @@ class ControlPanel(ctk.CTkFrame):
                 on_failed=self._on_loader_failed,
             )
         except Exception as e:  # noqa: BLE001
-            # history widget に表示するだけでなく app.log にも残す。
-            # ここで握ると app.log に何も出ないので「ボタン押しても無反応」に見える。
+            # フィードバックを 3 箇所に出して見落としを防ぐ:
+            # 1) app.log にスタックトレース付きで残す(原因調査用)
+            # 2) history widget(従来通り)
+            # 3) status_label に短く表示(ユーザの視線が一番行く場所)。
+            #   「ボタン押したが反応無い」状態を作らないため。
             import logging
             logging.getLogger("voice_translator").exception(
                 "_do_start_async で start_pipeline_async が同期失敗"
             )
             self._append_history(f"[起動失敗] {e}")
+            # status_label は ready_state の周期更新で上書きされるので、
+            # 短時間でも見えるようここで上書きしておく。
+            try:
+                self._status_label.configure(text=f"起動失敗: {e}")
+            except Exception:  # noqa: BLE001 - widget 破棄済み等
+                pass
             return
         self._state = "starting"
         self._toggle_btn.configure(text="開始中…", state="disabled")
