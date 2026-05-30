@@ -72,6 +72,39 @@ py -m uv run --extra cpu python -m voice_translator
 
 ---
 
+## 追加 backend と利用同意・ライセンス
+
+`--extra vad-extra` 等で追加できる backend は、**それぞれが要求する利用同意 /
+ライセンスへの同意が前提**になります。導入前に対応する規約を確認・受諾してください。
+本アプリは規約 URL を起動時に表示するだけで、自動で同意は行いません。
+
+### VAD
+
+| backend | 形態 | 必要な利用同意 / ライセンス |
+|---|---|---|
+| `silero` (MVP) | ローカル | MIT / Apache 2.0(同梱) — 同意手続き不要 |
+| `webrtcvad` | ローカル | BSD ライセンス — 同意手続き不要 |
+| `pyannote.audio` (`pyannote/segmentation-3.0`) | ローカル(gated) | HuggingFace でモデル利用同意必須: <https://huggingface.co/pyannote/segmentation-3.0> 。HF Token も必要 |
+| `pvcobra` (Picovoice Cobra) | ローカル | Apache 2.0(個人非商用) / 商用利用は別途 Picovoice 商用ライセンス: <https://picovoice.ai/pricing/> 。Access Key 必須 |
+
+### ASR / Translator / TTS(現状は MVP のみ。追加検討中の backend は下記)
+
+| backend | 種別 | 規約 |
+|---|---|---|
+| OpenAI Whisper API (検討中) | クラウド | OpenAI API 利用規約: <https://openai.com/policies/terms-of-use> |
+| Deepgram (検討中) | クラウド | Deepgram Terms: <https://deepgram.com/terms-of-service> |
+| Google Cloud STT / Translation (検討中) | クラウド | GCP 利用規約 / 各サービス規約 |
+| DeepL API (検討中) | クラウド | DeepL API 利用規約: <https://www.deepl.com/pro-license> |
+| Anthropic Claude (検討中) | クラウド | Anthropic Usage Policies: <https://www.anthropic.com/legal/usage-policy> |
+
+### 認証情報の保管
+
+API key 等は **OS の Keychain(Windows Credential Manager / macOS Keychain)** に
+保管されます。Keychain が使えない環境ではプロジェクト直下の `local.secrets` に
+平文で fallback します(`.gitignore` で除外済)。
+
+---
+
 ## 開発
 
 ```bash

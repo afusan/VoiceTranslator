@@ -4,6 +4,44 @@
 
 ---
 
+## [📌方針 2026-05-30] 追加モデル続行・UI 調整・配布形態の段階対応(複数日)
+本ブランチ(`feature/vad-picks-pyannote-4x`)を master にマージしたあと、下記 3 つを
+別ブランチで順次対応する(各 1 日では収まらない見込み)。
+
+### a) backendCandidates の残り picks 実装
+- `docs/design/feature-backend-mgmt/backendCandidates.html` で ✓ を付けた
+  ASR 3 件 / Translator 3 件をまだ実装していない:
+  - ASR: OpenAI Whisper API / Deepgram / Google Cloud STT
+  - Translator: DeepL API / OpenAI GPT-4o-mini / Anthropic Claude Haiku
+- token が用意できた backend は `tests/test_<backend>_large.py` を必ず追加(新方針)。
+- 進めるペースはユーザ要望ベース。Phase F2 として 1〜2 件ずつ別ブランチで。
+
+### b) UI 調整
+- 既に保留されている UI 折り畳み(設定セクション / ステータス)
+- start 失敗時の表示動線(`ffa68e5` で status_label に出すようにしたが、もう一段
+  目立つ通知バナー等の検討余地)
+- 詳細ダイアログから抜けたときの再描画タイミング
+- 認証ダイアログ閉じた直後の状態反映の挙動
+
+### c) 配布形態(実行環境のポーティング / インストーラ)
+- 現状は `git clone + uv sync --extra cpu` または `--extra cuda --extra vad-extra` 前提。
+  非開発者には敷居が高い。
+- 検討案:
+  - **PyInstaller / Nuitka で one-folder** にして zip 配布
+  - **uv tool** での配布(まだ実験的)
+  - **Windows MSI**(WiX 等)
+- 配布方針「CPU を floor、GPU は opt-in」と整合する形を選ぶ。
+- 副題: モデル DL は配布物に含めず、初回起動時 DL とする(配布物サイズ削減)。
+
+### d) ライセンス規約のあるモデルを README に明記
+- pyannote.audio(`pyannote/segmentation-3.0`)— 利用同意必須(gated)
+- Picovoice Cobra — 個人非商用無料 tier / 商用は要ライセンス
+- 各 cloud backend(OpenAI / DeepL / Anthropic / GCP / AWS)の API 利用規約
+- README に「対応 backend と必要な利用同意 / アカウント」のセクションを追加。
+- 配布時に同意忘れで動かないケースが多いので、起動時のテストや warning も併設検討。
+
+---
+
 ## [⏳保留 2026-05-30] 追加 VAD backend の依存 optional 化方針
 - **対象**: `pyproject.toml` の `[project.optional-dependencies].vad-extra` に入れた
   `webrtcvad-wheels` / `pyannote.audio` / `pvcobra`。`uv sync --extra vad-extra` で初めて入る。
