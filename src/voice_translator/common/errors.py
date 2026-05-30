@@ -3,6 +3,21 @@
 役割: 各バックエンドが下位例外を `AppError` に包んで送出し、
 中央の `ErrorHandler` が severity に基づいて挙動を振り分けるための共通基盤。
 詳細は docs/design/Class.md を参照。
+
+backend 実装者向けの規約(R2-5):
+- **下位例外を黙って FatalError に包むだけ、は避ける**。HTTP コード / 例外型を見て、
+  適切な severity (RECOVERABLE / FATAL / SKIP / WARN) に分けて包むこと。
+- 例:
+  - HTTP 5xx / `ConnectionError` / `TimeoutError` → `RecoverableError`(リトライで通る見込み)
+  - HTTP 401/403 / 認証失敗 → `FatalError`(ユーザ操作なしには通らない)
+  - HTTP 4xx の入力不正 → `SkipError`(当該発話だけ破棄して継続)
+  - 廃止予定 / 警告だけ出して動作継続 → `WarnError`
+- 既存のローカル backend(faster-whisper / silero / NLLB / SAPI / soundcard)はモデル/デバイス
+  起因の障害が主で、現状ほぼ `FatalError` で妥当。クラウド backend を追加する際に上記方針を
+  適用すること。
+
+backend は `BackendBase.record_error(exc, context=...)` を呼んで履歴に積むのも併用する
+(GUI のステータステキストボックスに集約表示するため。Phase C/E)。
 """
 
 from __future__ import annotations

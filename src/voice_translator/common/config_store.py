@@ -63,6 +63,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # テキスト系(recognized/translated)は **発話件数で制限**(中身が小さいためバイト換算は冗長)。
         "recognized_queue_size": 10,              # ASR → Translator(認識テキスト)
         "translated_queue_size": 10,              # Translator → TTS(翻訳テキスト)
+        # Phase E: backend が RecoverableError を投げたときのリトライ機構。
+        # max_retries=3 + base 0.5s/max 8.0s で「0.5s, 1.0s, 2.0s」の指数バックオフ。
+        # 全失敗で復帰不能と判定しパイプライン停止。FatalError は初回で即停止。
+        "max_retries": 3,
+        "retry_base_sec": 0.5,
+        "retry_max_sec": 8.0,
         # ステージ間データのダンプ機能(検証/再現用)。
         # 有効時、各ステージ出力を <directory>/<run_id>/seq_NNNN_<stage>.{wav,json} に書き出す。
         # 単体ランナー(voice_translator.dev.runner_*)の入力として使う。
@@ -75,11 +81,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     # 各バックエンド固有の設定値(GUI公開はまだ。手動で config.yaml 編集)
+    # 全 backend 共通の新キー(Phase B):
+    #   `auto_load: bool`(既定 False) — 起動時にこの backend を選択中のレイヤを自動ロード。
+    #     ユーザは詳細ダイアログから手動 ON にする。OFF のままなら起動ボタン押下時にロードする。
     "backends_config": {
+        "soundcard": {
+            "auto_load": False,
+        },
         "sapi": {
+            "auto_load": False,
             "rate": 180,  # 読み上げ速度(WPM相当)。早口にするなら 220 等。
         },
         "silero": {
+            "auto_load": False,
             # 発話区切り検出の細部。長文連続発話(ニュース読み上げ等)で 1 発話が肥大化して
             # 翻訳/TTS が破綻するのを避けるため、特に max_speech_sec の上限が重要。
             "threshold": 0.5,         # speech probability の判定しきい値(0〜1)
@@ -88,16 +102,34 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "max_speech_sec": 8.0,    # 1 発話の最大長(秒)。超えたら強制区切り。0 で無効化
         },
         "faster_whisper": {
+            "auto_load": False,
             # device: "auto" / "cuda" / "cpu"。auto なら CUDA があれば自動で使う(MPS は未対応)。
             # compute_type: "auto" / "int8" / "float16" / "int8_float16" 等。auto なら device に応じて
             #   GPU=int8_float16, CPU=int8 を選ぶ。
             "device": "auto",
             "compute_type": "auto",
+            # model_size: tiny / base / small / medium / large-v3 等。Whisper のサイズ別 repo に
+            #   対応する。GUI の詳細ダイアログから dropdown で選択可。値変更後にレイヤを
+            #   再ロードしないと新しいサイズが反映されない(詳細ダイアログの「(再)ロード」ボタン)。
+            "model_size": "small",
         },
         "nllb200": {
+            "auto_load": False,
             # device: "auto" / "cuda" / "mps" / "cpu"。auto なら cuda → mps → cpu の順で使う。
             "device": "auto",
         },
+    },
+    # Phase D で使うクラウド backend 同意の永続化。
+    # 構造: { "<backend_name>": True/False, "suppress_dialogs": bool }
+    "consents": {
+        # 一括 OFF。ユーザが「今後表示しない」を選んだとき True。Phase D で読まれる。
+        "suppress_dialogs": False,
+    },
+    # Phase D / R2-7: 認証情報の保管経路を強制切替するフラグ。
+    # - False(既定): OS keychain を試し、失敗時に平文ファイルへ fallback
+    # - True       : 平文ファイルだけを使う(開発者ローカルの実 API 検証用)
+    "credentials": {
+        "use_local_file": False,
     },
 }
 

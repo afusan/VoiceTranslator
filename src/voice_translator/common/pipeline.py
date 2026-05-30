@@ -19,7 +19,9 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-from typing import Callable, Union
+import time
+from time import monotonic
+from typing import Any, Callable, Union
 
 from voice_translator.asr.backend import AsrBackend
 from voice_translator.capture.backend import AudioCaptureBackend
@@ -102,6 +104,9 @@ class PipelineCoordinator:
         synthesized_queue_max_bytes: int = 5_000_000,
         recognized_queue_size: int = 10,
         translated_queue_size: int = 10,
+        max_retries: int = 3,
+        retry_base_sec: float = 0.5,
+        retry_max_sec: float = 8.0,
         logger: logging.Logger | None = None,
         dump: StageDumpWriter | NullStageDumpWriter | None = None,
     ) -> None:
@@ -120,6 +125,11 @@ class PipelineCoordinator:
         self._on_utterance_done = on_utterance_done
         self._on_dropped = on_dropped
         self._read_timeout = read_timeout
+        # Phase E: リトライ機構のパラメータ。RecoverableError → 指数バックオフで再試行。
+        # 最大回数を超過 or FatalError なら復帰不能としてパイプライン停止。
+        self._max_retries = max(0, int(max_retries))
+        self._retry_base_sec = max(0.0, float(retry_base_sec))
+        self._retry_max_sec = max(self._retry_base_sec, float(retry_max_sec))
         self._logger = logger or logging.getLogger("voice_translator")
         # ステージ間データのダンプフック。無効時は no-op の NullStageDumpWriter。
         # ライフサイクル(start_run/stop_run)は呼び出し側(AppController)で管理する。
@@ -305,15 +315,17 @@ class PipelineCoordinator:
             payload: RawPayload = msg.payload
             # t_asr_start: backend 呼び出しの直前(キュー待ち時間と純処理時間を切り分けるため)
             self._ledger.mark_time(msg.seq_id, "t_asr_start")
-            try:
-                text, lang = self._asr.transcribe(payload.pcm, payload.src_lang_hint)
-            except Exception as exc:  # noqa: BLE001
-                action = self._dispatch_error(exc, stage="ASR", seq_id=msg.seq_id)
-                if action == ErrorAction.STOP:
-                    self._stop_event.set()
-                    break
-                self._ledger.pop(msg.seq_id)  # 失敗ぶんはレジャから削除
+            result, action = self._call_with_retry(
+                lambda: self._asr.transcribe(payload.pcm, payload.src_lang_hint),
+                stage="ASR", seq_id=msg.seq_id, backend=self._asr,
+            )
+            if action == ErrorAction.STOP:
+                self._stop_event.set()
+                break
+            if action != ErrorAction.CONTINUE:
+                self._ledger.pop(msg.seq_id)
                 continue
+            text, lang = result
 
             # 言語: hint が auto/空でモデルが検出した場合は採用
             src_lang = lang if payload.src_lang_hint in ("auto", "", None) else payload.src_lang_hint
@@ -346,17 +358,19 @@ class PipelineCoordinator:
             msg: PipelineMessage = item
             payload: TranscribedPayload = msg.payload
             self._ledger.mark_time(msg.seq_id, "t_translate_start")
-            try:
-                tgt_text = self._translator.translate(
+            result, action = self._call_with_retry(
+                lambda: self._translator.translate(
                     payload.src_text, payload.src_lang, self._tgt_lang
-                )
-            except Exception as exc:  # noqa: BLE001
-                action = self._dispatch_error(exc, stage="Translator", seq_id=msg.seq_id)
-                if action == ErrorAction.STOP:
-                    self._stop_event.set()
-                    break
+                ),
+                stage="Translator", seq_id=msg.seq_id, backend=self._translator,
+            )
+            if action == ErrorAction.STOP:
+                self._stop_event.set()
+                break
+            if action != ErrorAction.CONTINUE:
                 self._ledger.pop(msg.seq_id)
                 continue
+            tgt_text = result
 
             self._ledger.mark_time(msg.seq_id, "t_translate")
             self._dump.on_translate(
@@ -398,15 +412,17 @@ class PipelineCoordinator:
             msg: PipelineMessage = item
             payload: TranslatedPayload = msg.payload
             self._ledger.mark_time(msg.seq_id, "t_tts_start")
-            try:
-                pcm, samplerate = self._tts.synthesize(payload.tgt_text, payload.tgt_lang)
-            except Exception as exc:  # noqa: BLE001
-                action = self._dispatch_error(exc, stage="TTS", seq_id=msg.seq_id)
-                if action == ErrorAction.STOP:
-                    self._stop_event.set()
-                    break
+            result, action = self._call_with_retry(
+                lambda: self._tts.synthesize(payload.tgt_text, payload.tgt_lang),
+                stage="TTS", seq_id=msg.seq_id, backend=self._tts,
+            )
+            if action == ErrorAction.STOP:
+                self._stop_event.set()
+                break
+            if action != ErrorAction.CONTINUE:
                 self._ledger.pop(msg.seq_id)
                 continue
+            pcm, samplerate = result
 
             self._ledger.mark_time(msg.seq_id, "t_tts")
             self._dump.on_tts(msg.seq_id, pcm, samplerate)
@@ -429,13 +445,14 @@ class PipelineCoordinator:
             msg: PipelineMessage = item
             payload: SynthesizedPayload = msg.payload
             self._ledger.mark_time(msg.seq_id, "t_playback_start")
-            try:
-                self._output.play(payload.tts_pcm, payload.tts_samplerate)
-            except Exception as exc:  # noqa: BLE001
-                action = self._dispatch_error(exc, stage="Output", seq_id=msg.seq_id)
-                if action == ErrorAction.STOP:
-                    self._stop_event.set()
-                    break
+            _, action = self._call_with_retry(
+                lambda: self._output.play(payload.tts_pcm, payload.tts_samplerate),
+                stage="Output", seq_id=msg.seq_id, backend=self._output,
+            )
+            if action == ErrorAction.STOP:
+                self._stop_event.set()
+                break
+            if action != ErrorAction.CONTINUE:
                 self._ledger.pop(msg.seq_id)  # 失敗ぶんはレジャから削除
                 continue
 
@@ -460,6 +477,78 @@ class PipelineCoordinator:
         seq_id: int | None = None,
     ) -> str:
         return self._error_handler.handle(exc, stage=stage, seq_id=seq_id)
+
+    # ---- Phase E: リトライ機構 ----
+    _SENTINEL_RESULT: Any = object()  # _call_with_retry のフェイル戻り値マーカー
+
+    def _call_with_retry(
+        self,
+        fn: Callable[[], Any],
+        *,
+        stage: str,
+        seq_id: int | None,
+        backend: Any,
+    ) -> tuple[Any, str]:
+        """backend 呼び出しを RecoverableError リトライ付きで実行する(Phase E)。
+
+        - 成功: `(result, CONTINUE)`
+        - FATAL / 未分類例外: `(_SENTINEL_RESULT, STOP)`(呼び出し側でパイプライン停止)
+        - SKIP: `(_SENTINEL_RESULT, SKIP)`(当該発話を破棄して継続)
+        - WARN: `(_SENTINEL_RESULT, CONTINUE)` 扱い(継続だが結果なし)
+        - RECOVERABLE: 指数バックオフで `max_retries` まで再試行。全失敗で STOP に escalate。
+
+        backend には `record_error(exc, context=stage)` で履歴を残す。失敗しても本体は止めない。
+        """
+        delay = self._retry_base_sec
+        attempts = self._max_retries + 1  # 初回 + リトライ回数
+        last_action = ErrorAction.STOP
+        for attempt in range(attempts):
+            try:
+                return fn(), ErrorAction.CONTINUE
+            except Exception as exc:  # noqa: BLE001
+                self._record_backend_error(backend, exc, context=stage)
+                action = self._dispatch_error(exc, stage=stage, seq_id=seq_id)
+                last_action = action
+                if action != ErrorAction.RETRY:
+                    return self._SENTINEL_RESULT, action
+                # RETRY: 残り回数があればバックオフして再試行
+                if attempt >= self._max_retries:
+                    self._logger.warning(
+                        "stage=%s retries exhausted (%d) → STOP",
+                        stage, self._max_retries,
+                    )
+                    return self._SENTINEL_RESULT, ErrorAction.STOP
+                self._sleep_responsive(delay)
+                # stop_event が立っているなら即時抜ける
+                if self._stop_event.is_set():
+                    return self._SENTINEL_RESULT, ErrorAction.STOP
+                delay = min(delay * 2.0, self._retry_max_sec)
+        return self._SENTINEL_RESULT, last_action
+
+    @staticmethod
+    def _record_backend_error(backend: Any, exc: BaseException, *, context: str) -> None:
+        """backend.record_error を安全に呼ぶ(無い backend には no-op)。"""
+        if backend is None:
+            return
+        recorder = getattr(backend, "record_error", None)
+        if recorder is None:
+            return
+        try:
+            recorder(exc, context=context)
+        except Exception:  # noqa: BLE001
+            # 履歴記録の失敗は本体に伝播させない
+            pass
+
+    def _sleep_responsive(self, total_sec: float) -> None:
+        """指定秒スリープ。stop_event の応答性を保つために細かく区切って待つ。"""
+        end = monotonic() + total_sec
+        while True:
+            remaining = end - monotonic()
+            if remaining <= 0:
+                return
+            if self._stop_event.is_set():
+                return
+            time.sleep(min(0.1, remaining))
 
     @staticmethod
     def _join_quietly(thread: threading.Thread | None, timeout: float) -> None:

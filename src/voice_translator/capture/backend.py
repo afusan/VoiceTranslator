@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from voice_translator.common.backend_base import BackendBase
 from voice_translator.common.types import (
     BackendCapabilities,
     CaptureSource,
@@ -15,10 +16,11 @@ from voice_translator.common.types import (
 )
 
 
-class AudioCaptureBackend(ABC):
+class AudioCaptureBackend(BackendBase, ABC):
     """音声取得バックエンドの抽象基底。
 
     実装は OS/ライブラリ別に作る(MVPは soundcard ベース)。
+    `BackendBase` から状態管理/購読/エラー履歴の機能を継承する。
     """
 
     @abstractmethod

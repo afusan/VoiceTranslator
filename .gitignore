@@ -15,6 +15,10 @@ htmlcov/
 /logs/
 /config.yaml
 
+# 認証情報の平文ファイル fallback(Phase D / R-5)。
+# keyring が使えない環境でだけ作成される。誤コミット防止のため必ず除外する。
+/local.secrets
+
 # IDE
 .vs/
 .idea/

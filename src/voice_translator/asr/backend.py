@@ -12,13 +12,15 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from voice_translator.common.backend_base import BackendBase
 from voice_translator.common.types import BackendCapabilities
 
 
-class AsrBackend(ABC):
+class AsrBackend(BackendBase, ABC):
     """書き起こしバックエンドの抽象基底。
 
     実装は faster-whisper 等(MVPは faster-whisper)。
+    `BackendBase` から状態管理/購読/エラー履歴の機能を継承する。
     """
 
     @abstractmethod

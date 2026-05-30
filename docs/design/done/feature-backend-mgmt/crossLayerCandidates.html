@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>レイヤを跨ぐ統合 backend(I/O 明示版)</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", "Hiragino Sans", sans-serif; max-width: 1300px; margin: 24px auto; padding: 0 16px; color: #1f2937; }
+  h1 { font-size: 22px; border-bottom: 2px solid #475569; padding-bottom: 6px; }
+  h2 { font-size: 18px; margin-top: 28px; color: #1e3a8a; border-left: 4px solid #1e3a8a; padding-left: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin: 8px 0 20px; table-layout: fixed; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 8px; vertical-align: top; text-align: left; word-wrap: break-word; }
+  th { background: #f1f5f9; font-size: 12px; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .local  { color: #16a34a; font-weight: bold; }
+  .cloud  { color: #2563eb; font-weight: bold; }
+  .obs-ok    { color: #16a34a; font-weight: bold; }
+  .obs-part  { color: #d97706; font-weight: bold; }
+  .obs-ng    { color: #dc2626; font-weight: bold; }
+  .no-auth { color: #64748b; }
+  .auth-key { color: #c2410c; font-weight: bold; }
+  .legend { font-size: 12px; color: #475569; margin-bottom: 16px; line-height: 1.7; }
+  code { background: #f1f5f9; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+  .col-name  { width: 14%; }
+  .col-span  { width: 13%; }
+  .col-form  { width: 6%; }
+  .col-in    { width: 16%; }
+  .col-out   { width: 16%; }
+  .col-obs   { width: 10%; }
+  .col-auth  { width: 8%; }
+  .col-note  { width: 17%; }
+  .note-box { background: #fef3c7; border-left: 4px solid #d97706; padding: 8px 12px; margin: 12px 0; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<h1>レイヤを跨ぐ統合 backend(I/O 明示版)</h1>
+
+<p class="legend">
+  現アーキテクチャは <b>6 レイヤ分離(Capture / VAD / ASR / Translator / TTS / Output)</b>。
+  本表は <b>複数レイヤを 1 つの実体で呑む統合型ライブラリ</b>を、入出力を明示して
+  カタログ化したもの。<b>収め方の設計は本表ではしない</b>(Adapter / Megabackend /
+  ルート分岐は別議論)。<br>
+  <span class="obs-ok">観測性◎</span> = 内部の src_text/tgt_text 等を API で取り出せる /
+  <span class="obs-part">○</span> = 一部取れる /
+  <span class="obs-ng">×</span> = 取れない(ブラックボックス)。<br>
+  内部標準フォーマットは <b>16kHz / mono / float32</b>(`common/types.py`)。サンプルレート/dtype が
+  異なる backend はリサンプル/フォーマット変換が必要。
+</p>
+
+<p class="note-box">
+  既存 <code>backendCandidates.html</code>(単一レイヤに収まる backend のスペック比較)とは
+  <b>別用途</b>。本表は「跨ぎパターン × I/O」の整理で、収め方検討の素材。
+</p>
+
+<!-- ============================================================ -->
+<h2>1. VAD + ASR</h2>
+<p class="legend">
+  「発話区切り検出 + 書き起こし」を 1 つの実体でやるタイプ。現アーキテクチャの
+  VAD レイヤを呑む / Capture と直結する形が多い。ストリーミング系が大半。
+</p>
+<table>
+  <colgroup>
+    <col class="col-name"><col class="col-span"><col class="col-form">
+    <col class="col-in"><col class="col-out"><col class="col-obs">
+    <col class="col-auth"><col class="col-note">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>名前</th><th>跨ぐレイヤ</th><th>形態</th>
+      <th>入力(形式/単位)</th><th>出力(形式/言語/単位)</th>
+      <th>中間取得</th><th>認証</th><th>備考</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>WhisperX</td>
+      <td>VAD + ASR (+話者分離)</td>
+      <td><span class="local">ローカル</span></td>
+      <td>WAV ファイル / 16kHz mono(内部 resample 可)<br><b>単位: バッチ</b>(ファイル単位)<br>接続: 同期関数</td>
+      <td>セグメント列<code>[{start, end, text, speaker}]</code><br>言語: Whisper 同等(~100)<br><b>単位: 発話セグメント列</b></td>
+      <td><span class="obs-ok">◎</span><br>VAD 境界 + ASR テキスト + ワード alignment</td>
+      <td class="no-auth">不要</td>
+      <td>pyannote 経由で話者分離可。MIT。RAM ~3GB / VRAM ~3GB</td>
+    </tr>
+    <tr>
+      <td>Vosk (streaming)</td>
+      <td>VAD + ASR</td>
+      <td><span class="local">ローカル</span></td>
+      <td>16kHz mono <b>int16 PCM</b>(要変換)<br><b>単位: 連続ストリーム</b>(小ブロック投入)<br>接続: 同期関数(<code>AcceptWaveform</code>)</td>
+      <td>JSON: PartialResult + Result<br>言語: モデル別(英/日/中等)<br><b>単位: 部分結果 + 確定結果</b></td>
+      <td><span class="obs-ok">◎</span><br>ASR が本体、内部 endpointer</td>
+      <td class="no-auth">不要</td>
+      <td>Kaldi ベース。CPU 軽量(RAM 0.5〜2GB)。精度は Whisper 劣後</td>
+    </tr>
+    <tr>
+      <td>Deepgram (streaming)</td>
+      <td>VAD + ASR</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>PCM 各種(8/16/44.1kHz)、Opus 等<br><b>単位: 連続ストリーム</b><br>接続: WebSocket</td>
+      <td>JSON: interim + final + speech_final<br>言語: 36+ (Nova-3)<br><b>単位: 部分結果 + 確定結果</b></td>
+      <td><span class="obs-ok">◎</span><br>ASR テキスト + 句読点 + 話者分離</td>
+      <td class="auth-key">API key</td>
+      <td>$0.0058/分。低レイテンシ売り。utterance_end_ms / endpointing 制御可</td>
+    </tr>
+    <tr>
+      <td>Google Cloud STT (streaming)</td>
+      <td>VAD + ASR</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>PCM LINEAR16 / FLAC 等<br><b>単位: 連続ストリーム</b><br>接続: gRPC bidirectional</td>
+      <td>StreamingRecognitionResult(<code>is_final</code> 付き)<br>言語: 125+<br><b>単位: 部分結果 + 確定結果</b></td>
+      <td><span class="obs-ok">◎</span><br>ASR テキスト + 確信度</td>
+      <td class="auth-key">サービスアカウント JSON</td>
+      <td>$0.024/分。Chirp で多言語強い。single_utterance フラグで自動終了可</td>
+    </tr>
+    <tr>
+      <td>Azure Speech (streaming)</td>
+      <td>VAD + ASR</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>PCM 16kHz 16-bit mono(WAV ヘッダ可)<br><b>単位: 連続ストリーム</b><br>接続: WebSocket / SDK</td>
+      <td><code>SpeechRecognitionEventArgs</code><br>(Recognizing / Recognized)<br>言語: 100+<br><b>単位: 部分結果 + 確定結果</b></td>
+      <td><span class="obs-ok">◎</span><br>ASR テキスト + 連続 partial</td>
+      <td class="auth-key">サブスクリプションキー</td>
+      <td>$1/時間相当。日本リージョン有。SDK 充実</td>
+    </tr>
+    <tr>
+      <td>AssemblyAI (streaming)</td>
+      <td>VAD + ASR</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>16kHz mono PCM 16-bit<br><b>単位: 連続ストリーム</b><br>接続: WebSocket</td>
+      <td>JSON: PartialTranscript / FinalTranscript<br>言語: 英 +一部多言語<br><b>単位: 部分結果 + 確定結果</b></td>
+      <td><span class="obs-ok">◎</span><br>ASR テキスト + エンティティ等</td>
+      <td class="auth-key">API key</td>
+      <td>$0.37/時間〜。Universal-streaming モデル。多言語は対応薄</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>2. ASR + Translator</h2>
+<p class="legend">
+  「書き起こし + 翻訳」を 1 つの実体でやるタイプ。中間段の <code>src_text</code> が
+  取り出せるかが本表の最重要ポイント。
+</p>
+<table>
+  <colgroup>
+    <col class="col-name"><col class="col-span"><col class="col-form">
+    <col class="col-in"><col class="col-out"><col class="col-obs">
+    <col class="col-auth"><col class="col-note">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>名前</th><th>跨ぐレイヤ</th><th>形態</th>
+      <th>入力(形式/単位)</th><th>出力(形式/言語/単位)</th>
+      <th>中間取得</th><th>認証</th><th>備考</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Whisper <code>task="translate"</code><br>(faster-whisper / openai-whisper)</td>
+      <td>ASR + Translator</td>
+      <td><span class="local">ローカル</span></td>
+      <td>16kHz mono float32 PCM(現 MVP 同等)<br><b>単位: 発話単位</b><br>接続: 同期関数(現 backend と同じ)</td>
+      <td>テキスト<br><b>出力言語: 英語固定</b><br><b>単位: 発話単位</b></td>
+      <td><span class="obs-part">○</span><br>src_lang は取れるが src_text(英訳前)は取れない</td>
+      <td class="no-auth">不要</td>
+      <td><b>最小ケース</b>: 現 backend に <code>task</code> 引数を生やすだけで動く。ただし出力は英語のみ</td>
+    </tr>
+    <tr>
+      <td>SeamlessM4T <b>S2TT</b><br>(Meta、Large)</td>
+      <td>ASR + Translator</td>
+      <td><span class="local">ローカル</span></td>
+      <td>16kHz mono float32 PCM<br><b>単位: 発話単位</b>(バッチ的、ストリーム別 API)<br>接続: 同期関数(transformers)</td>
+      <td>翻訳テキスト<br>入力 100 言語 / 出力 ~96 言語<br><b>単位: 発話単位</b></td>
+      <td><span class="obs-part">○</span><br>S2TT のみだと tgt_text のみ。同モデルの <b>ASR mode</b> を別途呼べば src_text 取得可</td>
+      <td class="no-auth">不要</td>
+      <td>RAM 10〜13GB / VRAM 6GB+。MIT 互換。大型(2B / 2.3B params)</td>
+    </tr>
+    <tr>
+      <td>Azure Speech Translation<br>(text-out)</td>
+      <td>ASR + Translator</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>PCM 16kHz mono<br><b>単位: 連続ストリーム</b><br>接続: WebSocket / SDK</td>
+      <td><code>TranslationRecognitionResult</code><br>(src + tgt text 両方含む)<br>言語: 100+<br><b>単位: 部分結果 + 確定結果</b></td>
+      <td><span class="obs-ok">◎</span><br><b>src_text と tgt_text を同 API で取れる</b></td>
+      <td class="auth-key">サブスクリプションキー</td>
+      <td>$24.50/時間(S0)。Neural translate 内蔵。観測性が良い珍しい例</td>
+    </tr>
+    <tr>
+      <td>OpenAI Realtime API<br>(text-out mode)</td>
+      <td>ASR + Translator</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>24kHz pcm16 mono<br><b>単位: 連続ストリーム</b><br>接続: WebSocket</td>
+      <td>テキスト delta(プロンプトで翻訳指示)<br>言語: GPT-4o 同等<br><b>単位: 部分結果 + 確定結果</b></td>
+      <td><span class="obs-part">○</span><br><code>input_audio_transcription</code> で src_text 別 event 取得可</td>
+      <td class="auth-key">API key</td>
+      <td>入力 $32/百万トーク(audio)、出力 $64(audio)/$20(text)。低レイテンシ</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>3. Translator + TTS</h2>
+<p class="legend">
+  「翻訳 + 合成」一体型は<b>単独ライブラリでは少ない</b>領域(クラウドサービス内蔵が多い)。
+  参考として 2 件のみ掲載。
+</p>
+<table>
+  <colgroup>
+    <col class="col-name"><col class="col-span"><col class="col-form">
+    <col class="col-in"><col class="col-out"><col class="col-obs">
+    <col class="col-auth"><col class="col-note">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>名前</th><th>跨ぐレイヤ</th><th>形態</th>
+      <th>入力(形式/単位)</th><th>出力(形式/言語/単位)</th>
+      <th>中間取得</th><th>認証</th><th>備考</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Azure Speech Translator<br>(text-in / audio-out mode)</td>
+      <td>Translator + TTS</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>テキスト(src_text、src_lang 指定)<br><b>単位: 発話単位 or バッチ</b><br>接続: REST / SDK</td>
+      <td>翻訳済み Neural TTS audio (WAV / PCM)<br>言語: 100+<br><b>単位: 発話単位</b></td>
+      <td><span class="obs-ok">◎</span><br>tgt_text も別 event で取得可</td>
+      <td class="auth-key">サブスクリプションキー</td>
+      <td>Speech サービスの一機能。STT と別運用も可</td>
+    </tr>
+    <tr>
+      <td>Google Translate + Cloud TTS<br>(2 API 組合せ)</td>
+      <td>Translator + TTS</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>src_text(src_lang 指定)<br><b>単位: 発話単位</b><br>接続: 2 連続 REST</td>
+      <td>LINEAR16 / OGG_OPUS audio<br>言語: Translate 109 / TTS 380+ voices<br><b>単位: 発話単位</b></td>
+      <td><span class="obs-ok">◎</span><br>tgt_text は Translate API で別途取れる</td>
+      <td class="auth-key">サービスアカウント JSON</td>
+      <td>「単一ライブラリの統合」ではない参考エントリ。観測性は本質的に維持される</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>4. ASR + Translator + TTS(中間+後段全部)</h2>
+<p class="legend">
+  「音声 in → 音声 out」だが Capture と VAD は別という型。発話単位での処理が前提のものが多い。
+</p>
+<table>
+  <colgroup>
+    <col class="col-name"><col class="col-span"><col class="col-form">
+    <col class="col-in"><col class="col-out"><col class="col-obs">
+    <col class="col-auth"><col class="col-note">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>名前</th><th>跨ぐレイヤ</th><th>形態</th>
+      <th>入力(形式/単位)</th><th>出力(形式/言語/単位)</th>
+      <th>中間取得</th><th>認証</th><th>備考</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Azure Speech Translator<br>(full audio-to-audio)</td>
+      <td>ASR + Translator + TTS<br>(VAD 内包)</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>PCM 16kHz mono<br><b>単位: 連続ストリーム</b><br>接続: WebSocket / SDK</td>
+      <td>Neural TTS audio + テキスト同時<br>言語: 100+<br><b>単位: 部分結果(audio chunk + text)</b></td>
+      <td><span class="obs-ok">◎</span><br>STT 結果 / 翻訳テキスト / TTS audio すべて event で取れる</td>
+      <td class="auth-key">サブスクリプションキー</td>
+      <td>$24.50/時間。<b>観測性が完全に取れる例外的サービス</b>。同時通訳用途想定</td>
+    </tr>
+    <tr>
+      <td>SeamlessM4T <b>S2ST</b><br>(Meta、Large v2)</td>
+      <td>ASR + Translator + TTS</td>
+      <td><span class="local">ローカル</span></td>
+      <td>16kHz mono float32 PCM<br><b>単位: 発話単位</b>(バッチ、長い音声は分割)<br>接続: 同期関数</td>
+      <td>16kHz mono PCM(翻訳済み)<br>入力 100 言語 / 出力 36 言語(音声)<br><b>単位: 発話単位</b></td>
+      <td><span class="obs-part">○</span><br>同モデルの S2TT / ASR モードで src_text / tgt_text を別途取れる</td>
+      <td class="no-auth">不要</td>
+      <td>RAM 13GB+ / VRAM 8GB+。MIT 互換。Vocoder 内蔵、speech-to-speech 直結</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>5. VAD + ASR + Translator + TTS(全部入り、PCM in → PCM out ストリーム)</h2>
+<p class="legend">
+  「マイク入れたら翻訳音声が出る」最も統合度が高いタイプ。
+  <b>本質的にストリーミング前提</b>で、現アーキテクチャの「発話単位 seq_id」とは
+  時間モデルが根本的に異なる。
+</p>
+<table>
+  <colgroup>
+    <col class="col-name"><col class="col-span"><col class="col-form">
+    <col class="col-in"><col class="col-out"><col class="col-obs">
+    <col class="col-auth"><col class="col-note">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>名前</th><th>跨ぐレイヤ</th><th>形態</th>
+      <th>入力(形式/単位)</th><th>出力(形式/言語/単位)</th>
+      <th>中間取得</th><th>認証</th><th>備考</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>OpenAI Realtime API<br>(gpt-4o-realtime, audio mode)</td>
+      <td>VAD + ASR + Translator + TTS</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>24kHz pcm16 mono(要変換)<br><b>単位: 連続ストリーム</b>(input_audio_buffer.append)<br>接続: WebSocket</td>
+      <td>24kHz pcm16 mono(任意言語、プロンプトで指示)<br><b>単位: audio chunk delta + text delta</b></td>
+      <td><span class="obs-part">○</span><br><code>input_audio_transcription</code> で src_text、response.text で tgt_text 別 event</td>
+      <td class="auth-key">API key</td>
+      <td>入力 $32/百万トーク(audio)、レイテンシ <500ms。<code>server_vad</code> で内部 VAD 制御</td>
+    </tr>
+    <tr>
+      <td>Gemini 2.0 Live API</td>
+      <td>VAD + ASR + Translator + TTS</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>16kHz pcm16 mono<br><b>単位: 連続ストリーム</b><br>接続: WebSocket</td>
+      <td>24kHz audio chunks(マルチモーダル、テキスト/画像同時可)<br><b>単位: chunk ストリーム</b></td>
+      <td><span class="obs-part">○</span><br>部分文字起こし + 応答テキストが取れる</td>
+      <td class="auth-key">API key (Google AI Studio)</td>
+      <td>マルチモーダル(画像入力も同時可)。Free tier あり。レイテンシ <1s</td>
+    </tr>
+    <tr>
+      <td>Azure Speech Translation streaming<br>(full streaming mode)</td>
+      <td>VAD + ASR + Translator + TTS</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td>PCM 16kHz mono<br><b>単位: 連続ストリーム</b><br>接続: WebSocket / SDK</td>
+      <td>Neural TTS audio + テキスト同時<br>言語: 100+<br><b>単位: chunk ストリーム</b></td>
+      <td><span class="obs-ok">◎</span><br>全段の中間 event を取れる</td>
+      <td class="auth-key">サブスクリプションキー</td>
+      <td>Section 4 と同サービスの streaming モード。同時通訳に最適化</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>横断観察(設計議論の素材)</h2>
+<ul>
+  <li><b>「発話単位」vs「連続ストリーム」の二分法</b>:
+    現パイプラインは発話単位(seq_id ベース)。VAD+ASR 統合のクラウド系と全部入り系は
+    本質的にストリーム。Section 1 と Section 5 は時間モデルが根本的に異なる。</li>
+  <li><b>観測性は「クラウドが意外と◎」</b>:
+    Azure Speech Translator は同時通訳用途のせいで中間段イベントを明示的に出す。
+    一方ローカルの SeamlessM4T S2ST は「モデル別モードを 2 回呼べば取れる」(計算コスト 2 倍)。
+    OpenAI Realtime は <code>input_audio_transcription</code> オプションで src_text を取れる。</li>
+  <li><b>入力フォーマット差</b>:
+    現 MVP は 16kHz / mono / float32。Realtime API は 24kHz / pcm16、Vosk は 16kHz int16 等、
+    バラバラ。Capture レイヤ直後にフォーマット変換アダプタが必要になりがち。</li>
+  <li><b>言語制約の差</b>:
+    Whisper translate は <b>英語固定</b>。SeamlessM4T S2ST は出力 36 言語のみ
+    (日本語 OK)。LLM 系(GPT-4o / Gemini)はプロンプトで任意言語。</li>
+  <li><b>「単一ライブラリで Translator+TTS だけ」は希少</b>:
+    Section 3 が薄いのはこのため。クラウドはサービス内に組み込まれている。</li>
+  <li><b>VAD 抜き / Capture 抜き</b>:
+    Capture(デバイスからの取得)を呑む統合 backend は事実上ない
+    (音声デバイス I/F は OS 依存)。Capture は分離維持で OK。</li>
+</ul>
+
+<p class="legend">
+  <b>次のステップ</b>: この表を見て、現アーキテクチャ(レイヤ分離)にどう収めるかを議論する。
+  選択肢は (a) Adapter で複数レイヤに同一実体登録、(b) Megabackend で新レイヤ概念、
+  (c) Coordinator にルート分岐を持たせる、など。本表は判断材料の提供までで、設計は別途。
+</p>
+
+</body>
+</html>

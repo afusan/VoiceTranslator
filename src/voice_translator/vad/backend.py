@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from voice_translator.common.backend_base import BackendBase
 from voice_translator.common.types import BackendCapabilities, PcmChunk
 
 
@@ -27,10 +28,11 @@ class VadSegment:
     started_at_monotonic: float
 
 
-class VadBackend(ABC):
+class VadBackend(BackendBase, ABC):
     """発話区切り検出の抽象基底。
 
     実装は Silero-VAD 等(MVPは silero)。
+    `BackendBase` から状態管理/購読/エラー履歴の機能を継承する。
     """
 
     @abstractmethod

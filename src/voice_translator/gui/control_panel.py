@@ -1,8 +1,13 @@
 """ControlPanel: 動作開始/停止と直近結果の表示UI(customtkinter)。
 
 役割: Start/Stop トグル、モデル状態の集約観測、直近の翻訳テキスト表示、レイテンシ表示。
-モデルロードはアプリ起動時/設定変更時に自動で走るので、開始ボタンは "全レイヤ LOADED" の
-ときだけ有効化する。AppController.start_pipeline_async() を使い、UIをブロックしない。
+
+Phase B 以降のロード方式変更:
+- 開始ボタンは常時押下可(状態によらず)。
+- 押下時に未ロードの backend があれば、AppController が Loader スレッドでまとめてロード → Coordinator 起動。
+- MISSING_CREDENTIALS のレイヤがあるときだけボタンを disable(ロードしても意味がないため)。
+
+`AppController.start_pipeline_async()` を使い、UIをブロックしない。
 """
 
 from __future__ import annotations
@@ -66,22 +71,36 @@ class ControlPanel(ctk.CTkFrame):
             row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 4)
         )
 
+        # ステータステキストボックス(Phase C3): 全レイヤ状態 + 最近のエラー集約
+        ctk.CTkLabel(self, text="ステータス:").grid(
+            row=3, column=0, sticky="w", padx=10, pady=(6, 0)
+        )
+        self._status_text = ctk.CTkTextbox(self, height=140, wrap="word")
+        self._status_text.grid(
+            row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=4
+        )
+        self._status_text.configure(state="disabled")
+
         # 履歴ラベル + クリアボタン(同じ行に配置)
         ctk.CTkLabel(self, text="最近の翻訳:").grid(
-            row=3, column=0, sticky="w", padx=10, pady=(8, 0)
+            row=5, column=0, sticky="w", padx=10, pady=(8, 0)
         )
         self._clear_btn = ctk.CTkButton(
             self, text="クリア", width=80, command=self._on_clear_history
         )
-        self._clear_btn.grid(row=3, column=2, sticky="e", padx=10, pady=(8, 0))
+        self._clear_btn.grid(row=5, column=2, sticky="e", padx=10, pady=(8, 0))
 
-        self._history_text = ctk.CTkTextbox(self, height=360, wrap="word")
-        self._history_text.grid(row=4, column=0, columnspan=3, sticky="nsew", padx=10, pady=4)
+        self._history_text = ctk.CTkTextbox(self, height=260, wrap="word")
+        self._history_text.grid(row=6, column=0, columnspan=3, sticky="nsew", padx=10, pady=4)
         self._history_text.configure(state="disabled")
 
         self.columnconfigure(1, weight=1)
         # 履歴ボックスをウィンドウ拡大時に伸ばす
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(6, weight=1)
+
+        # 初期状態を反映 + 定期更新を仕掛ける
+        self._refresh_status_text()
+        self._schedule_status_refresh()
 
     # ============================================================
     def _on_toggle(self) -> None:
@@ -103,7 +122,22 @@ class ControlPanel(ctk.CTkFrame):
                 on_failed=self._on_loader_failed,
             )
         except Exception as e:  # noqa: BLE001
+            # フィードバックを 3 箇所に出して見落としを防ぐ:
+            # 1) app.log にスタックトレース付きで残す(原因調査用)
+            # 2) history widget(従来通り)
+            # 3) status_label に短く表示(ユーザの視線が一番行く場所)。
+            #   「ボタン押したが反応無い」状態を作らないため。
+            import logging
+            logging.getLogger("voice_translator").exception(
+                "_do_start_async で start_pipeline_async が同期失敗"
+            )
             self._append_history(f"[起動失敗] {e}")
+            # status_label は ready_state の周期更新で上書きされるので、
+            # 短時間でも見えるようここで上書きしておく。
+            try:
+                self._status_label.configure(text=f"起動失敗: {e}")
+            except Exception:  # noqa: BLE001 - widget 破棄済み等
+                pass
             return
         self._state = "starting"
         self._toggle_btn.configure(text="開始中…", state="disabled")
@@ -189,12 +223,50 @@ class ControlPanel(ctk.CTkFrame):
     def _apply_layer_status(self, layer: LayerKind, status: ModelStatus) -> None:
         self._layer_statuses[layer] = status
         self._sync_ready_state()
+        # ステータステキストボックスにも反映(Phase C3)
+        self._refresh_status_text()
+
+    # ============================================================
+    # ステータステキストボックス(Phase C3)
+    # ============================================================
+    _STATUS_REFRESH_INTERVAL_MS = 3000  # 3 秒ごとにエラー履歴等を再フェッチ
+
+    def _refresh_status_text(self) -> None:
+        """`AppController.get_status_summary()` を取得してテキストボックスを更新する。"""
+        try:
+            summary = self._controller.get_status_summary()
+        except Exception as e:  # noqa: BLE001
+            summary = f"(ステータス取得に失敗: {e})"
+        try:
+            self._status_text.configure(state="normal")
+            self._status_text.delete("1.0", "end")
+            self._status_text.insert("end", summary)
+            self._status_text.configure(state="disabled")
+        except Exception:  # noqa: BLE001
+            # widget が破棄済み等の場合は無視
+            pass
+
+    def _schedule_status_refresh(self) -> None:
+        """周期的にステータスを再描画する。`on_status_change` の通知漏れに対する保険。"""
+        try:
+            self.after(self._STATUS_REFRESH_INTERVAL_MS, self._tick_status_refresh)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _tick_status_refresh(self) -> None:
+        self._refresh_status_text()
+        self._schedule_status_refresh()
 
     def _sync_ready_state(self) -> None:
-        """全レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。
+        """各レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。
 
-        idle 以外(running / starting / stopping)のときはここでは触らない
-        (それぞれのフローで管理されるため)。
+        Phase B: 「全レイヤ LOADED でないと開始ボタン無効」を撤回。
+        開始ボタンは常時押下可で、押された時点で未ロードならまとめてロードする。
+        MISSING_CREDENTIALS / DOWNLOADING のときだけ無効化する:
+          - MISSING_CREDENTIALS: ロードしても意味なし(API key 未設定)
+          - DOWNLOADING: 進行中のロードを待つ(押下しても何も起きない)
+
+        idle 以外(running / starting / stopping)のときは触らない(各フローで管理)。
         """
         if self._state != "idle":
             return
@@ -203,17 +275,23 @@ class ControlPanel(ctk.CTkFrame):
         if not statuses:
             return
 
-        if any(s in (ModelStatus.INIT, ModelStatus.LOADING) for s in statuses):
-            # INIT(未着手) / LOADING(進行中) はどちらも「準備中」とまとめて表示
-            self._toggle_btn.configure(text="モデル準備中…", state="disabled")
-            self._status_label.configure(text="モデル準備中…")
-        elif any(s == ModelStatus.NOT_DOWNLOADED for s in statuses):
-            self._toggle_btn.configure(text="モデル未準備", state="disabled")
-            self._status_label.configure(text="モデル未準備(設定/ネット接続を確認)")
+        if any(s == ModelStatus.MISSING_CREDENTIALS for s in statuses):
+            self._toggle_btn.configure(text="認証情報未設定", state="disabled")
+            self._status_label.configure(
+                text="認証情報未設定(詳細ダイアログで設定してください)"
+            )
+        elif any(s == ModelStatus.DOWNLOADING for s in statuses):
+            self._toggle_btn.configure(text="モデル DL 中…", state="disabled")
+            self._status_label.configure(text="モデルダウンロード中…")
         else:
-            # 全部 LOADED — device サマリも併記して「GPU 動いてる?」が一目で分かるように
+            # 開始ボタンは常時押下可。ロード状況は補助情報としてラベルに出す。
             self._toggle_btn.configure(text="▶ 開始", state="normal")
-            self._status_label.configure(text="停止中")
+            if any(s in (ModelStatus.INIT, ModelStatus.NOT_DOWNLOADED) for s in statuses):
+                self._status_label.configure(text="停止中(押下時にロードします)")
+            elif any(s == ModelStatus.LOADING for s in statuses):
+                self._status_label.configure(text="停止中(ロード中)")
+            else:
+                self._status_label.configure(text="停止中")
 
         # アクセラレータ表示は ready_state とは独立に常に更新する
         self._refresh_accel_label()

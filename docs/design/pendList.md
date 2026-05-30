@@ -4,6 +4,121 @@
 
 ---
 
+## [📌方針 2026-05-30] 追加モデル続行・UI 調整・配布形態の段階対応(複数日)
+本ブランチ(`feature/vad-picks-pyannote-4x`)を master にマージしたあと、下記 3 つを
+別ブランチで順次対応する(各 1 日では収まらない見込み)。
+
+### a) backendCandidates の残り picks 実装
+- `docs/design/feature-backend-mgmt/backendCandidates.html` で ✓ を付けた
+  ASR 3 件 / Translator 3 件をまだ実装していない:
+  - ASR: OpenAI Whisper API / Deepgram / Google Cloud STT
+  - Translator: DeepL API / OpenAI GPT-4o-mini / Anthropic Claude Haiku
+- token が用意できた backend は `tests/test_<backend>_large.py` を必ず追加(新方針)。
+- 進めるペースはユーザ要望ベース。Phase F2 として 1〜2 件ずつ別ブランチで。
+
+### b) UI 調整
+- 既に保留されている UI 折り畳み(設定セクション / ステータス)
+- start 失敗時の表示動線(`ffa68e5` で status_label に出すようにしたが、もう一段
+  目立つ通知バナー等の検討余地)
+- 詳細ダイアログから抜けたときの再描画タイミング
+- 認証ダイアログ閉じた直後の状態反映の挙動
+
+### c) 配布形態(実行環境のポーティング / インストーラ)
+- 現状は `git clone + uv sync --extra cpu` または `--extra cuda --extra vad-extra` 前提。
+  非開発者には敷居が高い。
+- 検討案:
+  - **PyInstaller / Nuitka で one-folder** にして zip 配布
+  - **uv tool** での配布(まだ実験的)
+  - **Windows MSI**(WiX 等)
+- 配布方針「CPU を floor、GPU は opt-in」と整合する形を選ぶ。
+- 副題: モデル DL は配布物に含めず、初回起動時 DL とする(配布物サイズ削減)。
+
+### d) ライセンス規約のあるモデルを README に明記
+- pyannote.audio(`pyannote/segmentation-3.0`)— 利用同意必須(gated)
+- Picovoice Cobra — 個人非商用無料 tier / 商用は要ライセンス
+- 各 cloud backend(OpenAI / DeepL / Anthropic / GCP / AWS)の API 利用規約
+- README に「対応 backend と必要な利用同意 / アカウント」のセクションを追加。
+- 配布時に同意忘れで動かないケースが多いので、起動時のテストや warning も併設検討。
+
+---
+
+## [⏳保留 2026-05-30] 追加 VAD backend の依存 optional 化方針
+- **対象**: `pyproject.toml` の `[project.optional-dependencies].vad-extra` に入れた
+  `webrtcvad-wheels` / `pyannote.audio` / `pvcobra`。`uv sync --extra vad-extra` で初めて入る。
+- **背景**: Phase F1 で 3 つ VAD backend を追加した際、配布方針「CPU を floor / 誰でも持っていける」
+  を維持するため、利用者が opt-in しない限り pyannote.audio (transformers/lightning/scipy/sklearn 等
+  を引っ張る) を入れないことにした。代わりに、未インストール環境では各 backend が
+  `FatalError("`uv sync --extra vad-extra` で追加してください")` を投げる前提。
+- **見送り判断ポイント**:
+  - webrtcvad だけは小さい(< 100KB)ので**必須側に上げる**選択もある(Silero フォールバック
+    としての位置付け)。pyannote / pvcobra と束ねた現状は揃ってる代わりに、ユーザが「軽い
+    フォールバックだけ欲しい」場面で過剰になる。
+  - もしフォールバックを自動でやるなら必須側、選択肢として並べるだけならいまの opt-in で十分。
+- **着手トリガ**: dogfooding で「silero が動かない環境」を実際に踏んだ、または既定 VAD を
+  入れ替えたくなった時。
+
+---
+
+## [⏳保留 2026-05-30] フレーム判定系 VAD の共通ロジック抽出
+- **対象**: `WebRtcVadBackend` と `PvcobraVadBackend` の `_handle_frame` / `_enter_speech` /
+  `_exit_speech` / `_maybe_force_emit` がほぼ同形。
+- **背景**: 両 backend とも「フレーム → speech/silence(or 確率)」を返す型で、ヒステリシス
+  (連続 N で start / 連続 M で end)+ pad + max_speech_sec は同じ。
+- **対応の見送り理由**: 今回は責務分離を優先。共通化を急ぐと N/M の調整パラメータが
+  backend ごとに違ってくる懸念があり、3 backend 揃ったあとで再検討する方が安全。
+- **着手案**: `FrameThresholdSegmenter(min_speech_frames, min_silence_frames, pad_frames,
+  max_speech_samples)` を作って `feed(frame, is_speech) -> list[VadSegment]` を切り出す。
+  Silero は frame 粒度ではないので対象外。
+
+---
+
+## [⏳保留 2026-05-30] pyannote.audio の verify_credentials を実モデル不要にする
+- **対象**: `PyannoteVadBackend.verify_credentials` は HuggingFace の `/api/whoami-v2` 叩きで
+  token の生死だけ確認。実モデルへのアクセス権(`pyannote/voice-activity-detection` の
+  利用同意済みか)はチェックしていない。
+- **背景**: 完全な verify はモデルを実際にダウンロード&ロードする必要があり、verify が分単位
+  かかってしまう。短時間で済ませる方を優先した。
+- **未確認のリスク**: token は生きてるがモデル利用同意未済 → `Pipeline.from_pretrained` 時に
+  401/403 で落ちる。`backend.__init__` で `FatalError` を投げる扱いになっている。
+- **対応案(着手時)**: `https://huggingface.co/api/models/<model_id>` を GET して
+  `gated` / `disabled` / 同意状態を見る軽い check に置き換える。
+
+---
+
+## [⏳保留 2026-05-29] cloud backend 認証テスト(skip スケルトンの埋め込み)
+- **対象**: `tests/test_credential_flow.py` Part 2(6 クラス計 28 件、すべて `@pytest.mark.skip`)
+- **背景**: Phase E-2 で認証フローを汎用化(spec → verify → 保存 → Start gate)した際、
+  各 cloud backend が満たすべき契約をテスト雛形として先置きしてある。実 backend がまだ
+  存在しないため、現状は `skip` で見える化だけしている状態。
+- **対応の見送り理由**: Phase F で「どの cloud backend を 1 つ目に実装するか」が決まるまで、
+  テストを書いても回せない(実 API key も準備が要る)。実装と同時に埋めるのが効率的。
+- **着手時にやること**:
+  1. 対応する backend クラスを `src/voice_translator/{layer}/{name}_backend.py` に実装
+     (`credential_spec()` + `verify_credentials()` を含む)
+  2. `backend_setup.py` で `backend_cls` + `capabilities` 付きで register
+  3. テストクラスの `@pytest.mark.skip` を外す
+  4. 各 test メソッドの中身を埋める:
+     - 有効/無効/network error/quota 超過 を httpx モック等で再現
+     - 動作中 401 → `invalidate_verification` 連携の確認
+  5. 実 API key を使う large テストは別途 `@pytest.mark.large` で追加(任意)
+- **対象 backend**: OpenAI Whisper API / DeepL / OpenAI TTS / Anthropic Claude /
+  AWS Transcribe / Google Cloud STT(GCP は `file_picker` 型の schema 追加も必要)
+
+---
+
+## [⏳保留 2026-05-29] UI セクションの折り畳み(設定全体 / ステータス)
+- **要望**: MainWindow 上の SettingsPanel(バックエンド・デバイス・翻訳言語)と
+  ControlPanel のステータステキストボックスを、それぞれ畳めるようにしたい。
+  使い込んだあとは履歴を広く見たいシーンが多いので、必要なときだけ広げる UX にしたい。
+- **対応の見送り理由**: 本ブランチ(feature/backend-mgmt)は backend 管理が主題。
+  customtkinter には標準で collapsible 機能が無く、自作する必要があるため、別ブランチで
+  まとめて対応する(`docs/` の pendList で来歴を残す)。
+- **想定実装**: 各セクションの見出しを「▼ 設定」「▶ 設定」のように切替可能なボタンにし、
+  クリックで子ウィジェットを `.pack_forget()` / `.pack()` で出し入れする。配置の jitter を
+  避けるため `CTkFrame` をラップして `.grid_remove()` する案も検討。
+
+---
+
 ## [📌方針 2026-05-28] プロジェクト配布方針 — GPU はオプション扱い、CPU を floor とする
 - **背景・目的**: 将来 GitHub で公開して**誰でも自由に持っていける**形にしたい。そのためには「特定のハードがないと動かない」状態は避けたい。
 - **方針**:
@@ -127,6 +242,30 @@
   - **A. ソフトゲイン(推奨/簡単)**: `SoundcardOutputBackend.play()` の直前で `pcm * gain` を掛ける。スライダ値 0.0〜1.5 程度。クリップ防止のためゲイン>1.0 時は `np.clip(-1.0, 1.0)`。
   - **B. OS音量制御**: Windows なら `pycaw` で出力デバイス本体の音量を変える。他アプリも影響を受けるので慎重に。
   - 設定永続化キー: `audio.output_gain`(0.0〜1.5 の float)。
+
+---
+
+## [2026-05-29] AppController の責務分離(リファクタ予約)
+- **背景**: `feature/backend-mgmt` の Phase A2 で AppController に layer 単位 load / multi-listener / 処理時間 buffer 等の orchestration 責務が追加される。R2-1 解消の分散化で `_model_status` dict は消えるものの、全体としては引き続き肥大化傾向
+- **方針案**(将来のリファクタ時):
+  - `ModelLoaderService`(ロード処理)
+  - `StatusBroadcaster`(listener 管理 + re-broadcast)
+  - `LatencyBuffer`(layer 別 処理時間)
+  - AppController は composition でこれらを保有する形に整理
+- **見送り理由**: 動かしてから整理する方が安全(早すぎる抽象化を避ける)
+- **再検討トリガ**: `feature/backend-mgmt` ブランチ完了後 / さらに新機能で AppController が肥大化したタイミング
+
+---
+
+## [2026-05-29] リトライ機構の効果検証 — 効果薄なら撤回も検討
+- **背景**: `feature/backend-mgmt` の Phase E でクラウド backend(ネットワーク経由テキスト系 API)に 3 回リトライ機構を実装予定。だが「リトライ中も上流の capture が動き続けてキューが詰まる」という構造的な懸念がある(knownRisks R-4)
+- **検証案**: Phase F で DeepL 等の実クラウド backend を 1 つ繋いだ時、わざとネット切断 / レート制限を再現してリトライ機構の挙動を観察
+- **判定基準**:
+  - リトライ中もキュー詰まりが許容範囲内 → 採用継続
+  - キュー詰まり / drop が頻発して体感が悪い → **リトライ機構ごと撤回**(失敗即停止に倒す)
+- **撤回した場合の影響**: backend の severity 設計はそのまま使えるので、ErrorHandler 側で「RECOVERABLE → リトライ」を「RECOVERABLE → SKIP / FATAL に格上げ」に変えるだけで吸収可能
+- **見送り理由**: 設計段階で結論を出せない。実機の挙動を見ないと判断不能
+- **再検討トリガ**: Phase F の動作確認時(feature/backend-mgmt の最終フェーズ)
 
 ---
 

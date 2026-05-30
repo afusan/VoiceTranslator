@@ -12,11 +12,17 @@ dependencies = [
     "silero-vad>=5.1",
     "faster-whisper>=1.0",
     "transformers>=4.40",
-    "torch>=2.2",
+    # pyannote.audio 4.x が torch>=2.8.0 / torchaudio>=2.8.0 を要求するため、それに合わせて
+    # 下限を 2.8 に引き上げ(cu126 index に対応)。pyannote を使わなくても torch 2.8 は問題なく動く。
+    "torch>=2.8",
     "sentencepiece>=0.2",
     "pyttsx3>=2.90",
     # GUI(Step 5):
     "customtkinter>=5.2",
+    # クラウド backend 認証情報の OS keychain 保管(Phase D):
+    # 失敗時は平文ファイル(`local.secrets`)に fallback するので、未インストール環境でも
+    # ローカル backend だけならアプリは動く。
+    "keyring>=24.0",
 ]
 
 # 配布方針: CPU を floor、GPU は opt-in(CLAUDE.md「配布方針」参照)。
@@ -31,12 +37,24 @@ dependencies = [
 # 依存)。デフォルト PyPI から取ると torch と ABI が合わず WinError 127 になる。
 [project.optional-dependencies]
 cpu = [
-    "torch>=2.2",
-    "torchaudio>=2.2",
+    "torch>=2.8",
+    "torchaudio>=2.8",
 ]
 cuda = [
-    "torch>=2.2",
-    "torchaudio>=2.2",
+    "torch>=2.8",
+    "torchaudio>=2.8",
+]
+# Phase F1: 追加の VAD バックエンド(webrtcvad / pyannote.audio / pvcobra)。
+# 配布方針 "CPU を floor、誰でも持っていける" を維持するため、既定の `uv sync --extra cpu`
+# では入れない。利用したいユーザだけ `uv sync --extra cpu --extra vad-extra` で追加する。
+# 各 backend は遅延 import を行い、依存未インストール時は FatalError を投げる。
+# pyannote.audio は 4.x を採用(3.x は huggingface_hub の use_auth_token 廃止に追従しておらず、
+# torch 2.6+ の weights_only 既定変更とも噛み合わずに長く保守不能になるため)。4.x で
+# token kwarg / 新 hf_hub / 新 checkpoint 形式に切り替わっている。
+vad-extra = [
+    "webrtcvad-wheels>=2.0.10",
+    "pyannote.audio>=4.0",
+    "pvcobra>=2.0",
 ]
 
 [tool.uv]
@@ -64,12 +82,12 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-# PyTorch の CUDA 12.4 ビルド。--extra cuda のときだけ参照される。
-# cu121 だと torch 2.5.1 までしか無く、transformers の torch>=2.6 要求(CVE-2025-32434)を
-# 満たせないため cu124 を採用。CUDA バージョンを更に上げる場合はここを `cu126` 等に変える。
+# PyTorch の CUDA 12.6 ビルド。--extra cuda のときだけ参照される。
+# 履歴: cu121(torch 2.5.1 まで)→ cu124(torch 2.6 まで)→ cu126(torch 2.8 以降)。
+# pyannote.audio 4.x が torchaudio>=2.8 を要求するため cu126 に移行。
 # 必要なドライババージョン目安: cu124 -> 525+、cu126 -> 555+。
 name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu124"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [dependency-groups]

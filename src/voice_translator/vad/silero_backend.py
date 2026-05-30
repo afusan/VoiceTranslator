@@ -20,6 +20,7 @@ from voice_translator.common.errors import FatalError
 from voice_translator.common.types import (
     INTERNAL_SAMPLE_RATE,
     BackendCapabilities,
+    ModelStatus,
     PcmChunk,
 )
 
@@ -55,11 +56,15 @@ class SileroVadBackend(VadBackend):
                 繰り越す(VADIterator の状態は維持するので、次の音はそのまま継続発話扱い)。
                 0 または None で無効化(従来通り VAD の end イベントだけが頼り)。
         """
+        super().__init__()  # BackendBase: status=INIT
+        # silero-vad は pip パッケージ同梱で DL なし。LOADING のみ。
+        self._set_status(ModelStatus.LOADING)
         # 遅延 import: silero-vad は依存(onnxruntime/torch)が重いため、
         # クラス生成時にのみ取り込む。テストでは monkeypatch しやすい。
         try:
             from silero_vad import VADIterator, load_silero_vad  # type: ignore
         except Exception as e:  # noqa: BLE001
+            self.record_error(e, context="silero-vad import")
             raise FatalError(f"silero-vad のロードに失敗: {e}", cause=e) from e
 
         try:
@@ -72,6 +77,7 @@ class SileroVadBackend(VadBackend):
                 speech_pad_ms=speech_pad_ms,
             )
         except Exception as e:  # noqa: BLE001
+            self.record_error(e, context="silero-vad init")
             raise FatalError(f"silero-vad の初期化に失敗: {e}", cause=e) from e
 
         # 強制区切りの上限サンプル数(0 以下なら無効化)
@@ -86,6 +92,7 @@ class SileroVadBackend(VadBackend):
         self._speech_samples: list[np.ndarray] = []
         self._speech_started_at: float | None = None
         self._speech_accumulated_samples: int = 0
+        self._set_status(ModelStatus.LOADED)
 
     # ----------------------------------------------------------
     def reset(self) -> None:

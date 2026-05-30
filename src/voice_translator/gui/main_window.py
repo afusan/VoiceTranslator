@@ -1,8 +1,8 @@
 """MainWindow: アプリのルートウィンドウ(customtkinter)。
 
 役割: SettingsPanel と ControlPanel を内包し、AppController を介して連携させる。
-アプリ起動時に AppController.load_models_async() を呼び出してモデルを先行ロードする
-(以降の開始ボタンは即座に処理スレッドだけを起動するため UX が改善される)。
+アプリ起動時に `auto_load=True` が指定されている backend のレイヤだけを先行ロードする
+(Phase B: 既定では全レイヤが auto_load=False なので、起動はモデルロード無しで完了する)。
 """
 
 from __future__ import annotations
@@ -33,9 +33,10 @@ class MainWindow(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # 起動時にバックグラウンドでモデルをロード(GUI はその間も操作可能)。
-        # 各レイヤのステータスは on_status_change 経由で ControlPanel/SettingsPanel に届く。
-        self._controller.load_models_async()
+        # Phase B: auto_load=True のレイヤだけ起動時にバックグラウンドロード。
+        # 既定 OFF なので通常はこの呼び出しは即時 on_done する(対象なし)。
+        # ユーザは詳細ダイアログから個別に auto_load を ON にできる。
+        self._controller.load_auto_load_layers_async()
 
     def _on_close(self) -> None:
         try:

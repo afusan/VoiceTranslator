@@ -16,6 +16,7 @@ from voice_translator.common.types import (
     INTERNAL_SAMPLE_RATE,
     BackendCapabilities,
     CaptureSource,
+    ModelStatus,
     PcmChunk,
 )
 
@@ -31,11 +32,14 @@ class SoundcardCaptureBackend(AudioCaptureBackend):
     """
 
     def __init__(self, *, chunk_size: int = 1600) -> None:
+        super().__init__()  # BackendBase: status=INIT
         # 1600 frames / 16kHz = 100ms。PipelineCoordinator.read_timeout と整合させる。
         self._chunk_size = chunk_size
         self._mic: sc._Microphone | None = None  # type: ignore[name-defined]
         self._context = None  # context manager
         self._recorder = None  # 実体(record を持つ)
+        # soundcard はライブラリで DL なし。デバイスは start() で開く。
+        self._set_status(ModelStatus.LOADED)
 
     # ----------------------------------------------------------
     def list_sources(self) -> list[CaptureSource]:
@@ -107,6 +111,8 @@ class SoundcardCaptureBackend(AudioCaptureBackend):
         return BackendCapabilities(
             supported_languages=(),  # 音声取得は言語非依存
             requires_gpu=False,
+            is_cloud=False,
+            requires_credentials=False,
             notes="soundcard ベース。Windows/Linuxは loopback対応。Macは BlackHole等が別途必要。",
         )
 

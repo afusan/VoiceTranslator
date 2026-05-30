@@ -16,6 +16,7 @@ from voice_translator.common.types import (
     INTERNAL_CHANNELS,
     INTERNAL_SAMPLE_RATE,
     BackendCapabilities,
+    ModelStatus,
     OutputDevice,
 )
 
@@ -30,7 +31,10 @@ class SoundcardOutputBackend(AudioOutputBackend):
     """
 
     def __init__(self) -> None:
+        super().__init__()  # BackendBase: status=INIT
         self._speaker: sc._Speaker | None = None  # type: ignore[name-defined]
+        # soundcard はライブラリで DL なし。デバイスは start() で開く。
+        self._set_status(ModelStatus.LOADED)
 
     # ----------------------------------------------------------
     def list_devices(self) -> list[OutputDevice]:
@@ -87,5 +91,7 @@ class SoundcardOutputBackend(AudioOutputBackend):
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
             requires_gpu=False,
+            is_cloud=False,
+            requires_credentials=False,
             notes="soundcard ベース。複数サンプルレートを発話ごとに切替可能。",
         )

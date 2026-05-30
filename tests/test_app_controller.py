@@ -19,8 +19,23 @@ from voice_translator.common.errors import FatalError
 from voice_translator.common.types import (
     CaptureSource,
     LayerKind,
+    ModelStatus,
     OutputDevice,
 )
+
+
+def _attach_backend_base_protocol(inst: MagicMock) -> None:
+    """Phase A2 で AppController が backend に求める I/F をモックに生やす。
+
+    - `get_status()` は LOADED を返す(load 完了直後の正常状態)
+    - `subscribe(callback)` は unsubscribe を持つ MagicMock を返す
+    既存テストの mock factory に注入することで「初期化手順の追加はテスト側で吸収」する
+    (CLAUDE.md テスト変更時の方針)。
+    """
+    inst.get_status = MagicMock(return_value=ModelStatus.LOADED)
+    sub = MagicMock(name="subscription")
+    sub.unsubscribe = MagicMock()
+    inst.subscribe = MagicMock(return_value=sub)
 
 
 # ============================================================
@@ -34,6 +49,7 @@ def _fake_capture_factory():
     inst.start = MagicMock()
     inst.stop = MagicMock()
     inst.read_chunk = MagicMock(return_value=None)
+    _attach_backend_base_protocol(inst)
     return inst
 
 
@@ -45,6 +61,7 @@ def _fake_output_factory():
     inst.start = MagicMock()
     inst.stop = MagicMock()
     inst.play = MagicMock()
+    _attach_backend_base_protocol(inst)
     return inst
 
 
@@ -56,6 +73,7 @@ def _fake_simple_backend():
     inst.transcribe = MagicMock(return_value=("hello", "en"))
     inst.translate = MagicMock(return_value="こんにちは")
     inst.synthesize = MagicMock(return_value=(b"audio", 16000))
+    _attach_backend_base_protocol(inst)
     return inst
 
 
@@ -572,6 +590,745 @@ class TestPipelineQueueConfig:
             assert ctrl._coord._translated_queue.maxsize == 3
         finally:
             ctrl.stop_pipeline()
+
+
+class TestPhaseA2StatusDelegation:
+    """Phase A2: AppController._model_status は廃止、状態の真実は backend 側にある。"""
+
+    def test_get_model_status_delegates_to_backend(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        # mock backend は LOADED を返すよう仕込んである
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.LOADED
+
+    def test_get_model_status_returns_init_when_not_loaded(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        # ロード前は backend 不在 → INIT
+        for layer in LayerKind:
+            assert ctrl.get_model_status(layer) == ModelStatus.INIT
+
+    def test_subscribe_called_on_load(
+        self, populated_registry, config
+    ) -> None:
+        """ロード時に AppController が各 backend の subscribe を呼ぶ。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        for layer in LayerKind:
+            backend = ctrl._backends[layer]
+            assert backend.subscribe.called, f"{layer}: subscribe 未呼び出し"
+
+    def test_eviction_unsubscribes(
+        self, populated_registry, config
+    ) -> None:
+        """backend 差し替え時に旧 backend の subscription が解除される。"""
+        populated_registry.register(LayerKind.ASR, "alt_asr", _fake_simple_backend)
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        old_sub = ctrl._backend_subscriptions[LayerKind.ASR]
+
+        ctrl.set_setting("backends", "asr", "alt_asr")
+        # 再ロード完了を待つ
+        import time
+        for _ in range(20):
+            if LayerKind.ASR in ctrl._backends and (
+                ctrl._backend_subscriptions.get(LayerKind.ASR) is not old_sub
+            ):
+                break
+            time.sleep(0.05)
+        assert old_sub.unsubscribe.called, "旧 backend の subscription が解除されていない"
+
+
+class TestPhaseA2MultiListener:
+    """`add_status_listener` で複数 UI listener を扱える(R2-6)。"""
+
+    def test_listener_invoked_on_load(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        events: list[tuple[LayerKind, ModelStatus]] = []
+        sub = ctrl.add_status_listener(lambda l, s: events.append((l, s)))
+        try:
+            ctrl.load_models()
+        finally:
+            sub.unsubscribe()
+        # 各レイヤで LOADING と LOADED が観測される
+        for layer in LayerKind:
+            seen = [s for (l, s) in events if l == layer]
+            assert ModelStatus.LOADING in seen
+            assert seen[-1] == ModelStatus.LOADED
+
+    def test_unsubscribe_stops_notifications(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        events: list[tuple[LayerKind, ModelStatus]] = []
+        sub = ctrl.add_status_listener(lambda l, s: events.append((l, s)))
+        sub.unsubscribe()
+        ctrl.load_models()
+        assert events == []
+
+    def test_multiple_listeners_all_notified(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        seen_a: list[tuple[LayerKind, ModelStatus]] = []
+        seen_b: list[tuple[LayerKind, ModelStatus]] = []
+        ctrl.add_status_listener(lambda l, s: seen_a.append((l, s)))
+        ctrl.add_status_listener(lambda l, s: seen_b.append((l, s)))
+        ctrl.load_models()
+        assert seen_a == seen_b
+        assert len(seen_a) > 0
+
+    def test_old_single_callback_still_works(
+        self, populated_registry, config
+    ) -> None:
+        """旧 set_callbacks(on_status_change=...) の経路も維持されている。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        events: list[tuple[LayerKind, ModelStatus]] = []
+        ctrl.set_callbacks(on_status_change=lambda l, s: events.append((l, s)))
+        ctrl.load_models()
+        for layer in LayerKind:
+            seen = [s for (l, s) in events if l == layer]
+            assert seen[-1] == ModelStatus.LOADED
+
+    def test_listener_exception_does_not_break_others(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        seen: list[tuple[LayerKind, ModelStatus]] = []
+
+        def bad(_l, _s):
+            raise RuntimeError("listener bug")
+
+        ctrl.add_status_listener(bad)
+        ctrl.add_status_listener(lambda l, s: seen.append((l, s)))
+        ctrl.load_models()
+        assert len(seen) > 0  # 後の listener が呼ばれている
+
+
+class TestPhaseA2LoadModelLayer:
+    """`load_model_layer(layer)` の単体ロード。"""
+
+    def test_single_layer_loaded(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        assert LayerKind.ASR in ctrl._backends
+        # 他レイヤは未ロード
+        for layer in LayerKind:
+            if layer == LayerKind.ASR:
+                continue
+            assert layer not in ctrl._backends
+
+    def test_idempotent(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        before = ctrl._backends[LayerKind.ASR]
+        ctrl.load_model_layer(LayerKind.ASR)
+        after = ctrl._backends[LayerKind.ASR]
+        assert before is after
+
+    def test_failure_propagates_and_emits_not_downloaded(
+        self, populated_registry, config
+    ) -> None:
+        """ロード失敗時は例外伝播 + status=NOT_DOWNLOADED 通知。"""
+        def _failing_factory():
+            raise RuntimeError("model not found")
+
+        populated_registry.register(LayerKind.ASR, "broken", _failing_factory)
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("backends", "asr", "broken")  # 再ロードは別スレッドで失敗
+        # set_setting 由来の再ロードが完了するのを待ち、最終状態が NOT_DOWNLOADED であること
+        import time
+        for _ in range(20):
+            if ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT:
+                # まだロードが始まっていない or 終わっていない
+                time.sleep(0.05)
+            else:
+                break
+        # 失敗ロードなので backend は不在
+        assert LayerKind.ASR not in ctrl._backends
+
+
+class TestPhaseA2RecentDurations:
+    """`get_recent_durations(layer)` のリングバッファ動作。"""
+
+    def test_initial_empty(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        for layer in LayerKind:
+            assert ctrl.get_recent_durations(layer) == []
+
+    def test_handle_utterance_done_pushes_durations(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        t0 = monotonic()
+        record = {
+            "seq_id": 1,
+            "src_text": "x",
+            "src_lang": "en",
+            "tgt_text": "y",
+            "tgt_lang": "ja",
+            "timeline": {
+                "t_capture": t0,
+                "t_vad_end": t0 + 0.1,
+                "t_asr_start": t0 + 0.1,
+                "t_asr": t0 + 0.3,
+                "t_translate_start": t0 + 0.3,
+                "t_translate": t0 + 0.5,
+                "t_tts_start": t0 + 0.5,
+                "t_tts": t0 + 0.7,
+                "t_playback_start": t0 + 0.7,
+                "t_playback": t0 + 0.8,
+            },
+        }
+        ctrl._handle_utterance_done(record)
+        # VAD: 100ms, ASR: 200ms, Translator: 200ms, TTS: 200ms, Output: 100ms
+        assert ctrl.get_recent_durations(LayerKind.VAD) == pytest.approx([100.0], rel=0.01)
+        assert ctrl.get_recent_durations(LayerKind.ASR) == pytest.approx([200.0], rel=0.01)
+        assert ctrl.get_recent_durations(LayerKind.TRANSLATOR) == pytest.approx([200.0], rel=0.01)
+        assert ctrl.get_recent_durations(LayerKind.TTS) == pytest.approx([200.0], rel=0.01)
+        assert ctrl.get_recent_durations(LayerKind.OUTPUT) == pytest.approx([100.0], rel=0.01)
+
+    def test_missing_timeline_marker_is_skipped(
+        self, populated_registry, config
+    ) -> None:
+        """timeline に欠落があれば該当レイヤだけスキップ。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        t0 = monotonic()
+        record = {
+            "seq_id": 1,
+            "timeline": {
+                "t_asr_start": t0,
+                "t_asr": t0 + 0.1,
+                # 他のマーカーは欠落
+            },
+        }
+        ctrl._handle_utterance_done(record)
+        assert len(ctrl.get_recent_durations(LayerKind.ASR)) == 1
+        # 他レイヤは何も積まれていない
+        assert ctrl.get_recent_durations(LayerKind.VAD) == []
+        assert ctrl.get_recent_durations(LayerKind.TRANSLATOR) == []
+
+    def test_ring_buffer_keeps_only_recent(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        for i in range(8):
+            t0 = monotonic()
+            record = {
+                "seq_id": i,
+                "timeline": {
+                    "t_asr_start": t0,
+                    "t_asr": t0 + (i + 1) * 0.01,  # 10, 20, 30,...ms
+                },
+            }
+            ctrl._handle_utterance_done(record)
+        durations = ctrl.get_recent_durations(LayerKind.ASR)
+        assert len(durations) == 5
+        # 直近 5 件(seq_id=3..7、つまり 40..80 ms 近辺)
+        assert durations[0] == pytest.approx(40.0, rel=0.01)
+        assert durations[-1] == pytest.approx(80.0, rel=0.01)
+
+
+class TestPhaseBAutoLoad:
+    """Phase B: auto_load 既定 OFF / 起動時は対象レイヤだけロード。"""
+
+    def test_default_no_auto_load_layers(self, populated_registry, config) -> None:
+        """既定では全 backend が auto_load=False なので対象レイヤは無い。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_auto_load_layers() == []
+
+    def test_auto_load_layer_picked_up(self, populated_registry, config) -> None:
+        """選択中 backend の auto_load を True にするとそのレイヤが対象になる。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("backends_config", "faster_whisper", "auto_load", True)
+        layers = ctrl.get_auto_load_layers()
+        assert layers == [LayerKind.ASR]
+
+    def test_auto_load_layer_changes_with_backend_switch(
+        self, populated_registry, config
+    ) -> None:
+        """別 backend に切り替えると、その backend の auto_load 設定が効く。"""
+        populated_registry.register(LayerKind.ASR, "alt_asr", _fake_simple_backend)
+        ctrl = AppController(registry=populated_registry, config=config)
+        # faster_whisper.auto_load = True
+        ctrl.set_setting("backends_config", "faster_whisper", "auto_load", True)
+        assert ctrl.get_auto_load_layers() == [LayerKind.ASR]
+        # alt_asr へ切替(設定では auto_load 未指定 = False)
+        ctrl.set_setting("backends", "asr", "alt_asr")
+        assert ctrl.get_auto_load_layers() == []
+
+    def test_load_auto_load_layers_async_no_target_fires_on_done(
+        self, populated_registry, config
+    ) -> None:
+        """対象レイヤなしなら即時 on_done。"""
+        import threading
+        ctrl = AppController(registry=populated_registry, config=config)
+        done = threading.Event()
+        ctrl.load_auto_load_layers_async(on_done=lambda: done.set())
+        assert done.wait(timeout=1.0)
+        # 何もロードされていない
+        assert not ctrl._backends
+
+    def test_load_auto_load_layers_async_loads_only_target(
+        self, populated_registry, config
+    ) -> None:
+        """auto_load=True のレイヤだけがロードされる。"""
+        import threading
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("backends_config", "faster_whisper", "auto_load", True)
+        ctrl.set_setting("backends_config", "nllb200", "auto_load", True)
+
+        done = threading.Event()
+        ctrl.load_auto_load_layers_async(on_done=lambda: done.set())
+        assert done.wait(timeout=3.0)
+        assert LayerKind.ASR in ctrl._backends
+        assert LayerKind.TRANSLATOR in ctrl._backends
+        # 他は未ロード
+        for layer in (LayerKind.CAPTURE, LayerKind.VAD, LayerKind.TTS, LayerKind.OUTPUT):
+            assert layer not in ctrl._backends
+
+
+class TestPhaseBStartButtonAlwaysOk:
+    """Phase B: 開始ボタンは未ロード状態でも押せて、押下時に必要分だけロード→起動する。"""
+
+    def test_start_async_loads_then_starts_when_nothing_preloaded(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        """事前 load_models 無しでも、Start でロード→起動が一気通貫で完了する。"""
+        import threading
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        assert not ctrl.is_loaded  # 未ロード
+
+        started = threading.Event()
+        ctrl.start_pipeline_async(on_started=lambda: started.set())
+        try:
+            assert started.wait(timeout=3.0)
+            assert ctrl.is_running
+            assert ctrl.is_loaded  # 起動時に裏でロードされた
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_start_sync_loads_when_not_preloaded(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        ctrl.start_pipeline()  # 同期版でも自動ロードされること
+        try:
+            assert ctrl.is_running
+            assert ctrl.is_loaded
+        finally:
+            ctrl.stop_pipeline()
+
+
+class TestPhaseBMissingCredentialsGate:
+    """Phase B: MISSING_CREDENTIALS のレイヤがあると start を gate する(Phase D で本格化)。"""
+
+    def test_start_raises_when_layer_missing_credentials(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        ctrl.load_model_layer(LayerKind.ASR)
+        # backend の get_status を MISSING_CREDENTIALS に差し替え
+        ctrl._backends[LayerKind.ASR].get_status = MagicMock(
+            return_value=ModelStatus.MISSING_CREDENTIALS
+        )
+
+        with pytest.raises(FatalError, match="認証情報"):
+            ctrl.start_pipeline()
+
+
+class TestPhaseBConfigDefaults:
+    """Phase B: backends_config.<backend>.auto_load と consents.* の既定値。"""
+
+    def test_auto_load_defaults_false_for_all_backends(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        for backend_name in (
+            "soundcard", "sapi", "silero", "faster_whisper", "nllb200"
+        ):
+            assert (
+                ctrl.get_setting("backends_config", backend_name, "auto_load") is False
+            ), f"{backend_name}: auto_load の既定が False でない"
+
+    def test_consents_suppress_dialogs_default_false(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_setting("consents", "suppress_dialogs") is False
+
+
+class TestPhaseC3StatusSummary:
+    """Phase C3: 全レイヤ状態 + 最近のエラー集約テキスト。"""
+
+    def test_summary_lists_all_layers(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        summary = ctrl.get_status_summary()
+        for layer in LayerKind:
+            assert f"[{layer.value}]" in summary, f"{layer} 未含有"
+            # backend 名(faster_whisper 等)も載っている
+        assert "faster_whisper" in summary
+        assert "Loaded" in summary
+
+    def test_summary_includes_backend_name(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        summary = ctrl.get_status_summary()
+        # 未ロードでも backend 名 + INIT は出る
+        assert "faster_whisper" in summary
+        assert "Init" in summary
+
+    def test_summary_groups_errors(self, populated_registry, config) -> None:
+        """各 backend の get_recent_errors を集約して末尾に追記する。"""
+        from voice_translator.common.types import ErrorRecord
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        # 該当 backend にエラー履歴を仕込む
+        fake_record = ErrorRecord(
+            timestamp=1000.0,
+            message="model not found",
+            exc_type="OSError",
+            context="model load",
+        )
+        ctrl._backends[LayerKind.ASR].get_recent_errors = MagicMock(
+            return_value=[fake_record]
+        )
+        summary = ctrl.get_status_summary()
+        assert "最近のエラー:" in summary
+        assert "OSError" in summary
+        assert "model not found" in summary
+        assert "[asr]" in summary
+
+    def test_summary_omits_error_section_when_no_errors(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        summary = ctrl.get_status_summary()
+        # backend のエラー履歴が空のとき「最近のエラー:」セクションは出ない
+        assert "最近のエラー:" not in summary
+
+    def test_summary_shows_downloading_size_hint(
+        self, populated_registry, config
+    ) -> None:
+        """DOWNLOADING 状態のレイヤがあると、list_recommended_models 先頭の size を併記。"""
+        from voice_translator.common.types import ModelInfo
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        ctrl._backends[LayerKind.ASR].get_status = MagicMock(
+            return_value=ModelStatus.DOWNLOADING
+        )
+        ctrl._backends[LayerKind.ASR].list_recommended_models = MagicMock(
+            return_value=[
+                ModelInfo(name="small", display_name="Small", download_size_gb=0.46),
+            ]
+        )
+        summary = ctrl.get_status_summary()
+        # ~0.5GB 表示が含まれる(0.46GB → "~0.5GB" の表示)
+        assert "0.5GB" in summary
+
+    def test_summary_handles_missing_list_recommended_models(
+        self, populated_registry, config
+    ) -> None:
+        """list_recommended_models が例外でも summary は落ちない(縮退)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_models()
+        ctrl._backends[LayerKind.ASR].get_status = MagicMock(
+            return_value=ModelStatus.DOWNLOADING
+        )
+        ctrl._backends[LayerKind.ASR].list_recommended_models = MagicMock(
+            side_effect=RuntimeError("boom")
+        )
+        # 例外で落ちないこと
+        summary = ctrl.get_status_summary()
+        assert "Downloading" in summary
+
+
+class TestReloadModelLayer:
+    """`reload_model_layer(layer)` の挙動。既ロード時は evict → 作り直し。"""
+
+    def test_reload_creates_new_instance(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        old = ctrl._backends[LayerKind.ASR]
+        ctrl.reload_model_layer(LayerKind.ASR)
+        new = ctrl._backends[LayerKind.ASR]
+        assert new is not old, "reload で新インスタンスに置き換わるはず"
+
+    def test_reload_on_unloaded_layer_just_loads(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert LayerKind.ASR not in ctrl._backends
+        ctrl.reload_model_layer(LayerKind.ASR)
+        assert LayerKind.ASR in ctrl._backends
+
+    def test_reload_unsubscribes_old_subscription(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        old_sub = ctrl._backend_subscriptions[LayerKind.ASR]
+        ctrl.reload_model_layer(LayerKind.ASR)
+        assert old_sub.unsubscribe.called
+
+
+class TestPhaseDCredentials:
+    """Phase D: AppController が CredentialsStore を仲介する。"""
+
+    def test_set_then_get_credential(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        from tests._fixtures import InMemoryKeyring
+        import keyring
+        keyring.set_keyring(InMemoryKeyring())
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_credential("openai", "api_key", "sk-test")
+        assert ctrl.get_credential("openai", "api_key") == "sk-test"
+        assert ctrl.has_credential("openai", "api_key") is True
+
+    def test_has_credential_returns_false_when_unset(
+        self, populated_registry, config
+    ) -> None:
+        from tests._fixtures import InMemoryKeyring
+        import keyring
+        keyring.set_keyring(InMemoryKeyring())
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.has_credential("openai", "api_key") is False
+
+    def test_delete_credential(
+        self, populated_registry, config
+    ) -> None:
+        from tests._fixtures import InMemoryKeyring
+        import keyring
+        keyring.set_keyring(InMemoryKeyring())
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_credential("a", "k", "v")
+        ctrl.delete_credential("a", "k")
+        assert ctrl.get_credential("a", "k") is None
+
+    def test_use_local_file_flag_respected(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """ConfigStore の credentials.use_local_file=True で file モードになる。"""
+        # cwd を tmp_path に移して local.secrets が散らからないように
+        monkeypatch.chdir(tmp_path)
+        config.set("credentials", "use_local_file", True)
+        ctrl = AppController(registry=populated_registry, config=config)
+        # 初回 set で内部 store が生成される
+        ctrl.set_credential("deepl", "api_key", "v")
+        assert ctrl._credentials is not None
+        assert ctrl._credentials.mode == "file"
+
+
+class TestPhaseE2CredentialFlow:
+    """Phase E-2: 認証情報フローのパッキング(spec / verify / verified / gate)。"""
+
+    def _setup_with_cloud_backend(self, populated_registry, config, tmp_path, monkeypatch):
+        """`requires_credentials=True` の cloud backend をテストレジストリに足したセット。"""
+        from voice_translator.common.types import (
+            BackendCapabilities, CredentialField, VerifyResult,
+        )
+        from tests._fixtures import InMemoryKeyring
+        import keyring
+        keyring.set_keyring(InMemoryKeyring())
+        monkeypatch.chdir(tmp_path)
+
+        verify_calls: list[dict] = []
+
+        class _FakeCloudAsr:
+            ok_value = True
+            ok_message = "OK"
+
+            @classmethod
+            def credential_spec(cls):
+                return [
+                    CredentialField("api_key", "API Key", secret=True),
+                ]
+
+            @classmethod
+            def verify_credentials(cls, values):
+                verify_calls.append(dict(values))
+                return VerifyResult(ok=cls.ok_value, message=cls.ok_message)
+
+        populated_registry.register(
+            LayerKind.ASR, "fake_cloud_asr",
+            lambda: _fake_simple_backend(),
+            backend_cls=_FakeCloudAsr,
+            capabilities=BackendCapabilities(
+                is_cloud=True, requires_credentials=True,
+                service_name="FakeCloud ASR",
+            ),
+        )
+        ctrl = AppController(registry=populated_registry, config=config)
+        return ctrl, _FakeCloudAsr, verify_calls
+
+    def test_get_credential_spec_returns_fields(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        spec = ctrl.get_credential_spec(LayerKind.ASR, "fake_cloud_asr")
+        assert len(spec) == 1
+        assert spec[0].key_name == "api_key"
+
+    def test_get_credential_spec_empty_for_unregistered_class(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        # 既存 mock backend は backend_cls 未登録
+        assert ctrl.get_credential_spec(LayerKind.ASR, "faster_whisper") == []
+
+    def test_verify_success_saves_credential_and_sets_verified(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, cls, calls = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        result = ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-test"}
+        )
+        assert result.ok is True
+        # キーが保存され
+        assert ctrl.get_credential("fake_cloud_asr", "api_key") == "sk-test"
+        # verified=True が立つ
+        assert ctrl.is_backend_verified("fake_cloud_asr") is True
+        # verify_credentials に渡された値も確認
+        assert calls == [{"api_key": "sk-test"}]
+
+    def test_verify_failure_does_not_save_or_set_verified(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, cls, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        cls.ok_value = False
+        cls.ok_message = "auth failed"
+        result = ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "bad"}
+        )
+        assert result.ok is False
+        assert result.message == "auth failed"
+        assert ctrl.get_credential("fake_cloud_asr", "api_key") is None
+        assert ctrl.is_backend_verified("fake_cloud_asr") is False
+
+    def test_set_credential_resets_verified(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """キーが変わったら再認証必須(verified を False に戻す)。"""
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "v1"}
+        )
+        assert ctrl.is_backend_verified("fake_cloud_asr") is True
+        # 直接 set_credential するとリセット
+        ctrl.set_credential("fake_cloud_asr", "api_key", "v2")
+        assert ctrl.is_backend_verified("fake_cloud_asr") is False
+
+    def test_invalidate_verification_clears_flag(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """サブスク切れ等で動作中に呼ばれる。"""
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "v1"}
+        )
+        assert ctrl.is_backend_verified("fake_cloud_asr") is True
+        ctrl.invalidate_verification("fake_cloud_asr")
+        assert ctrl.is_backend_verified("fake_cloud_asr") is False
+
+    def test_start_gate_blocks_when_credentials_missing(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        with pytest.raises(FatalError, match="認証情報未入力"):
+            ctrl.start_pipeline()
+
+    def test_start_gate_blocks_when_not_verified(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        # キーは保存したが verify を通していない
+        ctrl.set_credential("fake_cloud_asr", "api_key", "sk-stored-but-unverified")
+        with pytest.raises(FatalError, match="未検証"):
+            ctrl.start_pipeline()
+
+    def test_start_gate_passes_after_verification(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        # キーを入力 → verify → 保存(verified=True)
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "good"}
+        )
+        # ここで gate を通過、start_pipeline がエラーなく走る(stop は必ず)
+        ctrl.start_pipeline()
+        try:
+            assert ctrl.is_running
+        finally:
+            ctrl.stop_pipeline()
+
+
+class TestPhaseDCapabilityHint:
+    """Phase D: BackendRegistry の capability hint。"""
+
+    def test_capability_hint_registered_returns_it(self) -> None:
+        from voice_translator.common.backend_registry import BackendRegistry
+        from voice_translator.common.types import BackendCapabilities
+
+        reg = BackendRegistry()
+        cap = BackendCapabilities(
+            is_cloud=True, requires_credentials=True,
+            service_name="OpenAI", terms_url="https://example.com/terms",
+        )
+        reg.register(LayerKind.ASR, "cloud_asr", lambda: None, capabilities=cap)
+        got = reg.get_capability_hint(LayerKind.ASR, "cloud_asr")
+        assert got is not None
+        assert got.is_cloud is True
+        assert got.service_name == "OpenAI"
+
+    def test_capability_hint_returns_none_when_not_registered(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        # 既存の mock backend は capability hint 無し
+        hint = ctrl.get_backend_capability_hint(LayerKind.ASR, "faster_whisper")
+        assert hint is None
 
 
 class TestHandleDropped:

@@ -41,17 +41,19 @@
 ```
 docs/
 ├── manual.md                  … アプリケーションの使い方
-└── design/
-    ├── Architecture.html      … アーキテクチャ(レイヤ図・役割・I/F)
-    ├── Class.md               … クラス/モジュール詳細(Architectureから参照)
-    ├── UserSinario.md         … ユーザシナリオ
-    ├── TaskList.md            … 実装タスクリスト(全体)
-    ├── pendList.md            … 保留・暫定決定リスト
-    ├── <branch-name>/         … 進行中の作業ブランチごとのフォルダ
-    │   ├── Plan.md            … 当該ブランチで行う作業計画(or .html)
-    │   └── testPlan.md        … 当該ブランチのテスト項目
-    └── done/                  … master へマージ済みのブランチフォルダの集約先
-        └── <branch-name>/     … マージ完了時にここへ移動する
+├── design/
+│   ├── Architecture.html      … アーキテクチャ(レイヤ図・役割・I/F)
+│   ├── Class.md               … クラス/モジュール詳細(Architectureから参照)
+│   ├── UserSinario.md         … ユーザシナリオ
+│   ├── TaskList.md            … 実装タスクリスト(全体)
+│   ├── pendList.md            … 保留・暫定決定リスト
+│   ├── <branch-name>/         … 進行中の作業ブランチごとのフォルダ
+│   │   ├── Plan.md            … 当該ブランチで行う作業計画(or .html)
+│   │   └── testPlan.md        … 当該ブランチのテスト項目
+│   └── done/                  … master へマージ済みのブランチフォルダの集約先
+│       └── <branch-name>/     … マージ完了時にここへ移動する
+└── troubleAndShooting/        … 顕在化した問題と恒久対応のレポート集
+    └── YYYY-MM-DD_<topic>.md  … 1 件 1 ファイル(日付プレフィックス + 短い topic)
 ```
 
 **運用**: ブランチが master にマージされたら、対応する `docs/design/<branch-name>/`
@@ -114,6 +116,30 @@ py -m uv run pytest -m "" --override-ini="addopts=" # 全部(addopts を強制 o
 - middle: 「実コンポーネントだが MVP 環境内で完結し、数秒以内に終わる」
 - large: 「外部リソース(モデル DL 済み前提 / 実デバイス)を必要とし、数十秒以上かかる」
 - large は **CI に組み込まない**(リモート CI 不要方針)。手元での明示確認のみ。
+
+### 認証情報が用意された backend は実ロード large テストを追加(2026-05-30 追加方針)
+small テストはモック前提のため「**依存パッケージのバージョン乖離**」を検出できない。
+pyannote.audio 3.x が torch 2.6 で動かなくなった事例
+(`docs/troubleAndShooting/2026-05-30_pyannote_audio_4x_migration.md`)を機に、
+**`local.secrets` に token が用意された backend は、実物の DL + 動作確認まで含めた
+large テストを必ず追加**する。
+
+- ファイル名: `tests/test_<backend>_large.py`
+- skip 条件: `local.secrets` に token 無し / 追加 extras 未インストール(`pyannote.audio` 等)
+- 内容: `verify_credentials` 成功 → backend 構築 → `process()`(or 対応 API)で 1 件以上の
+  結果が返るまで確認
+- 実装者は手元で 1 回必ず通してから commit する(CI には載らないので作業者の責任)
+- 既存例: `tests/test_pyannote_vad_large.py`
+
+### テスト変更時の方針
+コード変更でテストを直す時は下記を守る:
+- **後方互換は気にしない**: 古い挙動の保護より、設計意図に沿った新挙動を優先
+- **安易にテストを消さない**: テストが守っていた契約を温存。シナリオに沿って書き換える
+  - **挙動が「変わる」場合**: テストを修正(新挙動を検証する形に書き換え)
+  - **挙動が「消える」場合**: テストも消すが、コミットメッセージで「なぜ消したか」を明示
+  - ❌ 単に通らなくなったから消す / 設計意図を確認せずに消す
+- **初期化手順の追加はテスト側で吸収**: 新規 config キーが必要になったら fixture に仕込む
+- **1 件 5 秒超の test は報告**: small は <1s、middle でも 5s 以下が目安。これを超える test は設計を疑って一度報告する
 
 # 実装について
 - `/src` 以下にコード・プロジェクトを配置する。
