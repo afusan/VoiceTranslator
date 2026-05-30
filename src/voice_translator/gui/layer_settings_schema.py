@@ -190,7 +190,12 @@ def _auto_load_toggle(backend_name: str) -> "SettingField":
 
 
 def _load_model_button(layer: LayerKind) -> "SettingField":
-    """指定レイヤを手動(再)ロードするボタン(Phase C2 / モデル切替時の反映に使う)。"""
+    """指定レイヤを手動(再)ロードするボタン(Phase C2 / モデル切替時の反映に使う)。
+
+    NOTE (2026-05-30): UI からは外した。代わりに ControlPanel の「↻ ロード」ボタンが
+    全レイヤを一括 load する(設定変更時は dialog 保存時に自動 evict されるので、
+    そのあと中央ボタン押下で反映される)。本ヘルパは将来の再導入に備えて残置。
+    """
     return SettingField(
         keys=(),
         label="モデルを(再)ロード",
@@ -248,7 +253,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("soundcard"),
-        _load_model_button(LayerKind.CAPTURE),
     ],
     LayerKind.VAD: [
         # Silero(MVP)
@@ -299,7 +303,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             help_text="voice probability の閾値。下げると speech が拾いやすくなる。",
         ),
         _auto_load_toggle("pvcobra"),
-        _load_model_button(LayerKind.VAD),
     ],
     LayerKind.ASR: [
         SettingField(
@@ -326,7 +329,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("faster_whisper"),
-        _load_model_button(LayerKind.ASR),
     ],
     LayerKind.TRANSLATOR: [
         SettingField(
@@ -337,7 +339,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             help_text="翻訳済みテキストを TTS に渡すキューの上限件数。",
         ),
         _auto_load_toggle("nllb200"),
-        _load_model_button(LayerKind.TRANSLATOR),
     ],
     LayerKind.TTS: [
         SettingField(
@@ -352,7 +353,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("sapi"),
-        _load_model_button(LayerKind.TTS),
     ],
     LayerKind.OUTPUT: [
         SettingField(
@@ -367,7 +367,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("soundcard"),
-        _load_model_button(LayerKind.OUTPUT),
     ],
 }
 

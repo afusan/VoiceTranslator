@@ -1085,6 +1085,59 @@ class TestReloadModelLayer:
         assert old_sub.unsubscribe.called
 
 
+class TestEvictModelLayer:
+    """`evict_model_layer(layer)` の挙動。破棄するが再 load はしない(2026-05-30)。"""
+
+    def test_evict_removes_backend_from_cache(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        assert LayerKind.ASR in ctrl._backends
+        ctrl.evict_model_layer(LayerKind.ASR)
+        assert LayerKind.ASR not in ctrl._backends
+
+    def test_evict_does_not_reload(self, populated_registry, config) -> None:
+        """evict 後は backend が存在しない(reload とは違って自動で作り直さない)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        ctrl.evict_model_layer(LayerKind.ASR)
+        # 再 load されないこと
+        assert LayerKind.ASR not in ctrl._backends
+        # status は INIT に戻る
+        assert ctrl.get_model_status(LayerKind.ASR).value == "Init"
+
+    def test_evict_unsubscribes_old_subscription(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        old_sub = ctrl._backend_subscriptions[LayerKind.ASR]
+        ctrl.evict_model_layer(LayerKind.ASR)
+        assert old_sub.unsubscribe.called
+
+    def test_evict_unloaded_layer_is_noop(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert LayerKind.ASR not in ctrl._backends
+        # 未ロードのレイヤを evict しても例外にならない
+        ctrl.evict_model_layer(LayerKind.ASR)
+        assert LayerKind.ASR not in ctrl._backends
+
+    def test_evict_then_load_models_recreates(
+        self, populated_registry, config
+    ) -> None:
+        """evict → load_models で新インスタンスが入る(設定変更の反映フロー)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.load_model_layer(LayerKind.ASR)
+        old = ctrl._backends[LayerKind.ASR]
+        ctrl.evict_model_layer(LayerKind.ASR)
+        ctrl.load_models()  # 中央ロードボタン相当の経路
+        new = ctrl._backends[LayerKind.ASR]
+        assert new is not old
+
+
 class TestPhaseDCredentials:
     """Phase D: AppController が CredentialsStore を仲介する。"""
 

@@ -533,6 +533,17 @@ class AppController:
             self._emit_status(layer, ModelStatus.INIT)
             self._load_layer_locked(layer)
 
+    def evict_model_layer(self, layer: LayerKind) -> None:
+        """単一レイヤの backend を破棄するが、再 load はしない(2026-05-30)。
+
+        用途: LayerSettingsDialog の保存時に backends_config / 認証情報が変わったときに
+        呼ぶ。再 load はユーザが ControlPanel の中央「↻ ロード」を押したタイミングで
+        `load_models_async` 経由で行われる(冪等 load なので未ロードのレイヤだけ作る)。
+        """
+        with self._load_lock:
+            self._evict_backend_locked(layer)
+            self._emit_status(layer, ModelStatus.INIT)
+
     def _load_layer_locked(self, layer: LayerKind) -> None:
         """`load_lock` を保持中の caller から呼ぶ実体。
 

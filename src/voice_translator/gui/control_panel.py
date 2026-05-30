@@ -70,10 +70,20 @@ class ControlPanel(ctk.CTkFrame):
             row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4)
         )
 
+        # 開始/停止ボタン と 中央ロードボタン を 1 つの frame にまとめて col 0 に配置
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=1, column=0, padx=10, pady=8, sticky="w")
         self._toggle_btn = ctk.CTkButton(
-            self, text="▶ 開始", width=140, command=self._on_toggle
+            btn_frame, text="▶ 開始", width=140, command=self._on_toggle
         )
-        self._toggle_btn.grid(row=1, column=0, padx=10, pady=8, sticky="w")
+        self._toggle_btn.pack(side="left")
+        # 中央ロードボタン: 全レイヤを冪等に load(既ロードはスキップ)。設定変更後の
+        # 反映は dialog 保存時に該当 backend が evict されるため、このボタン押下で
+        # 再 load される。動作中 / ロード中は disable。
+        self._load_btn = ctk.CTkButton(
+            btn_frame, text="↻ ロード", width=100, command=self._on_load_clicked,
+        )
+        self._load_btn.pack(side="left", padx=(8, 0))
 
         self._status_label = ctk.CTkLabel(self, text="停止中")
         self._status_label.grid(row=1, column=1, padx=10, pady=8, sticky="w")
@@ -136,6 +146,49 @@ class ControlPanel(ctk.CTkFrame):
             self._do_start_async()
         # loading / stopping 中は何もしない(ボタン disable で防御)
 
+    def _on_load_clicked(self) -> None:
+        """中央ロードボタン: 全レイヤを冪等に load する。
+
+        - 動作中 (`is_running`) / 既にロード中 (`is_loading`) は disable 経由で
+          ここには来ない想定だが、二重押し対策で sync 確認も入れる。
+        - `load_models_async` は既ロードのレイヤはスキップする冪等版。
+        - 結果は各レイヤの `ModelStatus` 更新 → `_on_status_from_thread` 経由で
+          UI に伝播するので、別途完了通知ロジックは不要。
+        """
+        if self._state != "idle":
+            return
+        if self._controller.is_running or self._controller.is_loading:
+            return
+        try:
+            self._controller.load_models_async(
+                on_done=self._on_load_done,
+                on_failed=self._on_load_failed,
+            )
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger("voice_translator").exception(
+                "_on_load_clicked: load_models_async 起動失敗"
+            )
+            self._show_failure_banner(f"ロード起動失敗: {e}")
+            return
+        # 押下中は一時的に disable + 「ロード中…」表示。完了で _sync_ready_state が戻す。
+        self._load_btn.configure(text="ロード中…", state="disabled")
+
+    def _on_load_done(self) -> None:
+        # Loader スレッドからの完了通知。tk へは after で marshalling。
+        self.after(0, self._apply_load_done)
+
+    def _on_load_failed(self, message: str) -> None:
+        self.after(0, lambda: self._apply_load_failed(message))
+
+    def _apply_load_done(self) -> None:
+        self._sync_ready_state()  # ボタン text/state を最新状態に合わせ直す
+
+    def _apply_load_failed(self, message: str) -> None:
+        self._show_failure_banner(f"ロード失敗: {message}")
+        self._append_history(f"[ロード失敗] {message}")
+        self._sync_ready_state()
+
     def _do_start_async(self) -> None:
         """処理スレッドを起動する(モデルは事前ロード済みの前提)。
 
@@ -168,11 +221,19 @@ class ControlPanel(ctk.CTkFrame):
             return
         self._state = "starting"
         self._toggle_btn.configure(text="開始中…", state="disabled")
+        try:
+            self._load_btn.configure(text="(起動中)", state="disabled")
+        except AttributeError:
+            pass
         self._status_label.configure(text="開始中…")
 
     def _do_stop(self) -> None:
         self._state = "stopping"
         self._toggle_btn.configure(text="停止中…", state="disabled")
+        try:
+            self._load_btn.configure(text="(停止中)", state="disabled")
+        except AttributeError:
+            pass
         self._status_label.configure(text="停止中…")
         try:
             self._controller.stop_pipeline()
@@ -195,6 +256,11 @@ class ControlPanel(ctk.CTkFrame):
         self._state = "running"
         self._toggle_btn.configure(text="■ 停止", state="normal")
         self._status_label.configure(text="動作中")
+        # 動作中はモデル差し替え禁止 → 中央ロードボタンも disable
+        try:
+            self._load_btn.configure(text="(動作中)", state="disabled")
+        except AttributeError:
+            pass
 
     def _apply_loader_failed(self, message: str) -> None:
         # 非同期ロード失敗も同期失敗と同じ 4 段フィードバックで通知
@@ -341,8 +407,33 @@ class ControlPanel(ctk.CTkFrame):
             else:
                 self._status_label.configure(text="停止中")
 
+        # 中央ロードボタンの state を再計算
+        self._sync_load_button_state(statuses)
         # アクセラレータ表示は ready_state とは独立に常に更新する
         self._refresh_accel_label()
+
+    def _sync_load_button_state(self, statuses: list[ModelStatus]) -> None:
+        """中央「↻ ロード」ボタンの enable/disable と text を再設定する。
+
+        - 全レイヤが LOADED → ボタン文言「ロード済み」+ disable
+        - LOADING 中のレイヤあり → ボタン文言「ロード中…」+ disable
+        - MISSING_CREDENTIALS あり → 「↻ ロード」だが押せる(押すと部分 load 試行 →
+          MISSING のレイヤだけ skip、それ以外はロード)。disable はしない。
+        - それ以外(INIT / NOT_DOWNLOADED が混在) → 「↻ ロード」+ normal
+        """
+        try:
+            btn = self._load_btn
+        except AttributeError:
+            return  # 初期化前に呼ばれた場合(理論上ありえない)
+        if not statuses:
+            btn.configure(text="↻ ロード", state="normal")
+            return
+        if all(s == ModelStatus.LOADED for s in statuses):
+            btn.configure(text="ロード済み", state="disabled")
+        elif any(s == ModelStatus.LOADING for s in statuses):
+            btn.configure(text="ロード中…", state="disabled")
+        else:
+            btn.configure(text="↻ ロード", state="normal")
 
     def _refresh_accel_label(self) -> None:
         """各レイヤの device を集約して「演算: GPU(cuda) / CPU のみ / 不明」を表示する。
