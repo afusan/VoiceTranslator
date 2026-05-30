@@ -246,7 +246,54 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
         _load_model_button(LayerKind.CAPTURE),
     ],
     LayerKind.VAD: [
+        # Silero(MVP)
         _auto_load_toggle("silero"),
+        # Phase F1 で追加した代替 VAD 群。`applies_when_backend` でその backend が選ばれているときだけ
+        # フィールドが出る。重複が見えるのは設計上の意図(ダイアログは選択中 backend で
+        # フィルタする)。
+        SettingField(
+            keys=("backends_config", "webrtcvad", "aggressiveness"),
+            label="WebRTC: 感度 (0=低 〜 3=高)",
+            field_type="int",
+            default=2,
+            applies_when_backend="webrtcvad",
+            help_text="3 にすると speech 判定が厳しくなり、ノイズで誤検知しにくい代わりに発話の取りこぼし増。",
+        ),
+        SettingField(
+            keys=("backends_config", "webrtcvad", "frame_ms"),
+            label="WebRTC: フレーム長 (ms)",
+            field_type="int",
+            default=30,
+            applies_when_backend="webrtcvad",
+            help_text="10 / 20 / 30 のいずれか。短いほど反応速いが CPU 負荷↑。",
+        ),
+        _auto_load_toggle("webrtcvad"),
+        SettingField(
+            keys=("backends_config", "pyannote", "model_id"),
+            label="pyannote: モデル ID",
+            field_type="str",
+            default="pyannote/voice-activity-detection",
+            applies_when_backend="pyannote",
+            help_text="HuggingFace のモデル ID。標準は voice-activity-detection。",
+        ),
+        SettingField(
+            keys=("backends_config", "pyannote", "device"),
+            label="pyannote: device",
+            field_type="str",
+            default="auto",
+            applies_when_backend="pyannote",
+            help_text="cpu / cuda / mps / auto。CPU でも動くが激重。",
+        ),
+        _auto_load_toggle("pyannote"),
+        SettingField(
+            keys=("backends_config", "pvcobra", "threshold"),
+            label="Cobra: 閾値 (0〜1)",
+            field_type="float",
+            default=0.5,
+            applies_when_backend="pvcobra",
+            help_text="voice probability の閾値。下げると speech が拾いやすくなる。",
+        ),
+        _auto_load_toggle("pvcobra"),
         _load_model_button(LayerKind.VAD),
         _recent_durations_label(LayerKind.VAD),
     ],

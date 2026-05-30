@@ -340,6 +340,25 @@ class AppController:
                 continue
             self.set_credential(backend_name, key_name, value)
         self._config.set("credentials", "verified", backend_name, True)
+
+        # Phase F1: 該当レイヤで本 backend が選択中かつ MISSING_CREDENTIALS 状態に
+        # 詰まっていれば、新しい認証情報で生成し直す。これをしないと、認証が通っても
+        # backend インスタンスは「credentials 無しで作られた MISSING_CREDENTIALS」状態の
+        # ままなので、Start ボタンの gate(`_check_missing_credentials_gate`)が落ち続ける。
+        current_choice = self._config.get("backends", layer.value, default=None)
+        if current_choice == backend_name:
+            existing = self._backends.get(layer)
+            if existing is not None:
+                try:
+                    status = existing.get_status()
+                except Exception:  # noqa: BLE001
+                    status = None
+                if status == ModelStatus.MISSING_CREDENTIALS:
+                    try:
+                        self.reload_model_layer(layer)
+                    except Exception:  # noqa: BLE001
+                        # ロード失敗は backend の record_error / emit_status 側で扱う
+                        pass
         return result
 
     def invalidate_verification(self, backend_name: str) -> None:

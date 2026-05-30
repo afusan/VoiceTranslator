@@ -42,6 +42,15 @@ cuda = [
     "torch>=2.2",
     "torchaudio>=2.2",
 ]
+# Phase F1: 追加の VAD バックエンド(webrtcvad / pyannote.audio / pvcobra)。
+# 配布方針 "CPU を floor、誰でも持っていける" を維持するため、既定の `uv sync --extra cpu`
+# では入れない。利用したいユーザだけ `uv sync --extra cpu --extra vad-extra` で追加する。
+# 各 backend は遅延 import を行い、依存未インストール時は FatalError を投げる。
+vad-extra = [
+    "webrtcvad-wheels>=2.0.10",
+    "pyannote.audio>=3.1",
+    "pvcobra>=2.0",
+]
 
 [tool.uv]
 conflicts = [

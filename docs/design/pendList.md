@@ -4,6 +4,49 @@
 
 ---
 
+## [⏳保留 2026-05-30] 追加 VAD backend の依存 optional 化方針
+- **対象**: `pyproject.toml` の `[project.optional-dependencies].vad-extra` に入れた
+  `webrtcvad-wheels` / `pyannote.audio` / `pvcobra`。`uv sync --extra vad-extra` で初めて入る。
+- **背景**: Phase F1 で 3 つ VAD backend を追加した際、配布方針「CPU を floor / 誰でも持っていける」
+  を維持するため、利用者が opt-in しない限り pyannote.audio (transformers/lightning/scipy/sklearn 等
+  を引っ張る) を入れないことにした。代わりに、未インストール環境では各 backend が
+  `FatalError("`uv sync --extra vad-extra` で追加してください")` を投げる前提。
+- **見送り判断ポイント**:
+  - webrtcvad だけは小さい(< 100KB)ので**必須側に上げる**選択もある(Silero フォールバック
+    としての位置付け)。pyannote / pvcobra と束ねた現状は揃ってる代わりに、ユーザが「軽い
+    フォールバックだけ欲しい」場面で過剰になる。
+  - もしフォールバックを自動でやるなら必須側、選択肢として並べるだけならいまの opt-in で十分。
+- **着手トリガ**: dogfooding で「silero が動かない環境」を実際に踏んだ、または既定 VAD を
+  入れ替えたくなった時。
+
+---
+
+## [⏳保留 2026-05-30] フレーム判定系 VAD の共通ロジック抽出
+- **対象**: `WebRtcVadBackend` と `PvcobraVadBackend` の `_handle_frame` / `_enter_speech` /
+  `_exit_speech` / `_maybe_force_emit` がほぼ同形。
+- **背景**: 両 backend とも「フレーム → speech/silence(or 確率)」を返す型で、ヒステリシス
+  (連続 N で start / 連続 M で end)+ pad + max_speech_sec は同じ。
+- **対応の見送り理由**: 今回は責務分離を優先。共通化を急ぐと N/M の調整パラメータが
+  backend ごとに違ってくる懸念があり、3 backend 揃ったあとで再検討する方が安全。
+- **着手案**: `FrameThresholdSegmenter(min_speech_frames, min_silence_frames, pad_frames,
+  max_speech_samples)` を作って `feed(frame, is_speech) -> list[VadSegment]` を切り出す。
+  Silero は frame 粒度ではないので対象外。
+
+---
+
+## [⏳保留 2026-05-30] pyannote.audio の verify_credentials を実モデル不要にする
+- **対象**: `PyannoteVadBackend.verify_credentials` は HuggingFace の `/api/whoami-v2` 叩きで
+  token の生死だけ確認。実モデルへのアクセス権(`pyannote/voice-activity-detection` の
+  利用同意済みか)はチェックしていない。
+- **背景**: 完全な verify はモデルを実際にダウンロード&ロードする必要があり、verify が分単位
+  かかってしまう。短時間で済ませる方を優先した。
+- **未確認のリスク**: token は生きてるがモデル利用同意未済 → `Pipeline.from_pretrained` 時に
+  401/403 で落ちる。`backend.__init__` で `FatalError` を投げる扱いになっている。
+- **対応案(着手時)**: `https://huggingface.co/api/models/<model_id>` を GET して
+  `gated` / `disabled` / 同意状態を見る軽い check に置き換える。
+
+---
+
 ## [⏳保留 2026-05-29] cloud backend 認証テスト(skip スケルトンの埋め込み)
 - **対象**: `tests/test_credential_flow.py` Part 2(6 クラス計 28 件、すべて `@pytest.mark.skip`)
 - **背景**: Phase E-2 で認証フローを汎用化(spec → verify → 保存 → Start gate)した際、

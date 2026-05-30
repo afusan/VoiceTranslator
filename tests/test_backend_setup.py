@@ -24,6 +24,9 @@ def patched_backend_setup(monkeypatch):
     for path in [
         ("voice_translator.capture.soundcard_backend", "SoundcardCaptureBackend"),
         ("voice_translator.vad.silero_backend", "SileroVadBackend"),
+        ("voice_translator.vad.webrtc_backend", "WebRtcVadBackend"),
+        ("voice_translator.vad.pyannote_backend", "PyannoteVadBackend"),
+        ("voice_translator.vad.pvcobra_backend", "PvcobraVadBackend"),
         ("voice_translator.asr.faster_whisper_backend", "FasterWhisperAsrBackend"),
         ("voice_translator.translator.nllb200_backend", "Nllb200TranslatorBackend"),
         ("voice_translator.tts.sapi_backend", "SapiTtsBackend"),
@@ -50,7 +53,10 @@ class TestRegisterDefaultBackends:
         register_default_backends(registry)
 
         assert registry.list_names(LayerKind.CAPTURE) == ["soundcard"]
-        assert registry.list_names(LayerKind.VAD) == ["silero"]
+        # Phase F1 で VAD に webrtcvad / pyannote / pvcobra を追加。silero が先頭(MVP)。
+        assert registry.list_names(LayerKind.VAD) == [
+            "silero", "webrtcvad", "pyannote", "pvcobra",
+        ]
         assert registry.list_names(LayerKind.ASR) == ["faster_whisper"]
         assert registry.list_names(LayerKind.TRANSLATOR) == ["nllb200"]
         assert registry.list_names(LayerKind.TTS) == ["sapi"]
@@ -268,3 +274,138 @@ class TestSileroVadConfigIntegration:
             speech_pad_ms=100,
             max_speech_sec=8.0,
         )
+
+
+# ============================================================
+# Phase F1: 新 VAD backend 登録の検証
+# ============================================================
+class TestWebRtcVadRegistration:
+    """WebRTC VAD backend が登録され、config からパラメータが渡ることを検証。"""
+
+    def test_default_params(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        registry.create(LayerKind.VAD, "webrtcvad")
+        patched_backend_setup["WebRtcVadBackend"].assert_called_with(
+            aggressiveness=2,
+            frame_ms=30,
+            min_speech_ms=60,
+            min_silence_ms=500,
+            speech_pad_ms=100,
+            max_speech_sec=8.0,
+        )
+
+    def test_params_from_config(self, patched_backend_setup, tmp_path) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("backends_config", "webrtcvad", "aggressiveness", 3)
+        config.set("backends_config", "webrtcvad", "frame_ms", 20)
+        config.set("backends_config", "webrtcvad", "max_speech_sec", 5.0)
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.VAD, "webrtcvad")
+        patched_backend_setup["WebRtcVadBackend"].assert_called_with(
+            aggressiveness=3,
+            frame_ms=20,
+            min_speech_ms=60,
+            min_silence_ms=500,
+            speech_pad_ms=100,
+            max_speech_sec=5.0,
+        )
+
+    def test_capabilities_hint_registered(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        hint = registry.get_capability_hint(LayerKind.VAD, "webrtcvad")
+        # webrtcvad は無認証
+        assert hint is not None
+        assert hint.requires_credentials is False
+
+    def test_backend_class_registered(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        cls = registry.get_backend_class(LayerKind.VAD, "webrtcvad")
+        assert cls is patched_backend_setup["WebRtcVadBackend"]
+
+
+class TestPyannoteVadRegistration:
+    """pyannote.audio backend が登録され、HF token を CredentialsStore から取ることを検証。"""
+
+    def test_default_params(self, patched_backend_setup, tmp_path) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        # credentials.use_local_file を True にして実 keyring を触らない
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("credentials", "use_local_file", True)
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.VAD, "pyannote")
+        call_kwargs = patched_backend_setup["PyannoteVadBackend"].call_args.kwargs
+        # HF token は未保存なので None
+        assert call_kwargs["hf_token"] is None
+        assert call_kwargs["model_id"] == "pyannote/voice-activity-detection"
+        assert call_kwargs["device"] == "auto"
+
+    def test_capabilities_requires_credentials(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        hint = registry.get_capability_hint(LayerKind.VAD, "pyannote")
+        assert hint is not None
+        assert hint.requires_credentials is True
+        assert "pyannote" in (hint.service_name or "").lower()
+
+
+class TestPvcobraRegistration:
+    """Picovoice Cobra backend が登録され、access_key を CredentialsStore から取ることを検証。"""
+
+    def test_default_params(self, patched_backend_setup, tmp_path) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("credentials", "use_local_file", True)
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.VAD, "pvcobra")
+        call_kwargs = patched_backend_setup["PvcobraVadBackend"].call_args.kwargs
+        assert call_kwargs["access_key"] is None
+        assert call_kwargs["threshold"] == 0.5
+        assert call_kwargs["max_speech_sec"] == 8.0
+
+    def test_capabilities_requires_credentials(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        hint = registry.get_capability_hint(LayerKind.VAD, "pvcobra")
+        assert hint is not None
+        assert hint.requires_credentials is True
+        assert hint.is_cloud is False  # ローカル動作
+
+    def test_threshold_read_from_config(self, patched_backend_setup, tmp_path) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        config.set("credentials", "use_local_file", True)
+        config.set("backends_config", "pvcobra", "threshold", 0.7)
+
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+        registry.create(LayerKind.VAD, "pvcobra")
+        call_kwargs = patched_backend_setup["PvcobraVadBackend"].call_args.kwargs
+        assert call_kwargs["threshold"] == 0.7
