@@ -122,6 +122,12 @@ class ControlPanel(ctk.CTkFrame):
                 on_failed=self._on_loader_failed,
             )
         except Exception as e:  # noqa: BLE001
+            # history widget に表示するだけでなく app.log にも残す。
+            # ここで握ると app.log に何も出ないので「ボタン押しても無反応」に見える。
+            import logging
+            logging.getLogger("voice_translator").exception(
+                "_do_start_async で start_pipeline_async が同期失敗"
+            )
             self._append_history(f"[起動失敗] {e}")
             return
         self._state = "starting"

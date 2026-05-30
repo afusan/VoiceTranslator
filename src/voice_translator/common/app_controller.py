@@ -713,7 +713,11 @@ class AppController:
         problems: list[str] = []
         for layer in LayerKind:
             # 1) backend 側が明示的に MISSING_CREDENTIALS を立てている場合
-            if self.get_model_status(layer) == ModelStatus.MISSING_CREDENTIALS:
+            status = self.get_model_status(layer)
+            if status == ModelStatus.MISSING_CREDENTIALS:
+                self._logger.info(
+                    "gate: %s = MISSING_CREDENTIALS でブロック", layer.value
+                )
                 problems.append(f"{layer.value} (認証情報未設定)")
                 continue
 
@@ -730,6 +734,10 @@ class AppController:
                 f.label for f in spec if not self.has_credential(backend_name, f.key_name)
             ]
             if missing_keys:
+                self._logger.info(
+                    "gate: %s (%s) 認証情報未入力でブロック: %s",
+                    layer.value, backend_name, missing_keys,
+                )
                 problems.append(
                     f"{layer.value} ({backend_name}: 認証情報未入力 — {', '.join(missing_keys)})"
                 )
@@ -737,11 +745,16 @@ class AppController:
 
             # 3) 検証(verified)を通過しているか
             if not self.is_backend_verified(backend_name):
+                self._logger.info(
+                    "gate: %s (%s) 未検証でブロック", layer.value, backend_name
+                )
                 problems.append(f"{layer.value} ({backend_name}: 未検証)")
 
         if not problems:
+            self._logger.info("gate: 全レイヤ PASS")
             return
         from .errors import FatalError
+        self._logger.warning("gate: ブロック problems=%s", problems)
         raise FatalError(
             "認証が完了していないレイヤがあります: "
             + " / ".join(problems)
@@ -773,8 +786,19 @@ class AppController:
         self._logger.info("start_pipeline_async: 同期検証(デバイス + 認証 gate)")
         input_id = self._config.get("devices", "input")
         output_id = self._config.get("devices", "output")
-        DeviceValidator.validate(input_id, output_id)
-        self._check_missing_credentials_gate()
+        try:
+            DeviceValidator.validate(input_id, output_id)
+        except Exception:
+            self._logger.exception(
+                "start_pipeline_async: DeviceValidator が失敗 input=%s output=%s",
+                input_id, output_id,
+            )
+            raise
+        try:
+            self._check_missing_credentials_gate()
+        except Exception:
+            self._logger.exception("start_pipeline_async: 認証 gate が失敗")
+            raise
 
         on_started = on_started or (lambda: None)
         on_failed = on_failed or (lambda _msg: None)
