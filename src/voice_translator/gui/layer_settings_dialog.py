@@ -81,6 +81,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         self._status_subscription: "Subscription | None" = None
 
         self.title(f"{_LAYER_DISPLAY.get(layer, layer.value)} の設定")
+        # 初期 geometry は仮値。_build_widgets 後に必要高を計算して上書きする(2026-05-30)
         self.geometry("560x520")
         self.transient(parent)  # 親の前面に固定
         try:
@@ -91,6 +92,25 @@ class LayerSettingsDialog(ctk.CTkToplevel):
 
         self._build_widgets()
         self._subscribe_status()
+        # 動的サイズ調整: フィールド数で 保存/キャンセル が画面外に押し出される問題を解消。
+        # 上限 800 で画面端を超えないようにし、超える場合は将来 ScrollableFrame 化が必要
+        # (pendList 候補)。下限 420 はフィールド少数の backend でもボタンが見える保証。
+        self._adjust_geometry_to_content()
+
+    def _adjust_geometry_to_content(self) -> None:
+        """ビルド後の必要高さに合わせて geometry を再設定する。
+
+        widget 構築直後だと layout が未確定なので `update_idletasks` を挟む。
+        高さは下限 420 / 上限 800 にクランプして、極端な値を避ける。
+        失敗(widget 破棄済み等)は黙殺し、フォールバック geometry を残す。
+        """
+        try:
+            self.update_idletasks()
+            reqh = int(self.winfo_reqheight())
+            target_h = min(max(reqh + 20, 420), 800)
+            self.geometry(f"560x{target_h}")
+        except Exception:  # noqa: BLE001
+            pass
 
     # ----------------------------------------------------------
     def _build_widgets(self) -> None:

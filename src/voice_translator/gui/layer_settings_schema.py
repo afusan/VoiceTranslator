@@ -216,7 +216,12 @@ def _faster_whisper_model_options(
 
 
 def _recent_durations_label(layer: LayerKind) -> "SettingField":
-    """直近処理時間平均の表示ラベル(Phase C2)。layer の状態変化に反応して更新される。"""
+    """直近処理時間平均の表示ラベル(Phase C2)。layer の状態変化に反応して更新される。
+
+    NOTE (2026-05-30): UI からは外した(ダイアログ内では確認しにくく、
+    `logs/processtime.csv` でより精緻に追えるため)。`reactive_to` 機構と
+    `recent_durations_text` ヘルパは将来別 UI で再利用できるよう残置。
+    """
     return SettingField(
         keys=("_info", layer.value, "recent_durations"),  # 表示用のダミーキー
         label="直近処理時間",
@@ -295,7 +300,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
         ),
         _auto_load_toggle("pvcobra"),
         _load_model_button(LayerKind.VAD),
-        _recent_durations_label(LayerKind.VAD),
     ],
     LayerKind.ASR: [
         SettingField(
@@ -323,7 +327,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
         ),
         _auto_load_toggle("faster_whisper"),
         _load_model_button(LayerKind.ASR),
-        _recent_durations_label(LayerKind.ASR),
     ],
     LayerKind.TRANSLATOR: [
         SettingField(
@@ -335,7 +338,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
         ),
         _auto_load_toggle("nllb200"),
         _load_model_button(LayerKind.TRANSLATOR),
-        _recent_durations_label(LayerKind.TRANSLATOR),
     ],
     LayerKind.TTS: [
         SettingField(
@@ -351,7 +353,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
         ),
         _auto_load_toggle("sapi"),
         _load_model_button(LayerKind.TTS),
-        _recent_durations_label(LayerKind.TTS),
     ],
     LayerKind.OUTPUT: [
         SettingField(
@@ -367,7 +368,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
         ),
         _auto_load_toggle("soundcard"),
         _load_model_button(LayerKind.OUTPUT),
-        _recent_durations_label(LayerKind.OUTPUT),
     ],
 }
 
