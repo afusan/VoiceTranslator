@@ -108,7 +108,7 @@ def register_default_backends(
     py_model_id = _read_str(
         config,
         ("backends_config", "pyannote", "model_id"),
-        default="pyannote/voice-activity-detection",
+        default="pyannote/segmentation-3.0",
     )
     py_device = _read_str(
         config, ("backends_config", "pyannote", "device"), default="auto"
@@ -139,8 +139,8 @@ def register_default_backends(
             requires_gpu=False,
             requires_credentials=True,
             service_name="pyannote.audio (HuggingFace)",
-            terms_url="https://huggingface.co/pyannote/voice-activity-detection",
-            notes="pyannote.audio VAD pipeline。HF token + 利用同意が必要。",
+            terms_url="https://huggingface.co/pyannote/segmentation-3.0",
+            notes="pyannote.audio 4.x VAD pipeline。segmentation-3.0 を基底に構築。HF token + 利用同意が必要。",
         ),
     )
 

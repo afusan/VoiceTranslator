@@ -17,28 +17,45 @@ from voice_translator.common.types import ModelStatus
 
 @pytest.fixture()
 def fake_pyannote(monkeypatch):
-    """`pyannote.audio` モジュールを差し替える。
+    """`pyannote.audio` モジュールを差し替える(4.x 新 API: Model + VoiceActivityDetection)。
 
-    `Pipeline.from_pretrained()` が返すモック pipeline は、デフォルトで空のアノテーションを返す。
+    `Model.from_pretrained()` でモック segmentation モデル、`VoiceActivityDetection` で
+    モック pipeline を返す。pipeline(...) 呼び出しはデフォルトで空 timeline を返す。
     """
     fake_module = MagicMock(name="pyannote.audio")
+    fake_pipelines_module = MagicMock(name="pyannote.audio.pipelines")
+
+    fake_segmentation_model = MagicMock(name="segmentation_model")
+    fake_module.Model = MagicMock()
+    fake_module.Model.from_pretrained = MagicMock(return_value=fake_segmentation_model)
+
     fake_pipeline_inst = MagicMock(name="pipeline_inst")
     fake_pipeline_inst.to = MagicMock(return_value=fake_pipeline_inst)
+    fake_pipeline_inst.instantiate = MagicMock()
 
-    # 空 timeline を返す annotation を既定にする
     fake_annotation = MagicMock(name="annotation")
     fake_timeline = MagicMock(name="timeline")
     fake_timeline.support = MagicMock(return_value=iter([]))
     fake_annotation.get_timeline = MagicMock(return_value=fake_timeline)
     fake_pipeline_inst.return_value = fake_annotation
 
-    fake_module.Pipeline = MagicMock()
-    fake_module.Pipeline.from_pretrained = MagicMock(return_value=fake_pipeline_inst)
+    fake_pipelines_module.VoiceActivityDetection = MagicMock(
+        return_value=fake_pipeline_inst
+    )
 
-    # `pyannote.audio` という名前は dotted、両方の階層に置く
     monkeypatch.setitem(sys.modules, "pyannote", MagicMock())
     monkeypatch.setitem(sys.modules, "pyannote.audio", fake_module)
-    return fake_module, fake_pipeline_inst, fake_annotation, fake_timeline
+    monkeypatch.setitem(
+        sys.modules, "pyannote.audio.pipelines", fake_pipelines_module
+    )
+    return (
+        fake_module,
+        fake_pipelines_module,
+        fake_pipeline_inst,
+        fake_segmentation_model,
+        fake_annotation,
+        fake_timeline,
+    )
 
 
 @pytest.fixture()
@@ -61,33 +78,54 @@ def fake_torch(monkeypatch):
 # ============================================================
 class TestInitialization:
     def test_missing_token_sets_missing_credentials_status(self, fake_pyannote) -> None:
-        """HF token 未入力 → MISSING_CREDENTIALS で pipeline ロードはしない。"""
+        """HF token 未入力 → MISSING_CREDENTIALS でモデルロードはしない。"""
         from voice_translator.vad.pyannote_backend import PyannoteVadBackend
 
         backend = PyannoteVadBackend(hf_token=None)
         assert backend.get_status() == ModelStatus.MISSING_CREDENTIALS
-        fake_module, _, _, _ = fake_pyannote
-        fake_module.Pipeline.from_pretrained.assert_not_called()
+        fake_module, fake_pipelines, _, _, _, _ = fake_pyannote
+        fake_module.Model.from_pretrained.assert_not_called()
+        fake_pipelines.VoiceActivityDetection.assert_not_called()
 
-    def test_with_token_calls_from_pretrained(
+    def test_with_token_loads_segmentation_then_constructs_pipeline(
         self, fake_pyannote, fake_torch
     ) -> None:
+        """4.x 新 API: Model.from_pretrained(..., token=...) → VoiceActivityDetection.instantiate(...)。"""
         from voice_translator.vad.pyannote_backend import PyannoteVadBackend
 
-        fake_module, _, _, _ = fake_pyannote
+        fake_module, fake_pipelines, fake_pipe, fake_seg, _, _ = fake_pyannote
         backend = PyannoteVadBackend(hf_token="hf_xxx")
         assert backend.get_status() == ModelStatus.LOADED
-        fake_module.Pipeline.from_pretrained.assert_called_once()
-        # token が渡されている
-        kwargs = fake_module.Pipeline.from_pretrained.call_args.kwargs
-        assert kwargs.get("use_auth_token") == "hf_xxx"
+        # Model.from_pretrained が segmentation-3.0(既定)+ token= で呼ばれる
+        fake_module.Model.from_pretrained.assert_called_once()
+        args, kwargs = fake_module.Model.from_pretrained.call_args
+        assert args[0] == "pyannote/segmentation-3.0"
+        assert kwargs.get("token") == "hf_xxx"
+        # VoiceActivityDetection に segmentation Model が渡される
+        fake_pipelines.VoiceActivityDetection.assert_called_once()
+        seg_passed = fake_pipelines.VoiceActivityDetection.call_args.kwargs.get(
+            "segmentation"
+        )
+        assert seg_passed is fake_seg
+        # instantiate でハイパラ注入される
+        fake_pipe.instantiate.assert_called_once()
+        params = fake_pipe.instantiate.call_args.args[0]
+        assert "min_duration_on" in params and "min_duration_off" in params
 
-    def test_pipeline_load_failure_raises(self, fake_pyannote, fake_torch) -> None:
+    def test_segmentation_load_failure_raises(self, fake_pyannote, fake_torch) -> None:
         from voice_translator.vad.pyannote_backend import PyannoteVadBackend
 
-        fake_module, _, _, _ = fake_pyannote
-        fake_module.Pipeline.from_pretrained.side_effect = RuntimeError("gated")
-        with pytest.raises(FatalError, match="pyannote pipeline"):
+        fake_module, _, _, _, _, _ = fake_pyannote
+        fake_module.Model.from_pretrained.side_effect = RuntimeError("gated")
+        with pytest.raises(FatalError, match="segmentation"):
+            PyannoteVadBackend(hf_token="hf_xxx")
+
+    def test_pipeline_instantiate_failure_raises(self, fake_pyannote, fake_torch) -> None:
+        from voice_translator.vad.pyannote_backend import PyannoteVadBackend
+
+        _, _, fake_pipe, _, _, _ = fake_pyannote
+        fake_pipe.instantiate.side_effect = RuntimeError("bad params")
+        with pytest.raises(FatalError, match="pipeline"):
             PyannoteVadBackend(hf_token="hf_xxx")
 
 
@@ -155,7 +193,7 @@ class TestProcess:
         """batch_window_sec 分だけ溜まらないと pipeline が呼ばれない。"""
         from voice_translator.vad.pyannote_backend import PyannoteVadBackend
 
-        _, fake_pipeline_inst, _, _ = fake_pyannote
+        _, _, fake_pipeline_inst, _, _, _ = fake_pyannote
         backend = PyannoteVadBackend(hf_token="hf_xxx", batch_window_sec=2.0)
         # 1 秒ぶんだけ投入(2 秒未満)
         backend.process(np.zeros(16000, dtype=np.float32))

@@ -3,6 +3,14 @@
 役割: pyannote/voice-activity-detection モデルを HuggingFace から取得し、
 バッファに溜めた音声を pipeline に流して segments を切り出す。ニューラルベースで
 精度は高いが重く、HuggingFace token と利用同意が必要(gated model)。
+
+実装方針(2026-05-30 再構築):
+- pyannote.audio **4.x** の公式 API(`Pipeline.from_pretrained(..., token=...)`)を
+  そのまま使う。旧 3.x 系の `use_auth_token` / torch 2.6 weights_only / speechbrain
+  LazyModule への 対症コード(monkey-patch / shim 等)は入れない方針。
+  4.x が現代の huggingface_hub / torch 2.8 / checkpoint 形式に追従済みなので、
+  公式 API だけで動く設計が成立する。
+- 3.x へのフォールバックは入れない(配布方針上 `vad-extra` 利用時は 4.x を前提とする)。
 """
 
 from __future__ import annotations
@@ -40,26 +48,31 @@ class PyannoteVadBackend(VadBackend):
         self,
         *,
         hf_token: str | None = None,
-        model_id: str = "pyannote/voice-activity-detection",
+        model_id: str = "pyannote/segmentation-3.0",
         device: str = "auto",
         min_speech_ms: int = 200,
-        min_silence_ms: int = 500,  # noqa: ARG002 - pipeline 既定に委譲(将来の調整余地)
+        min_silence_ms: int = 500,
         max_speech_sec: float = 8.0,
         batch_window_sec: float = _BATCH_WINDOW_SEC,
     ) -> None:
         """
         Args:
             hf_token: HuggingFace Token(モデル DL に必要)。None なら MISSING_CREDENTIALS 状態。
-            model_id: pyannote モデル ID。
+            model_id: pyannote の **segmentation** モデル ID(VAD pipeline の基底に使う)。
+                既定 `pyannote/segmentation-3.0`。
+                `pyannote/voice-activity-detection` pipeline は HF 上の config が古い
+                `@revision` 構文を含んでおり pyannote 4.x で動かないため不採用。
             device: "cpu" / "cuda" / "auto"。auto は torch.cuda.is_available() で振り分け。
-            min_speech_ms: pipeline 結果の active segment 最小長(これ未満は破棄)。
-            min_silence_ms: 将来の調整余地(pipeline 既定に委ねる)。
+            min_speech_ms: VAD pipeline の `min_duration_on`(これ未満の speech は捨てる)。
+            min_silence_ms: VAD pipeline の `min_duration_off`(これ未満の無音は跨ぐ)。
             max_speech_sec: 1 発話の最大長。これを超えたら強制区切り。
             batch_window_sec: pipeline に渡すバッファ長(秒)。
         """
         super().__init__()
         self._model_id = model_id
         self._device_pref = device
+        self._min_speech_ms = min_speech_ms
+        self._min_silence_ms = min_silence_ms
         self._min_speech_samples: int = int(min_speech_ms * INTERNAL_SAMPLE_RATE / 1000)
         self._max_speech_samples: int = (
             int(max_speech_sec * INTERNAL_SAMPLE_RATE)
@@ -83,7 +96,8 @@ class PyannoteVadBackend(VadBackend):
 
         self._set_status(ModelStatus.LOADING)
         try:
-            from pyannote.audio import Pipeline  # type: ignore
+            from pyannote.audio import Model  # type: ignore
+            from pyannote.audio.pipelines import VoiceActivityDetection  # type: ignore
         except Exception as e:  # noqa: BLE001
             self.record_error(e, context="pyannote.audio import")
             raise FatalError(
@@ -91,12 +105,42 @@ class PyannoteVadBackend(VadBackend):
                 cause=e,
             ) from e
 
+        # 設計判断:
+        # `Pipeline.from_pretrained("pyannote/voice-activity-detection")` を直接使う案は
+        # 不採用。HF 上の pipeline config が古い `pyannote/segmentation@2022.07` という
+        # `@revision` 構文を含み、pyannote 4.x が拒否する(`Revisions must be passed with
+        # `revision` keyword argument.`)。
+        # 代わりに pyannote 4.x の正規手順である「segmentation モデルを Model.from_pretrained
+        # で取得 → VoiceActivityDetection(segmentation=model) で pipeline を組み立て」を採る。
+        # これは pyannote 4.x の README / migration guide で推奨されているパターンで、
+        # band-aid ではなく公式の組み立て方。
         try:
-            pipeline = Pipeline.from_pretrained(model_id, use_auth_token=hf_token)
+            segmentation_model = Model.from_pretrained(model_id, token=hf_token)
         except Exception as e:  # noqa: BLE001
-            self.record_error(e, context="pyannote pipeline load")
+            self.record_error(e, context="pyannote model load")
             raise FatalError(
-                f"pyannote pipeline のロードに失敗(HF token / model 同意を確認): {e}",
+                f"pyannote segmentation モデルのロードに失敗(HF token / "
+                f"`{model_id}` の利用同意を確認): {e}",
+                cause=e,
+            ) from e
+        if segmentation_model is None:
+            # 4.x で `Model.from_pretrained` が None を返すケースは想定しないが防御線として残す
+            raise FatalError(
+                f"pyannote segmentation モデル `{model_id}` の取得結果が None でした。"
+            )
+
+        try:
+            pipeline = VoiceActivityDetection(segmentation=segmentation_model)
+            pipeline.instantiate(
+                {
+                    "min_duration_on": max(0.0, min_speech_ms / 1000.0),
+                    "min_duration_off": max(0.0, min_silence_ms / 1000.0),
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            self.record_error(e, context="pyannote pipeline instantiate")
+            raise FatalError(
+                f"pyannote VAD pipeline の構築に失敗: {e}",
                 cause=e,
             ) from e
 
@@ -131,8 +175,8 @@ class PyannoteVadBackend(VadBackend):
                 label="HuggingFace Token",
                 secret=True,
                 help_text=(
-                    "pyannote.audio のモデルは gated。https://hf.co/settings/tokens で発行し、"
-                    "モデルページで利用同意を済ませること。"
+                    "https://hf.co/settings/tokens で発行 → "
+                    "https://hf.co/pyannote/segmentation-3.0 で利用同意を済ませること。"
                 ),
             ),
         ]
@@ -197,8 +241,8 @@ class PyannoteVadBackend(VadBackend):
             requires_gpu=False,  # CPU でも動くが激重
             requires_credentials=True,
             service_name="pyannote.audio (HuggingFace)",
-            terms_url="https://huggingface.co/pyannote/voice-activity-detection",
-            notes="pyannote.audio VAD pipeline。HF token + 利用同意が必要。",
+            terms_url="https://huggingface.co/pyannote/segmentation-3.0",
+            notes="pyannote.audio 4.x VAD pipeline。segmentation-3.0 を基底に構築。HF token + 利用同意が必要。",
         )
 
     # ============================================================

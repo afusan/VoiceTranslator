@@ -340,11 +340,17 @@ class TestWebRtcVadRegistration:
 class TestPyannoteVadRegistration:
     """pyannote.audio backend が登録され、HF token を CredentialsStore から取ることを検証。"""
 
-    def test_default_params(self, patched_backend_setup, tmp_path) -> None:
+    def test_default_params(
+        self, patched_backend_setup, tmp_path, monkeypatch
+    ) -> None:
         from voice_translator.common.backend_setup import register_default_backends
         from voice_translator.common.config_store import ConfigStore
 
-        # credentials.use_local_file を True にして実 keyring を触らない
+        # `_get_credential` は CredentialsStore(use_local_file=True) を生成し、
+        # file_path 既定値が **相対パス** `local.secrets` のため cwd に依存する。
+        # プロジェクト root の実 `local.secrets`(ユーザの本物の HF token を持つ)を
+        # 読まないよう、cwd を tmp_path に切り替えて隔離する。
+        monkeypatch.chdir(tmp_path)
         config = ConfigStore(tmp_path / "cfg.yaml")
         config.set("credentials", "use_local_file", True)
 
@@ -354,7 +360,10 @@ class TestPyannoteVadRegistration:
         call_kwargs = patched_backend_setup["PyannoteVadBackend"].call_args.kwargs
         # HF token は未保存なので None
         assert call_kwargs["hf_token"] is None
-        assert call_kwargs["model_id"] == "pyannote/voice-activity-detection"
+        # 既定モデルは segmentation-3.0(pyannote 4.x の標準パターン)。
+        # voice-activity-detection pipeline は HF 上の config が古い @revision 構文を含み
+        # 4.x で動かないため使わない。
+        assert call_kwargs["model_id"] == "pyannote/segmentation-3.0"
         assert call_kwargs["device"] == "auto"
 
     def test_capabilities_requires_credentials(self, patched_backend_setup) -> None:
@@ -371,10 +380,14 @@ class TestPyannoteVadRegistration:
 class TestPvcobraRegistration:
     """Picovoice Cobra backend が登録され、access_key を CredentialsStore から取ることを検証。"""
 
-    def test_default_params(self, patched_backend_setup, tmp_path) -> None:
+    def test_default_params(
+        self, patched_backend_setup, tmp_path, monkeypatch
+    ) -> None:
         from voice_translator.common.backend_setup import register_default_backends
         from voice_translator.common.config_store import ConfigStore
 
+        # 実 local.secrets を読まないよう cwd 隔離(pyannote 側と同じ)
+        monkeypatch.chdir(tmp_path)
         config = ConfigStore(tmp_path / "cfg.yaml")
         config.set("credentials", "use_local_file", True)
 
@@ -396,10 +409,13 @@ class TestPvcobraRegistration:
         assert hint.requires_credentials is True
         assert hint.is_cloud is False  # ローカル動作
 
-    def test_threshold_read_from_config(self, patched_backend_setup, tmp_path) -> None:
+    def test_threshold_read_from_config(
+        self, patched_backend_setup, tmp_path, monkeypatch
+    ) -> None:
         from voice_translator.common.backend_setup import register_default_backends
         from voice_translator.common.config_store import ConfigStore
 
+        monkeypatch.chdir(tmp_path)
         config = ConfigStore(tmp_path / "cfg.yaml")
         config.set("credentials", "use_local_file", True)
         config.set("backends_config", "pvcobra", "threshold", 0.7)
