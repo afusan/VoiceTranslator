@@ -4,6 +4,27 @@
 
 ---
 
+## [⏳保留 2026-05-29] cloud backend 認証テスト(skip スケルトンの埋め込み)
+- **対象**: `tests/test_credential_flow.py` Part 2(6 クラス計 28 件、すべて `@pytest.mark.skip`)
+- **背景**: Phase E-2 で認証フローを汎用化(spec → verify → 保存 → Start gate)した際、
+  各 cloud backend が満たすべき契約をテスト雛形として先置きしてある。実 backend がまだ
+  存在しないため、現状は `skip` で見える化だけしている状態。
+- **対応の見送り理由**: Phase F で「どの cloud backend を 1 つ目に実装するか」が決まるまで、
+  テストを書いても回せない(実 API key も準備が要る)。実装と同時に埋めるのが効率的。
+- **着手時にやること**:
+  1. 対応する backend クラスを `src/voice_translator/{layer}/{name}_backend.py` に実装
+     (`credential_spec()` + `verify_credentials()` を含む)
+  2. `backend_setup.py` で `backend_cls` + `capabilities` 付きで register
+  3. テストクラスの `@pytest.mark.skip` を外す
+  4. 各 test メソッドの中身を埋める:
+     - 有効/無効/network error/quota 超過 を httpx モック等で再現
+     - 動作中 401 → `invalidate_verification` 連携の確認
+  5. 実 API key を使う large テストは別途 `@pytest.mark.large` で追加(任意)
+- **対象 backend**: OpenAI Whisper API / DeepL / OpenAI TTS / Anthropic Claude /
+  AWS Transcribe / Google Cloud STT(GCP は `file_picker` 型の schema 追加も必要)
+
+---
+
 ## [⏳保留 2026-05-29] UI セクションの折り畳み(設定全体 / ステータス)
 - **要望**: MainWindow 上の SettingsPanel(バックエンド・デバイス・翻訳言語)と
   ControlPanel のステータステキストボックスを、それぞれ畳めるようにしたい。
