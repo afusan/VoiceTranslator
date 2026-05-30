@@ -538,15 +538,29 @@ class AppController:
 
         既ロードならスキップ。LOADING を emit → backend 生成 → subscribe → backend 現状を emit。
         失敗時は NOT_DOWNLOADED を emit して例外を伝播。
+
+        進捗ログ(2026-05-30 追加): どのレイヤが何秒かかったかが分かるように info ログを出す。
+        ロード中に「何も起きていない」ように見えても、実は重いモデルの DL/ロードが進んでいる
+        ケースを切り分けるため。
         """
         if layer in self._backends:
             return
         self._emit_status(layer, ModelStatus.LOADING)
+        from time import monotonic
+
+        t0 = monotonic()
+        self._logger.info("レイヤ %s のロード開始", layer.value)
         try:
             inst = self._create(layer)
         except Exception:
+            elapsed = monotonic() - t0
+            self._logger.error(
+                "レイヤ %s のロード失敗 (%.1fs 経過)", layer.value, elapsed
+            )
             self._emit_status(layer, ModelStatus.NOT_DOWNLOADED)
             raise
+        elapsed = monotonic() - t0
+        self._logger.info("レイヤ %s のロード完了 (%.1fs)", layer.value, elapsed)
         self._backends[layer] = inst
         # backend のその後の状態変化を購読(将来 DOWNLOADING on reload / MISSING_CREDENTIALS 等)
         self._subscribe_backend(layer, inst)
@@ -749,9 +763,14 @@ class AppController:
         - MISSING_CREDENTIALS のレイヤがあれば即時失敗(ロードしても意味がない)。
         """
         if self.is_running or self.is_loading:
+            self._logger.info(
+                "start_pipeline_async: 既に起動中(is_running=%s, is_loading=%s)のため何もしない",
+                self.is_running, self.is_loading,
+            )
             return
 
         # 同期で先に検証(呼び出し側で即時例外を受け取れる)
+        self._logger.info("start_pipeline_async: 同期検証(デバイス + 認証 gate)")
         input_id = self._config.get("devices", "input")
         output_id = self._config.get("devices", "output")
         DeviceValidator.validate(input_id, output_id)
@@ -761,13 +780,16 @@ class AppController:
         on_failed = on_failed or (lambda _msg: None)
 
         def _loader_target() -> None:
+            self._logger.info("start_pipeline_async: ロード/起動シーケンス開始")
             try:
                 self.load_models()  # Phase B: 実質ロードが走る局面が増える
+                self._logger.info("start_pipeline_async: 全レイヤロード完了、coordinator 起動")
                 self._start_coord(input_id, output_id)
             except Exception as exc:  # noqa: BLE001
                 self._logger.exception("Loader 失敗")
                 on_failed(str(exc))
                 return
+            self._logger.info("start_pipeline_async: coordinator 起動完了、動作中")
             on_started()
 
         self._loader_thread = threading.Thread(
