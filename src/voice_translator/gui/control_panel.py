@@ -8,6 +8,12 @@ Phase B 以降のロード方式変更:
 - MISSING_CREDENTIALS のレイヤがあるときだけボタンを disable(ロードしても意味がないため)。
 
 `AppController.start_pipeline_async()` を使い、UIをブロックしない。
+
+UI 改修(2026-05-30):
+- ステータステキストボックスを CollapsibleSection で囲い、見出しクリックで折り畳み可能に。
+  開閉状態は ConfigStore の `ui.collapsed.status_text` に永続化。
+- 起動失敗時、status_label / history widget に加えて NotificationBanner にも出す
+  (バナーが渡されている場合のみ)。3 段フィードバックで「無反応に見える」事故を防止。
 """
 
 from __future__ import annotations
@@ -19,16 +25,26 @@ import customtkinter as ctk
 from voice_translator.common.app_controller import AppController
 from voice_translator.common.types import LayerKind, ModelStatus
 
+from .collapsible_section import CollapsibleSection
+
+
+# ConfigStore のキー: 折り畳み状態の永続化用
+_CFG_COLLAPSED_STATUS = ("ui", "collapsed", "status_text")
+
 
 class ControlPanel(ctk.CTkFrame):
     """動作操作と直近結果を表示するパネル。"""
 
     HISTORY_SIZE = 5
 
-    def __init__(self, master, controller: AppController, settings_panel=None) -> None:
+    def __init__(
+        self, master, controller: AppController,
+        settings_panel=None, banner=None,
+    ) -> None:
         super().__init__(master)
         self._controller = controller
         self._settings_panel = settings_panel  # 共有: SettingsPanel.on_status_change を呼ぶため
+        self._banner = banner                  # NotificationBanner(あれば起動失敗を流す)
         self._state: str = "idle"  # idle / loading / running / stopping
         self._latencies: deque[float] = deque(maxlen=10)
 
@@ -72,13 +88,23 @@ class ControlPanel(ctk.CTkFrame):
         )
 
         # ステータステキストボックス(Phase C3): 全レイヤ状態 + 最近のエラー集約
-        ctk.CTkLabel(self, text="ステータス:").grid(
-            row=3, column=0, sticky="w", padx=10, pady=(6, 0)
+        # CollapsibleSection で囲って、画面を広く使いたい時は畳めるようにする。
+        # 開閉状態は ConfigStore の `ui.collapsed.status_text` に永続化。
+        status_initially_open = not bool(
+            self._controller.get_setting(*_CFG_COLLAPSED_STATUS, default=False)
         )
-        self._status_text = ctk.CTkTextbox(self, height=140, wrap="word")
-        self._status_text.grid(
-            row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=4
+        self._status_section = CollapsibleSection(
+            self, title="ステータス",
+            initially_open=status_initially_open,
+            on_toggle=self._on_status_toggle,
         )
+        self._status_section.grid(
+            row=3, column=0, columnspan=3, rowspan=2, sticky="nsew", padx=10, pady=(6, 4)
+        )
+        self._status_text = ctk.CTkTextbox(
+            self._status_section.body, height=140, wrap="word"
+        )
+        self._status_text.pack(fill="both", expand=True)
         self._status_text.configure(state="disabled")
 
         # 履歴ラベル + クリアボタン(同じ行に配置)
@@ -122,22 +148,23 @@ class ControlPanel(ctk.CTkFrame):
                 on_failed=self._on_loader_failed,
             )
         except Exception as e:  # noqa: BLE001
-            # フィードバックを 3 箇所に出して見落としを防ぐ:
+            # フィードバックを 4 箇所に出して見落としを防ぐ:
             # 1) app.log にスタックトレース付きで残す(原因調査用)
-            # 2) history widget(従来通り)
-            # 3) status_label に短く表示(ユーザの視線が一番行く場所)。
-            #   「ボタン押したが反応無い」状態を作らないため。
+            # 2) NotificationBanner(画面上部、最も目立つ。banner があれば)
+            # 3) status_label に短く表示(ボタン横、視線が行く場所)
+            # 4) history widget(従来通り、後で見返すため)
             import logging
             logging.getLogger("voice_translator").exception(
                 "_do_start_async で start_pipeline_async が同期失敗"
             )
-            self._append_history(f"[起動失敗] {e}")
+            self._show_failure_banner(f"起動失敗: {e}")
             # status_label は ready_state の周期更新で上書きされるので、
             # 短時間でも見えるようここで上書きしておく。
             try:
                 self._status_label.configure(text=f"起動失敗: {e}")
             except Exception:  # noqa: BLE001 - widget 破棄済み等
                 pass
+            self._append_history(f"[起動失敗] {e}")
             return
         self._state = "starting"
         self._toggle_btn.configure(text="開始中…", state="disabled")
@@ -170,12 +197,33 @@ class ControlPanel(ctk.CTkFrame):
         self._status_label.configure(text="動作中")
 
     def _apply_loader_failed(self, message: str) -> None:
+        # 非同期ロード失敗も同期失敗と同じ 4 段フィードバックで通知
+        self._show_failure_banner(f"起動失敗: {message}")
         self._append_history(f"[起動失敗] {message}")
         self._state = "idle"
         # 起動失敗時は現在のレイヤ状態を見て ready 表示を更新
         self._sync_ready_state()
         # ready 表示で "停止中" になった後、起動失敗を伝えるためラベルを上書き
         self._status_label.configure(text="停止中(起動失敗)")
+
+    # ============================================================
+    # 折り畳み + バナー連携
+    # ============================================================
+    def _on_status_toggle(self, is_open: bool) -> None:
+        """ステータスセクションの開閉状態を ConfigStore に永続化。"""
+        try:
+            self._controller.set_setting(*_CFG_COLLAPSED_STATUS, not is_open)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _show_failure_banner(self, message: str) -> None:
+        """起動失敗を NotificationBanner に出す(banner があれば)。"""
+        if self._banner is None:
+            return
+        try:
+            self._banner.show_error(message)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ============================================================
     # Coordinator スレッドからのコールバック
