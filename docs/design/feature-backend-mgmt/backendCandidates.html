@@ -19,6 +19,9 @@
   caption { caption-side: bottom; font-size: 12px; color: #64748b; padding-top: 4px; }
   .legend { font-size: 12px; color: #475569; margin-bottom: 16px; }
   code { background: #f1f5f9; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  .pick { background: #dcfce7 !important; }
+  .pick-mark { color: #15803d; font-weight: bold; font-size: 16px; text-align: center; }
+  .nopick { color: #cbd5e1; text-align: center; }
 </style>
 </head>
 <body>
@@ -29,6 +32,12 @@
   「必要リソース」は概算(GB)で、推論時のピーク。クラウドはネット帯域とレイテンシが事実上の要件。
   「認証」は事前準備の重さ — <code>不要</code> / <code>API key</code> / OAuth 等。
   Phase F でどれを試すかの叩き台として使う。
+</p>
+
+<p class="legend" style="background: #ecfdf5; border-left: 3px solid #16a34a; padding: 8px 12px;">
+  <b>緑背景 + ✓ = 追加予定</b> — VAD/ASR/Translator から 3 つずつ選定(2026-05-29)。
+  選定方針: <b>ローカル/クラウド両方を試せる多様性</b> + <b>認証フロー(Phase E-2)を実機で叩ける品揃え</b> +
+  <b>契約テスト雛形(`test_credential_flow.py`)と整合</b>。
 </p>
 
 <!-- ============================================================ -->
@@ -90,7 +99,7 @@
 <table>
   <thead>
     <tr>
-      <th>名前</th><th>形態</th><th>認証</th><th>必要リソース</th><th>備考</th>
+      <th>名前</th><th>形態</th><th>認証</th><th>必要リソース</th><th>備考</th><th style="width: 60px;">追加</th>
     </tr>
   </thead>
   <tbody>
@@ -100,27 +109,31 @@
       <td class="no-auth">不要</td>
       <td>RAM ~0.3GB / モデル ~7MB</td>
       <td>ONNX。pip パッケージ同梱、DL 不要。CPU で十分速い。日本語/英語実績あり</td>
+      <td class="nopick">—</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>WebRTC VAD</td>
       <td><span class="local">ローカル</span></td>
       <td class="no-auth">不要</td>
       <td>RAM ~0.1GB</td>
-      <td>C 実装。極軽量、ルールベース。長文発話の精度は Silero 劣後</td>
+      <td>C 実装。極軽量、ルールベース。長文発話の精度は Silero 劣後。<b>選定理由</b>: Silero がダメな環境(onnxruntime 不在等)のフォールバックとして、無認証ローカルの最軽量枠</td>
+      <td class="pick-mark">✓</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>pyannote.audio</td>
       <td><span class="local">ローカル</span></td>
       <td class="no-auth">不要(モデル DL)</td>
       <td>RAM ~2GB / VRAM ~1GB</td>
-      <td>Transformer ベース。話者分離と一体運用可。重め</td>
+      <td>Transformer ベース。話者分離と一体運用可。重め。<b>選定理由</b>: 「重いがニューラル」軸でモデルサイズ選択(Phase C の hw_info 適合度)が機能するかの検証材料</td>
+      <td class="pick-mark">✓</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>Picovoice Cobra</td>
       <td><span class="local">ローカル</span></td>
       <td class="auth-key">アクセスキー</td>
       <td>RAM ~0.1GB</td>
-      <td>個人非商用は無料 tier。商用は要ライセンス。極軽量</td>
+      <td>個人非商用は無料 tier。商用は要ライセンス。極軽量。<b>選定理由</b>: 「ローカル動作だが認証が要る」型の検証材料(クラウドとは別パターン)</td>
+      <td class="pick-mark">✓</td>
     </tr>
     <tr>
       <td>energy-based 自作</td>
@@ -128,6 +141,7 @@
       <td class="no-auth">不要</td>
       <td>~0</td>
       <td>RMS しきい値のみ。デバッグ/最終手段。精度低い</td>
+      <td class="nopick">—</td>
     </tr>
   </tbody>
 </table>
@@ -137,7 +151,7 @@
 <table>
   <thead>
     <tr>
-      <th>名前</th><th>形態</th><th>認証</th><th>必要リソース</th><th>備考</th>
+      <th>名前</th><th>形態</th><th>認証</th><th>必要リソース</th><th>備考</th><th style="width: 60px;">追加</th>
     </tr>
   </thead>
   <tbody>
@@ -147,6 +161,7 @@
       <td class="no-auth">不要</td>
       <td>small: RAM 1.5GB / large: RAM 5GB / VRAM 1〜4GB</td>
       <td>CTranslate2 で int8 量子化。CPU でも実用。GPU で数倍速</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>openai-whisper (公式)</td>
@@ -154,6 +169,7 @@
       <td class="no-auth">不要</td>
       <td>RAM 2〜10GB / VRAM 2〜10GB</td>
       <td>PyTorch 直。faster-whisper より遅いが安定。研究/ベースライン向き</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>whisper.cpp</td>
@@ -161,6 +177,7 @@
       <td class="no-auth">不要</td>
       <td>RAM 0.5〜5GB</td>
       <td>C++ 実装。Python 経由は ctypes / バインディング。組み込み向き</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>vosk</td>
@@ -168,20 +185,23 @@
       <td class="no-auth">不要</td>
       <td>RAM 0.5〜2GB / モデル 50MB〜1GB</td>
       <td>Kaldi ベース。超軽量、低スペック PC で動く。精度は Whisper 劣後</td>
+      <td class="nopick">—</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>OpenAI Whisper API</td>
       <td><span class="cloud">クラウド</span></td>
       <td class="auth-key">API key</td>
       <td>~50MB(HTTP client)</td>
-      <td>$0.006/分。25MB/req 制限。レイテンシ実用域。large-v3 相当の精度</td>
+      <td>$0.006/分。25MB/req 制限。レイテンシ実用域。large-v3 相当の精度。<b>選定理由</b>: 認証 1 つの最単純な cloud パターン、Phase F の本命候補。契約テスト雛形あり</td>
+      <td class="pick-mark">✓</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>Deepgram (Nova-3)</td>
       <td><span class="cloud">クラウド</span></td>
       <td class="auth-key">API key</td>
       <td>~50MB</td>
-      <td>$0.0058/分。WebSocket でリアルタイム。低レイテンシが売り</td>
+      <td>$0.0058/分。WebSocket でリアルタイム。低レイテンシが売り。<b>選定理由</b>: ストリーミング ASR の検証材料(同期 transcribe との挙動差を確認)</td>
+      <td class="pick-mark">✓</td>
     </tr>
     <tr>
       <td>AssemblyAI</td>
@@ -189,13 +209,15 @@
       <td class="auth-key">API key</td>
       <td>~50MB</td>
       <td>$0.37〜0.65/時間。話者分離・要約等の API も同居</td>
+      <td class="nopick">—</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>Google Cloud STT</td>
       <td><span class="cloud">クラウド</span></td>
       <td class="auth-key">サービスアカウント JSON</td>
       <td>~100MB(SDK)</td>
-      <td>$0.024/分(標準)。Chirp モデルでマルチ言語強い</td>
+      <td>$0.024/分(標準)。Chirp モデルでマルチ言語強い。<b>選定理由</b>: JSON ファイル形式の認証が要る(`file_picker` schema 型の追加検証込み)。GCP は別カテゴリの認証パターン</td>
+      <td class="pick-mark">✓</td>
     </tr>
     <tr>
       <td>Azure Speech</td>
@@ -203,6 +225,7 @@
       <td class="auth-key">サブスクリプションキー</td>
       <td>~100MB(SDK)</td>
       <td>$1/時間相当。日本リージョン有り。継続発話で安価</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>AWS Transcribe</td>
@@ -210,6 +233,7 @@
       <td class="auth-key">IAM credentials</td>
       <td>~100MB(boto3)</td>
       <td>$1.44/時間(標準)。IAM 設定が重め。ストリーミングあり</td>
+      <td class="nopick">—</td>
     </tr>
   </tbody>
 </table>
@@ -219,7 +243,7 @@
 <table>
   <thead>
     <tr>
-      <th>名前</th><th>形態</th><th>認証</th><th>必要リソース</th><th>備考</th>
+      <th>名前</th><th>形態</th><th>認証</th><th>必要リソース</th><th>備考</th><th style="width: 60px;">追加</th>
     </tr>
   </thead>
   <tbody>
@@ -229,6 +253,7 @@
       <td class="no-auth">不要</td>
       <td>RAM 3GB / VRAM 2GB</td>
       <td>Meta、200 言語、MIT 互換。CPU 動作可、GPU で数倍速</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>NLLB-200 1.3B / 3.3B</td>
@@ -236,6 +261,7 @@
       <td class="no-auth">不要</td>
       <td>RAM 5〜13GB / VRAM 4〜10GB</td>
       <td>同シリーズ大型版。精度↑、速度↓。GPU 推奨</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>OPUS-MT (Helsinki-NLP)</td>
@@ -243,6 +269,7 @@
       <td class="no-auth">不要</td>
       <td>RAM ~1GB(言語ペアごと)</td>
       <td>Marian ベース。言語ペアごとにモデル別。軽量だがペア数だけメモリ要る</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>M2M-100 (418M / 1.2B)</td>
@@ -250,13 +277,15 @@
       <td class="no-auth">不要</td>
       <td>RAM 2〜5GB / VRAM 1〜4GB</td>
       <td>Meta、100 言語。NLLB の前世代</td>
+      <td class="nopick">—</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>DeepL API</td>
       <td><span class="cloud">クラウド</span></td>
       <td class="auth-key">API key</td>
       <td>~50MB</td>
-      <td>無料 500k 文字/月。Pro $5.49〜。日本語の品質はトップ評価</td>
+      <td>無料 500k 文字/月。Pro $5.49〜。日本語の品質はトップ評価。<b>選定理由</b>: 認証 1 つ + 無料 tier で即検証可。NLLB との品質比較が分かりやすい。契約テスト雛形あり</td>
+      <td class="pick-mark">✓</td>
     </tr>
     <tr>
       <td>Google Cloud Translation</td>
@@ -264,20 +293,23 @@
       <td class="auth-key">サービスアカウント JSON</td>
       <td>~100MB</td>
       <td>$20/百万文字。無料 500k 文字/月。安定の老舗</td>
+      <td class="nopick">—</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>OpenAI GPT-4o-mini</td>
       <td><span class="cloud">クラウド</span></td>
       <td class="auth-key">API key</td>
       <td>~50MB</td>
-      <td>$0.15/百万トーク入力。LLM 翻訳は文脈に強いが揺らぎ有り</td>
+      <td>$0.15/百万トーク入力。LLM 翻訳は文脈に強いが揺らぎ有り。<b>選定理由</b>: LLM 翻訳の代表枠。ASR の OpenAI Whisper と API key を共有できる(運用シンプル化の検証)</td>
+      <td class="pick-mark">✓</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>Anthropic Claude (Haiku)</td>
       <td><span class="cloud">クラウド</span></td>
       <td class="auth-key">API key</td>
       <td>~50MB</td>
-      <td>$0.8/百万トークン入力 (4.5 Haiku)。指示追従が安定</td>
+      <td>$0.8/百万トークン入力 (4.5 Haiku)。指示追従が安定。<b>選定理由</b>: LLM 翻訳の比較対象(GPT vs Claude)。翻訳指示プロンプトの作り方を試す材料</td>
+      <td class="pick-mark">✓</td>
     </tr>
     <tr>
       <td>Azure Translator</td>
@@ -285,6 +317,7 @@
       <td class="auth-key">サブスクリプションキー</td>
       <td>~100MB</td>
       <td>$10/百万文字。100 言語以上。F0 無料 tier 2M 文字/月</td>
+      <td class="nopick">—</td>
     </tr>
   </tbody>
 </table>
@@ -426,6 +459,38 @@
   <li><b>TTS で試すなら</b>: OpenAI TTS(認証 1 つ、自然、SAPI からの置換効果が明確)。VOICEVOX はローカル日本語の差し替えとして強い候補。</li>
   <li>cloud backend は <code>BackendRegistry.register(...., capabilities=BackendCapabilities(is_cloud=True, requires_credentials=True, service_name=..., terms_url=...))</code> で申告すれば、Phase D の同意ダイアログ + 認証フィールドが自動的に出る。</li>
 </ul>
+
+<h2>追加予定 backend サマリ(2026-05-29 選定)</h2>
+<table>
+  <thead>
+    <tr><th>レイヤ</th><th>追加候補</th><th>カバーする認証パターン</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>VAD</td>
+      <td>WebRTC VAD / pyannote.audio / Picovoice Cobra</td>
+      <td>無認証ローカル軽量 / 無認証ローカル重量 / ローカル + キー認証</td>
+    </tr>
+    <tr>
+      <td>ASR</td>
+      <td>OpenAI Whisper API / Deepgram / Google Cloud STT</td>
+      <td>クラウド + 単一 API key / クラウド + 単一 API key(WebSocket) / クラウド + JSON ファイル</td>
+    </tr>
+    <tr>
+      <td>Translator</td>
+      <td>DeepL API / OpenAI GPT-4o-mini / Anthropic Claude (Haiku)</td>
+      <td>クラウド + 単一 API key × 3(LLM 翻訳の比較込み)</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="legend">
+  この組み合わせで以下が網羅できます:
+  <br>(1) <b>認証パターン 3 種</b>: 無認証 / 単一 API key / JSON ファイル
+  <br>(2) <b>処理方式 2 種</b>: REST 同期 / WebSocket ストリーミング
+  <br>(3) <b>動作モデル 3 種</b>: ローカル軽量 / ローカル neural / クラウド API
+  <br>→ Phase E-2 の認証フローと Phase E のリトライ機構を実環境で叩く十分な多様性。
+</p>
 
 </body>
 </html>
