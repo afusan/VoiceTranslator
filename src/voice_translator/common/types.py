@@ -137,3 +137,32 @@ class ErrorRecord:
     message: str                # 例外メッセージ
     exc_type: str               # 例外型名(例: "ConnectionError")
     context: str | None = None  # 任意の補足情報(例: "model load" / "transcribe")
+
+
+# ============================================================
+# 認証情報フロー(Phase E-2)
+# ============================================================
+@dataclass(frozen=True)
+class CredentialField:
+    """認証情報の入力欄スペック(backend が `credential_spec()` で宣言する)。
+
+    1 行 = 1 入力欄。`secret=True` ならマスク表示(API key 等)、False なら平文
+    (region コード等)。汎用 `CredentialDialog` がこの spec からフィールドを動的生成する。
+    """
+
+    key_name: str               # 内部 ID(`CredentialsStore` の key 名と直結)
+    label: str                  # UI ラベル(日本語 OK)
+    secret: bool = True         # True=マスク入力 / False=平文表示
+    help_text: str = ""         # 入力欄下のヘルプ(1 行)
+
+
+@dataclass(frozen=True)
+class VerifyResult:
+    """認証情報の疎通確認結果(`backend.verify_credentials()` の戻り値)。
+
+    `ok=True` のときのみ ConfigStore に「verified=True」が永続化される。
+    `message` はユーザが読めるメッセージ(成功時の voice 名表示や、失敗時の原因など)。
+    """
+
+    ok: bool
+    message: str = ""

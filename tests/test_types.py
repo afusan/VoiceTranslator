@@ -10,11 +10,13 @@ from voice_translator.common.types import (
     INTERNAL_SAMPLE_RATE,
     BackendCapabilities,
     CaptureSource,
+    CredentialField,
     ErrorRecord,
     LayerKind,
     ModelInfo,
     ModelStatus,
     OutputDevice,
+    VerifyResult,
 )
 
 
@@ -115,3 +117,29 @@ class TestErrorRecord:
         )
         assert r.message == "boom"
         assert r.context == "load"
+
+
+class TestCredentialField:
+    def test_defaults(self) -> None:
+        f = CredentialField(key_name="api_key", label="API Key")
+        assert f.secret is True
+        assert f.help_text == ""
+
+    def test_plain_field(self) -> None:
+        f = CredentialField(
+            key_name="region", label="Region", secret=False,
+            help_text="AWS リージョン",
+        )
+        assert f.secret is False
+        assert f.help_text == "AWS リージョン"
+
+
+class TestVerifyResult:
+    def test_ok(self) -> None:
+        r = VerifyResult(ok=True, message="OK")
+        assert r.ok is True
+        assert r.message == "OK"
+
+    def test_failure(self) -> None:
+        r = VerifyResult(ok=False, message="401 Unauthorized")
+        assert r.ok is False

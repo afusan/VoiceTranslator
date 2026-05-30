@@ -21,7 +21,7 @@ from collections import deque
 from time import time
 from typing import Callable, Protocol
 
-from .types import ErrorRecord, ModelInfo, ModelStatus
+from .types import CredentialField, ErrorRecord, ModelInfo, ModelStatus, VerifyResult
 
 # 状態変化の購読コールバック型。引数は遷移後の新ステータス。
 StatusListener = Callable[[ModelStatus], None]
@@ -161,3 +161,32 @@ class BackendBase:
         NLLB-200 の各サイズ等)。GUI のドロップダウン項目 + リソース目安表示で参照される。
         """
         return []
+
+    # ============================================================
+    # 認証情報フロー(Phase E-2)
+    # ============================================================
+    @classmethod
+    def credential_spec(cls) -> list[CredentialField]:
+        """この backend が要求する認証情報フィールドを宣言する(GUI 用)。
+
+        既定は空(認証情報不要)。`BackendCapabilities.requires_credentials=True` の
+        backend は必ず空でないリストを返すこと。`CredentialDialog` が動的にフィールドを
+        組み立てるのに使う。
+        """
+        return []
+
+    @classmethod
+    def verify_credentials(cls, values: dict[str, str]) -> VerifyResult:
+        """認証情報の疎通確認(軽量 API call 等)。
+
+        `credential_spec()` の `key_name → 入力値` を受け取り、成功/失敗を返す。
+        既定は「常に OK」(認証情報不要 backend 向けの fallback)。
+
+        実装上の注意:
+        - 通信失敗(network down 等)も `VerifyResult(ok=False, message=...)` で返す(例外は投げない)。
+          ユーザ操作で訂正可能なエラーはすべて非例外で扱う方が UI が綺麗
+        - 401 / 403 等の認証エラー → `ok=False, message="認証情報が正しくありません"`
+        - サブスク/課金切れ → `ok=False, message="サブスクリプションが有効でありません"`
+        - 成功時は `message` に「OpenAI Whisper API: 接続 OK」程度の情報を入れると親切
+        """
+        return VerifyResult(ok=True)

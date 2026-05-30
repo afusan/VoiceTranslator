@@ -54,7 +54,14 @@ from .process_time_logger import ProcessTimeLogger
 from .pipeline import PipelineCoordinator
 from .sequence import SequenceGenerator
 from .stage_dump import NullStageDumpWriter, StageDumpWriter
-from .types import CaptureSource, LayerKind, ModelStatus, OutputDevice
+from .types import (
+    CaptureSource,
+    CredentialField,
+    LayerKind,
+    ModelStatus,
+    OutputDevice,
+    VerifyResult,
+)
 
 # 直近処理時間リングバッファのサイズ(レイヤごと)。
 _RECENT_DURATIONS_MAXLEN = 5
@@ -246,8 +253,13 @@ class AppController:
         return self._credentials_store().get(backend, key)
 
     def set_credential(self, backend: str, key: str, value: str) -> None:
-        """指定 backend / key に認証情報を保存する。空文字は delete と同義。"""
+        """指定 backend / key に認証情報を保存する。空文字は delete と同義。
+
+        Phase E-2: キーが変わったら `verified` フラグを自動で False に戻す
+        (再認証必須にして、古い verified 状態を引きずらない)。
+        """
         self._credentials_store().set(backend, key, value)
+        self._config.set("credentials", "verified", backend, False)
 
     def delete_credential(self, backend: str, key: str) -> None:
         """指定 backend / key の認証情報を削除する。"""
@@ -264,6 +276,81 @@ class AppController:
         ヒントが無ければ None(GUI は「不明だが既定 OFF 扱い」で動かす想定)。
         """
         return self._registry.get_capability_hint(layer, name)
+
+    # ---- Phase E-2: 認証フロー(spec / verify / verified 管理) ----
+    def get_credential_spec(self, layer: LayerKind, name: str) -> list[CredentialField]:
+        """指定 backend の認証情報スペック。
+
+        backend クラスが登録されていればその `credential_spec()` を呼ぶ。
+        登録なし or 例外時は空リスト(GUI は「認証情報なし」として扱う)。
+        """
+        cls = self._registry.get_backend_class(layer, name)
+        if cls is None:
+            return []
+        try:
+            spec = cls.credential_spec()
+        except Exception:  # noqa: BLE001
+            self._logger.exception("credential_spec の呼び出し失敗 backend=%s", name)
+            return []
+        return list(spec)
+
+    def is_backend_verified(self, backend_name: str) -> bool:
+        """指定 backend が認証済みかを返す(ConfigStore で永続化)。
+
+        `set_credential` 後に `verify_and_save_credentials` が成功すると True になる。
+        キー再入力 / `invalidate_verification` で False に戻る。
+        """
+        return bool(
+            self._config.get("credentials", "verified", backend_name, default=False)
+        )
+
+    def verify_and_save_credentials(
+        self,
+        layer: LayerKind,
+        backend_name: str,
+        values: dict[str, str],
+    ) -> VerifyResult:
+        """backend の `verify_credentials` を呼び、成功なら認証情報を保存する。
+
+        1. backend クラスの `verify_credentials(values)` を呼ぶ
+        2. 成功 → 各キーを `CredentialsStore` に保存、`credentials.verified.<backend>=True`
+        3. 失敗 → 何も保存せず `VerifyResult` を返す(message を UI に表示)
+        """
+        cls = self._registry.get_backend_class(layer, backend_name)
+        if cls is None:
+            return VerifyResult(
+                ok=False,
+                message=f"backend クラス未登録: layer={layer.value}, name={backend_name}",
+            )
+        try:
+            result = cls.verify_credentials(values)
+        except Exception as e:  # noqa: BLE001
+            self._logger.exception(
+                "verify_credentials で例外 backend=%s", backend_name
+            )
+            return VerifyResult(ok=False, message=f"検証中に例外: {e}")
+
+        if not result.ok:
+            return result
+
+        # 保存。`set_credential` は内部で verified=False に戻すので、後で True を立て直す。
+        for key_name, value in values.items():
+            if value == "":
+                # 空欄(=未編集)はスキップ。既存値を消さない
+                continue
+            self.set_credential(backend_name, key_name, value)
+        self._config.set("credentials", "verified", backend_name, True)
+        return result
+
+    def invalidate_verification(self, backend_name: str) -> None:
+        """サブスク切れ / API 401 等を観測したとき呼ぶ。`verified=False` に戻す。
+
+        backend 実装の例外ハンドラ から呼ばれて、次回 Start を gate する仕組み。
+        起こり得るケース:
+        - 初回認証時は OK だが、課金 / サブスクが切れた → 401/402 で停止 → invalidate
+        - API key がローテーションされた → 401 で停止 → invalidate
+        """
+        self._config.set("credentials", "verified", backend_name, False)
 
     def _collect_recent_errors(self):
         """全 backend の直近エラーを timestamp 新しい順に並べて返す。
@@ -578,23 +665,54 @@ class AppController:
         self._loader_thread.start()
 
     def _check_missing_credentials_gate(self) -> None:
-        """MISSING_CREDENTIALS のレイヤがあれば即時 FatalError(Phase B / D)。
+        """認証が必要なレイヤで未完了の項目があれば FatalError で start をブロック。
 
-        ロードしても意味がない layer(認証情報不足)で start を押せてしまうのを防ぐ。
-        Phase B では BackendBase 側でこの状態を立てる手段がまだ無いので、実質 no-op。
-        Phase D の credentials 実装で動き始める。
+        Phase B では空骨子だったが、Phase E-2 で `requires_credentials=True` の backend に
+        対する以下のチェックを足した:
+        1. `ModelStatus.MISSING_CREDENTIALS` を backend 側が立てている → blocked
+        2. backend が要求する `credential_spec` のキーが `CredentialsStore` に保存されていない
+           → blocked
+        3. 保存されているが `is_backend_verified=False`(認証未完了 or 失効) → blocked
+
+        ユーザは詳細ダイアログから「認証」ボタン → CredentialDialog で疎通確認 → 保存、で
+        gate を通過できる。
         """
-        missing: list[LayerKind] = []
+        problems: list[str] = []
         for layer in LayerKind:
+            # 1) backend 側が明示的に MISSING_CREDENTIALS を立てている場合
             if self.get_model_status(layer) == ModelStatus.MISSING_CREDENTIALS:
-                missing.append(layer)
-        if not missing:
+                problems.append(f"{layer.value} (認証情報未設定)")
+                continue
+
+            backend_name = self._config.get("backends", layer.value, default=None)
+            if not backend_name:
+                continue
+            hint = self.get_backend_capability_hint(layer, backend_name)
+            if hint is None or not hint.requires_credentials:
+                continue
+
+            # 2) スペックのキーが揃っているか
+            spec = self.get_credential_spec(layer, backend_name)
+            missing_keys = [
+                f.label for f in spec if not self.has_credential(backend_name, f.key_name)
+            ]
+            if missing_keys:
+                problems.append(
+                    f"{layer.value} ({backend_name}: 認証情報未入力 — {', '.join(missing_keys)})"
+                )
+                continue
+
+            # 3) 検証(verified)を通過しているか
+            if not self.is_backend_verified(backend_name):
+                problems.append(f"{layer.value} ({backend_name}: 未検証)")
+
+        if not problems:
             return
-        names = ", ".join(l.value for l in missing)
         from .errors import FatalError
         raise FatalError(
-            f"認証情報が未設定のレイヤがあります: {names}。"
-            "詳細ダイアログから API キーを入力してください。"
+            "認証が完了していないレイヤがあります: "
+            + " / ".join(problems)
+            + "。詳細ダイアログから「認証」ボタンを開いて、API キーを入力 → 「テスト」を通してください。"
         )
 
     def start_pipeline_async(

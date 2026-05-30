@@ -29,6 +29,7 @@ from voice_translator.common.types import LayerKind, ModelStatus
 
 from voice_translator.common.types import ModelInfo
 
+from .credential_dialog import CredentialDialog
 from .layer_settings_schema import (
     CREDENTIAL_KEYS_MARKER,
     SettingField,
@@ -118,6 +119,13 @@ class LayerSettingsDialog(ctk.CTkToplevel):
             for field_def in fields:
                 self._add_field_row(field_def, row=2 + field_rows * 2)
                 field_rows += 1
+
+        # Phase E-2: 認証情報が必要な backend のとき「認証」ボタンを動的に追加。
+        # schema ではなくダイアログ側で判定するのは、表示条件が capability hint に依存し、
+        # 全 cloud backend で同じ宣言を schema 化すると重複するため。
+        if self._needs_credentials(current_backend):
+            self._add_auth_button_row(current_backend, row=2 + field_rows * 2)
+            field_rows += 1
 
         # メッセージ表示
         self._message_label = ctk.CTkLabel(self, text="", text_color="#94a3b8")
@@ -304,6 +312,76 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         self._add_help_row(field, row=row + 1)
         # 保存時に空欄なら触らない、非空なら set_credential する用に保持
         self._entries[field.keys] = (field, var)
+
+    # ---- Phase E-2: 「認証」ボタン ----
+    def _needs_credentials(self, backend_name: str) -> bool:
+        """選択中の backend が認証情報を要求しているか。"""
+        if not backend_name:
+            return False
+        try:
+            hint = self._controller.get_backend_capability_hint(
+                self._layer, backend_name
+            )
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(hint and hint.requires_credentials)
+
+    def _add_auth_button_row(self, backend_name: str, *, row: int) -> None:
+        """「認証」ボタン + 現在の verified 状態ラベルを置く。"""
+        ctk.CTkLabel(self, text="認証").grid(
+            row=row, column=0, sticky="w", padx=12, pady=(8, 0)
+        )
+        status_frame = ctk.CTkFrame(self, fg_color="transparent")
+        status_frame.grid(row=row, column=1, sticky="ew", padx=12, pady=(8, 0))
+
+        verified = False
+        try:
+            verified = self._controller.is_backend_verified(backend_name)
+        except Exception:  # noqa: BLE001
+            verified = False
+        status_text = "✓ 認証済み" if verified else "未認証"
+        status_color = "#16a34a" if verified else "#dc2626"
+        ctk.CTkLabel(
+            status_frame, text=status_text, text_color=status_color,
+        ).pack(side="left", padx=(0, 12))
+
+        ctk.CTkButton(
+            status_frame, text="認証を開く / 再認証", width=180,
+            command=lambda: self._open_credential_dialog(backend_name),
+        ).pack(side="left")
+
+        # ヘルプ行
+        ctk.CTkLabel(
+            self,
+            text=(
+                "API キー等を入力して疎通確認まで通すと、verified=True で保存されます。"
+                "キー失効 / サブスク切れ等で動作中にエラーが出た場合、verified は自動で False に戻ります。"
+            ),
+            text_color="#94a3b8", wraplength=460, justify="left",
+        ).grid(
+            row=row + 1, column=0, columnspan=2,
+            sticky="w", padx=12, pady=(0, 4),
+        )
+
+    def _open_credential_dialog(self, backend_name: str) -> None:
+        """CredentialDialog を開く。閉じた後にステータス表示を再描画。"""
+        hint = self._controller.get_backend_capability_hint(self._layer, backend_name)
+        service = hint.service_name if hint else None
+        dlg = CredentialDialog(
+            self, self._controller,
+            layer=self._layer,
+            backend_name=backend_name,
+            service_name=service,
+        )
+        try:
+            self.wait_window(dlg)
+        except Exception:  # noqa: BLE001
+            pass
+        # 自身を作り直さずに済むよう、_message_label に状態をフィードバック
+        if self._controller.is_backend_verified(backend_name):
+            self._message_label.configure(
+                text="認証 OK が保存されました。", text_color="#16a34a"
+            )
 
     @staticmethod
     def _parse_credential_keys(keys: tuple[str, ...]) -> tuple[str | None, str | None]:

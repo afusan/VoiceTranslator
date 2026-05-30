@@ -1133,6 +1133,177 @@ class TestPhaseDCredentials:
         assert ctrl._credentials.mode == "file"
 
 
+class TestPhaseE2CredentialFlow:
+    """Phase E-2: 認証情報フローのパッキング(spec / verify / verified / gate)。"""
+
+    def _setup_with_cloud_backend(self, populated_registry, config, tmp_path, monkeypatch):
+        """`requires_credentials=True` の cloud backend をテストレジストリに足したセット。"""
+        from voice_translator.common.types import (
+            BackendCapabilities, CredentialField, VerifyResult,
+        )
+        from tests._fixtures import InMemoryKeyring
+        import keyring
+        keyring.set_keyring(InMemoryKeyring())
+        monkeypatch.chdir(tmp_path)
+
+        verify_calls: list[dict] = []
+
+        class _FakeCloudAsr:
+            ok_value = True
+            ok_message = "OK"
+
+            @classmethod
+            def credential_spec(cls):
+                return [
+                    CredentialField("api_key", "API Key", secret=True),
+                ]
+
+            @classmethod
+            def verify_credentials(cls, values):
+                verify_calls.append(dict(values))
+                return VerifyResult(ok=cls.ok_value, message=cls.ok_message)
+
+        populated_registry.register(
+            LayerKind.ASR, "fake_cloud_asr",
+            lambda: _fake_simple_backend(),
+            backend_cls=_FakeCloudAsr,
+            capabilities=BackendCapabilities(
+                is_cloud=True, requires_credentials=True,
+                service_name="FakeCloud ASR",
+            ),
+        )
+        ctrl = AppController(registry=populated_registry, config=config)
+        return ctrl, _FakeCloudAsr, verify_calls
+
+    def test_get_credential_spec_returns_fields(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        spec = ctrl.get_credential_spec(LayerKind.ASR, "fake_cloud_asr")
+        assert len(spec) == 1
+        assert spec[0].key_name == "api_key"
+
+    def test_get_credential_spec_empty_for_unregistered_class(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        # 既存 mock backend は backend_cls 未登録
+        assert ctrl.get_credential_spec(LayerKind.ASR, "faster_whisper") == []
+
+    def test_verify_success_saves_credential_and_sets_verified(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, cls, calls = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        result = ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-test"}
+        )
+        assert result.ok is True
+        # キーが保存され
+        assert ctrl.get_credential("fake_cloud_asr", "api_key") == "sk-test"
+        # verified=True が立つ
+        assert ctrl.is_backend_verified("fake_cloud_asr") is True
+        # verify_credentials に渡された値も確認
+        assert calls == [{"api_key": "sk-test"}]
+
+    def test_verify_failure_does_not_save_or_set_verified(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, cls, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        cls.ok_value = False
+        cls.ok_message = "auth failed"
+        result = ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "bad"}
+        )
+        assert result.ok is False
+        assert result.message == "auth failed"
+        assert ctrl.get_credential("fake_cloud_asr", "api_key") is None
+        assert ctrl.is_backend_verified("fake_cloud_asr") is False
+
+    def test_set_credential_resets_verified(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """キーが変わったら再認証必須(verified を False に戻す)。"""
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "v1"}
+        )
+        assert ctrl.is_backend_verified("fake_cloud_asr") is True
+        # 直接 set_credential するとリセット
+        ctrl.set_credential("fake_cloud_asr", "api_key", "v2")
+        assert ctrl.is_backend_verified("fake_cloud_asr") is False
+
+    def test_invalidate_verification_clears_flag(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """サブスク切れ等で動作中に呼ばれる。"""
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "v1"}
+        )
+        assert ctrl.is_backend_verified("fake_cloud_asr") is True
+        ctrl.invalidate_verification("fake_cloud_asr")
+        assert ctrl.is_backend_verified("fake_cloud_asr") is False
+
+    def test_start_gate_blocks_when_credentials_missing(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        with pytest.raises(FatalError, match="認証情報未入力"):
+            ctrl.start_pipeline()
+
+    def test_start_gate_blocks_when_not_verified(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        # キーは保存したが verify を通していない
+        ctrl.set_credential("fake_cloud_asr", "api_key", "sk-stored-but-unverified")
+        with pytest.raises(FatalError, match="未検証"):
+            ctrl.start_pipeline()
+
+    def test_start_gate_passes_after_verification(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        # キーを入力 → verify → 保存(verified=True)
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "good"}
+        )
+        # ここで gate を通過、start_pipeline がエラーなく走る(stop は必ず)
+        ctrl.start_pipeline()
+        try:
+            assert ctrl.is_running
+        finally:
+            ctrl.stop_pipeline()
+
+
 class TestPhaseDCapabilityHint:
     """Phase D: BackendRegistry の capability hint。"""
 
