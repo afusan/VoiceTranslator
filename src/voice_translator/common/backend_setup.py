@@ -298,10 +298,18 @@ def register_default_backends(
     nllb_device = _read_str(
         config, ("backends_config", "nllb200", "device"), default="auto"
     )
+    # NLLB-200 のモデルサイズも config から取る(distilled-600M / distilled-1.3B / 1.3B / 3.3B)
+    nllb_model_name = _read_str(
+        config, ("backends_config", "nllb200", "model_name"),
+        default="facebook/nllb-200-distilled-600M",
+    )
     registry.register(
         LayerKind.TRANSLATOR,
         "nllb200",
-        lambda: Nllb200TranslatorBackend(device=nllb_device),
+        lambda: Nllb200TranslatorBackend(
+            model_name=nllb_model_name, device=nllb_device,
+        ),
+        backend_cls=Nllb200TranslatorBackend,
     )
 
     # SAPI は config から rate を取って渡す(設定なしなら既定 180)

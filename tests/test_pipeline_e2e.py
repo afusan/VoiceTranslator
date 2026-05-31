@@ -61,6 +61,10 @@ class EchoAsr(AsrBackend):
 
 
 class SuffixTranslator(TranslatorBackend):
+    @classmethod
+    def supported_target_languages(cls) -> list[str]:
+        return ["en", "ja"]
+
     def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:
         return f"{src_text} -> {tgt_lang}"
 

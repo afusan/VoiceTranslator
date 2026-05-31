@@ -1423,6 +1423,37 @@ class TestAsrSupportedLanguages:
         assert ctrl.supports_auto_detect("broken") is False
 
 
+class TestTranslatorSupportedLanguages:
+    """Translator の対応出力言語の問い合わせ口。"""
+
+    def test_returns_languages_from_registered_backend_class(self, config) -> None:
+        from voice_translator.common.backend_registry import BackendRegistry
+
+        class FakeTrans:
+            @classmethod
+            def supported_target_languages(cls) -> list[str]:
+                return ["en", "ja", "fr"]
+
+        reg = BackendRegistry()
+        reg.register(
+            LayerKind.TRANSLATOR, "fake_trans",
+            lambda: MagicMock(), backend_cls=FakeTrans,
+        )
+        ctrl = AppController(registry=reg, config=config)
+        assert ctrl.get_supported_target_languages("fake_trans") == ["en", "ja", "fr"]
+
+    def test_unregistered_returns_empty(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_supported_target_languages("unknown") == []
+
+    def test_backend_class_not_provided_returns_empty(
+        self, populated_registry, config
+    ) -> None:
+        """populated_registry の nllb200 は backend_cls を渡さず登録 → 空。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_supported_target_languages("nllb200") == []
+
+
 class TestPhaseDCapabilityHint:
     """Phase D: BackendRegistry の capability hint。"""
 

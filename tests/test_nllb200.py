@@ -234,3 +234,43 @@ class TestDeviceSelection:
         # tokenizer 戻り値の各テンソルが .to("cpu") で移送されている
         input_tensor = fake_tokenizer.return_value["input_ids"]
         input_tensor.to.assert_called_with("cpu")
+
+
+class TestSupportedTargetLanguages:
+    """対応出力言語 I/F(クラスメソッド、未ロードでも問い合わせ可)。"""
+
+    def test_returns_iso_codes_from_mapping(self) -> None:
+        from voice_translator.translator.nllb200_backend import (
+            ISO_TO_NLLB,
+            Nllb200TranslatorBackend,
+        )
+
+        langs = Nllb200TranslatorBackend.supported_target_languages()
+        # 主要言語が含まれる
+        for code in ["en", "ja", "zh", "ko", "es", "fr", "de"]:
+            assert code in langs, f"{code} が抜けている"
+        # ISO_TO_NLLB に登録されたコードがすべて含まれる
+        assert set(langs) == set(ISO_TO_NLLB.keys())
+        # ソート済み
+        assert langs == sorted(langs)
+
+    def test_source_languages_default_same_as_target(self) -> None:
+        """対称 backend なので source と target は同じ。"""
+        from voice_translator.translator.nllb200_backend import (
+            Nllb200TranslatorBackend,
+        )
+
+        src = Nllb200TranslatorBackend.supported_source_languages()
+        tgt = Nllb200TranslatorBackend.supported_target_languages()
+        assert src == tgt
+
+    def test_all_codes_in_common_language_table(self) -> None:
+        """nllb の返すコードはすべて共通言語テーブルに存在する。"""
+        from voice_translator.common.languages import LANGUAGE_NAMES
+        from voice_translator.translator.nllb200_backend import (
+            Nllb200TranslatorBackend,
+        )
+
+        langs = Nllb200TranslatorBackend.supported_target_languages()
+        unknown = [c for c in langs if c not in LANGUAGE_NAMES]
+        assert not unknown, f"共通言語テーブルに未登録のコード: {unknown}"

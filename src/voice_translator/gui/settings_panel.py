@@ -69,6 +69,7 @@ class SettingsPanel(ctk.CTkFrame):
         self._src_var = ctk.StringVar(value=format_language(initial_src))
         self._tgt_var = ctk.StringVar(value=format_language(initial_tgt))
         self._src_dropdown: ctk.CTkOptionMenu | None = None  # 後で再構築するので保持
+        self._tgt_dropdown: ctk.CTkOptionMenu | None = None  # Translator 連動用
         self._log_dir_var = ctk.StringVar(value=str(controller.get_setting("log", "directory", default="./logs")))
 
         self._build_widgets()
@@ -78,6 +79,12 @@ class SettingsPanel(ctk.CTkFrame):
         current_asr = str(controller.get_setting("backends", LayerKind.ASR.value, default=""))
         if current_asr:
             self._refresh_input_language_choices(current_asr, notify_fallback=False)
+        # 出力言語プルダウンも Translator backend に合わせて構築
+        current_translator = str(
+            controller.get_setting("backends", LayerKind.TRANSLATOR.value, default="")
+        )
+        if current_translator:
+            self._refresh_target_language_choices(current_translator, notify_fallback=False)
 
     # ============================================================
     def _build_widgets(self) -> None:
@@ -156,16 +163,17 @@ class SettingsPanel(ctk.CTkFrame):
         self._src_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         row += 1
 
-        # tgt 言語(Translator backend 連動は別ブランチ。当面は固定リスト)
+        # tgt 言語(Translator backend に追従して再構築される)
         ctk.CTkLabel(self, text="出力言語 (tgt):").grid(
             row=row, column=0, sticky="w", padx=10, pady=2
         )
-        ctk.CTkOptionMenu(
+        self._tgt_dropdown = ctk.CTkOptionMenu(
             self,
-            values=[format_language(c) for c in _TGT_LANG_CHOICES],
+            values=[format_language(c) for c in _TGT_LANG_CHOICES],  # 初期は fallback
             variable=self._tgt_var,
             command=self._on_tgt_lang_changed,
-        ).grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
+        )
+        self._tgt_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         row += 1
 
         # ログ出力先
@@ -253,6 +261,9 @@ class SettingsPanel(ctk.CTkFrame):
         # ASR backend 切替時は入力言語プルダウンを新 backend の対応言語に合わせる
         if layer == LayerKind.ASR:
             self._refresh_input_language_choices(value, notify_fallback=True)
+        # Translator backend 切替時は出力言語プルダウンを再構築
+        if layer == LayerKind.TRANSLATOR:
+            self._refresh_target_language_choices(value, notify_fallback=True)
 
     # ============================================================
     # 入力言語プルダウンの連動(ASR backend ごとに対応言語が違う)
@@ -325,6 +336,65 @@ class SettingsPanel(ctk.CTkFrame):
             except Exception:  # noqa: BLE001
                 pass
         # banner が無い / 失敗時はログに落とす(テスト環境含む)
+        self._show_message(msg)
+
+    # ============================================================
+    # 出力言語プルダウンの連動(Translator backend ごとに対応言語が違う)
+    # ============================================================
+    def _refresh_target_language_choices(
+        self, backend_name: str, *, notify_fallback: bool,
+    ) -> None:
+        """Translator backend に応じて出力言語プルダウンの選択肢を再構築する。
+
+        - backend の `supported_target_languages()` を引いて選択肢を組み立てる
+        - 取得失敗 / 未対応 backend のときは fallback リストを使う
+        - `"auto"` は含めない(出力言語に「自動」は意味を持たない)
+        - 既存設定値が新 backend で非対応のとき:
+          - 日本語があれば日本語に fallback(本アプリは日本語主用途)
+          - 無ければ英語、両方無ければ先頭言語
+          - `notify_fallback=True` なら通知バナーで明示
+        """
+        if self._tgt_dropdown is None:
+            return
+
+        codes = self._controller.get_supported_target_languages(backend_name)
+        if not codes:
+            codes = list(_TGT_LANG_CHOICES)
+        codes = sorted(set(c for c in codes if c != "auto"))
+
+        labels = [format_language(c) for c in codes]
+        self._tgt_dropdown.configure(values=labels)
+
+        current_code = str(self._controller.get_setting("languages", "tgt", default="ja"))
+        if current_code in codes:
+            self._tgt_var.set(format_language(current_code))
+            return
+
+        # 非対応 → fallback(日本語 > 英語 > 先頭)
+        if "ja" in codes:
+            new_code = "ja"
+        elif "en" in codes:
+            new_code = "en"
+        else:
+            new_code = codes[0]
+        self._tgt_var.set(format_language(new_code))
+        self._controller.set_setting("languages", "tgt", new_code)
+        if notify_fallback:
+            self._notify_tgt_lang_fallback(current_code, new_code, backend_name)
+
+    def _notify_tgt_lang_fallback(
+        self, old_code: str, new_code: str, backend_name: str,
+    ) -> None:
+        msg = (
+            f"出力言語を {format_language(old_code)} から {format_language(new_code)} に変更しました"
+            f"({backend_name} が {old_code} に対応していないため)"
+        )
+        if self._banner is not None:
+            try:
+                self._banner.show_warning(msg)
+                return
+            except Exception:  # noqa: BLE001
+                pass
         self._show_message(msg)
 
     def _gate_cloud_consent(self, layer: LayerKind, backend_name: str) -> bool:

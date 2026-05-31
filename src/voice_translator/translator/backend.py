@@ -31,6 +31,26 @@ class TranslatorBackend(BackendBase, ABC):
         - 戻り値: 翻訳テキスト(strip 済み)。
         """
 
+    @classmethod
+    @abstractmethod
+    def supported_target_languages(cls) -> list[str]:
+        """対応する出力言語(ISO 639-1)の名目リスト。
+
+        - クラスメソッド: UI が backend 名から問い合わせる時点で backend を
+          ロード済みとは限らない。設定ダイアログを開いただけで重い import を
+          引きずらないため、未ロード状態でも答えられる必要がある
+        - `"auto"` は含めない(出力言語に「自動」は意味を持たない)
+        """
+
+    @classmethod
+    def supported_source_languages(cls) -> list[str]:
+        """対応する入力言語(ISO 639-1)の名目リスト。
+
+        default 実装は出力言語と同じ(対称な backend が多い前提)。非対称な backend
+        (例: 英→他言語のみの片方向モデル)はオーバーライドする。
+        """
+        return cls.supported_target_languages()
+
     def capabilities(self) -> BackendCapabilities:
         """対応言語ペア等のメタ情報。"""
         return BackendCapabilities()

@@ -136,3 +136,120 @@ class TestOnSrcLangChanged:
     def test_handles_bare_code(self, stub_panel) -> None:
         stub_panel._on_src_lang_changed("auto")
         stub_panel._controller.set_setting.assert_called_with("languages", "src", "auto")
+
+
+@pytest.fixture()
+def stub_tgt_panel():
+    """Translator 連動(_refresh_target_language_choices)用の shim。"""
+    from voice_translator.gui.settings_panel import SettingsPanel
+
+    shim = MagicMock(spec=SettingsPanel)
+    shim._refresh_target_language_choices = (
+        SettingsPanel._refresh_target_language_choices.__get__(shim)
+    )
+    shim._notify_tgt_lang_fallback = (
+        SettingsPanel._notify_tgt_lang_fallback.__get__(shim)
+    )
+    shim._tgt_dropdown = MagicMock(name="tgt_dropdown")
+    shim._tgt_var = MagicMock(name="tgt_var")
+    shim._controller = MagicMock(name="controller")
+    shim._banner = MagicMock(name="banner")
+    return shim
+
+
+class TestRefreshTargetLanguageChoices:
+    def test_uses_backend_supported_languages(self, stub_tgt_panel) -> None:
+        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
+            "en", "ja", "fr",
+        ]
+        stub_tgt_panel._controller.get_setting.return_value = "ja"
+
+        stub_tgt_panel._refresh_target_language_choices(
+            "fake_backend", notify_fallback=True
+        )
+
+        labels = stub_tgt_panel._tgt_dropdown.configure.call_args.kwargs["values"]
+        assert "en (English)" in labels
+        assert "ja (Japanese)" in labels
+        assert "fr (French)" in labels
+        # auto は出力側では出さない
+        assert all("auto" not in label for label in labels)
+
+    def test_keeps_current_if_supported(self, stub_tgt_panel) -> None:
+        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
+            "en", "ja",
+        ]
+        stub_tgt_panel._controller.get_setting.return_value = "ja"
+
+        stub_tgt_panel._refresh_target_language_choices(
+            "fake_backend", notify_fallback=True
+        )
+        stub_tgt_panel._controller.set_setting.assert_not_called()
+        stub_tgt_panel._tgt_var.set.assert_called_with("ja (Japanese)")
+
+    def test_fallback_prefers_japanese(self, stub_tgt_panel) -> None:
+        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
+            "en", "ja", "fr",
+        ]
+        stub_tgt_panel._controller.get_setting.return_value = "xx"  # 非対応
+
+        stub_tgt_panel._refresh_target_language_choices(
+            "fake_backend", notify_fallback=True
+        )
+        stub_tgt_panel._controller.set_setting.assert_called_with(
+            "languages", "tgt", "ja"
+        )
+        stub_tgt_panel._banner.show_warning.assert_called_once()
+
+    def test_fallback_to_english_when_no_japanese(self, stub_tgt_panel) -> None:
+        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
+            "en", "fr", "de",
+        ]
+        stub_tgt_panel._controller.get_setting.return_value = "xx"
+
+        stub_tgt_panel._refresh_target_language_choices(
+            "fake_backend", notify_fallback=True
+        )
+        stub_tgt_panel._controller.set_setting.assert_called_with(
+            "languages", "tgt", "en"
+        )
+
+    def test_fallback_to_first_when_no_en_no_ja(self, stub_tgt_panel) -> None:
+        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
+            "fr", "de", "es",
+        ]
+        stub_tgt_panel._controller.get_setting.return_value = "xx"
+
+        stub_tgt_panel._refresh_target_language_choices(
+            "fake_backend", notify_fallback=True
+        )
+        # sorted 順の先頭 = "de"
+        stub_tgt_panel._controller.set_setting.assert_called_with(
+            "languages", "tgt", "de"
+        )
+
+    def test_empty_backend_response_uses_fallback_list(self, stub_tgt_panel) -> None:
+        stub_tgt_panel._controller.get_supported_target_languages.return_value = []
+        stub_tgt_panel._controller.get_setting.return_value = "ja"
+
+        stub_tgt_panel._refresh_target_language_choices(
+            "unknown_backend", notify_fallback=False
+        )
+        labels = stub_tgt_panel._tgt_dropdown.configure.call_args.kwargs["values"]
+        # MVP セット相当の言語が出ている
+        assert "ja (Japanese)" in labels
+
+    def test_no_notification_when_notify_false(self, stub_tgt_panel) -> None:
+        stub_tgt_panel._controller.get_supported_target_languages.return_value = ["en"]
+        stub_tgt_panel._controller.get_setting.return_value = "xx"
+        stub_tgt_panel._refresh_target_language_choices(
+            "fake_backend", notify_fallback=False
+        )
+        stub_tgt_panel._controller.set_setting.assert_called_with(
+            "languages", "tgt", "en"
+        )
+        stub_tgt_panel._banner.show_warning.assert_not_called()
+
+    def test_dropdown_missing_is_noop(self, stub_tgt_panel) -> None:
+        stub_tgt_panel._tgt_dropdown = None
+        stub_tgt_panel._refresh_target_language_choices("any", notify_fallback=True)

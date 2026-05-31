@@ -60,6 +60,7 @@ LANGUAGE_NAMES: dict[str, str] = {
     "fa": "Persian",
     "fi": "Finnish",
     "fo": "Faroese",
+    "ga": "Irish",
     "gl": "Galician",
     "gu": "Gujarati",
     "ha": "Hausa",

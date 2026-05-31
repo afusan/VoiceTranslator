@@ -43,9 +43,12 @@ _RECOMMENDED_MODELS: tuple[ModelInfo, ...] = (
 )
 
 
-# ISO 639-1 → NLLB-200 言語コード(必要に応じて追加)。
+# ISO 639-1 → NLLB-200 言語コード。
 # 詳しい一覧は https://github.com/facebookresearch/flores/blob/main/flores200/README.md
+# NLLB-200 本体は 200 言語対応だが、UI に並べて意味があるメジャー言語(ISO 639-1
+# 表現可能 + 共通言語テーブルに英語名がある言語)に絞っている。上流追加時はここを追従。
 ISO_TO_NLLB: dict[str, str] = {
+    # MVP の 17 言語
     "en": "eng_Latn",
     "ja": "jpn_Jpan",
     "zh": "zho_Hans",
@@ -63,10 +66,69 @@ ISO_TO_NLLB: dict[str, str] = {
     "id": "ind_Latn",
     "tr": "tur_Latn",
     "nl": "nld_Latn",
+    # ヨーロッパ系
     "pl": "pol_Latn",
     "sv": "swe_Latn",
     "fi": "fin_Latn",
     "da": "dan_Latn",
+    "no": "nob_Latn",  # Norwegian Bokmål
+    "nn": "nno_Latn",  # Nynorsk
+    "cs": "ces_Latn",
+    "sk": "slk_Latn",
+    "el": "ell_Grek",
+    "hu": "hun_Latn",
+    "ro": "ron_Latn",
+    "bg": "bul_Cyrl",
+    "uk": "ukr_Cyrl",
+    "be": "bel_Cyrl",
+    "sr": "srp_Cyrl",
+    "hr": "hrv_Latn",
+    "bs": "bos_Latn",
+    "sl": "slv_Latn",
+    "et": "est_Latn",
+    "lv": "lvs_Latn",
+    "lt": "lit_Latn",
+    "ca": "cat_Latn",
+    "gl": "glg_Latn",
+    "eu": "eus_Latn",
+    "is": "isl_Latn",
+    "mt": "mlt_Latn",
+    "ga": "gle_Latn",
+    "cy": "cym_Latn",
+    "sq": "als_Latn",
+    "mk": "mkd_Cyrl",
+    # 中東 / アフリカ
+    "he": "heb_Hebr",
+    "fa": "pes_Arab",
+    "ur": "urd_Arab",
+    "ps": "pbt_Arab",
+    "sw": "swh_Latn",
+    "am": "amh_Ethi",
+    "yo": "yor_Latn",
+    "ha": "hau_Latn",
+    "so": "som_Latn",
+    # アジア
+    "bn": "ben_Beng",
+    "ta": "tam_Taml",
+    "te": "tel_Telu",
+    "ml": "mal_Mlym",
+    "mr": "mar_Deva",
+    "gu": "guj_Gujr",
+    "pa": "pan_Guru",
+    "kn": "kan_Knda",
+    "ne": "npi_Deva",
+    "si": "sin_Sinh",
+    "my": "mya_Mymr",
+    "km": "khm_Khmr",
+    "lo": "lao_Laoo",
+    "ka": "kat_Geor",
+    "hy": "hye_Armn",
+    "mn": "khk_Cyrl",
+    "kk": "kaz_Cyrl",
+    "uz": "uzn_Latn",
+    "az": "azj_Latn",
+    "ms": "zsm_Latn",
+    "tl": "tgl_Latn",
 }
 
 
@@ -196,3 +258,16 @@ class Nllb200TranslatorBackend(TranslatorBackend):
     def list_recommended_models(self) -> list[ModelInfo]:
         """NLLB-200 の代表サイズ一覧を返す。"""
         return list(_RECOMMENDED_MODELS)
+
+    # ----------------------------------------------------------
+    # 対応言語の宣言(UI の出力言語プルダウン連動用)
+    # ----------------------------------------------------------
+    @classmethod
+    def supported_target_languages(cls) -> list[str]:
+        """ISO_TO_NLLB に登録した ISO 639-1 コードを返す(ソート済み)。
+
+        クラスメソッド: UI が backend をロードせずに問い合わせる。
+        本 backend は対称(同じセットで src/tgt 双方向 OK)なので
+        supported_source_languages はオーバーライドせず default を使う。
+        """
+        return sorted(ISO_TO_NLLB.keys())
