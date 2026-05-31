@@ -26,6 +26,9 @@ def register_default_backends(
     """
     from voice_translator.asr.faster_whisper_backend import FasterWhisperAsrBackend
     from voice_translator.asr.openai_whisper_backend import OpenAiWhisperAsrBackend
+    from voice_translator.asr.openai_whisper_api_backend import (
+        OpenAiWhisperApiAsrBackend,
+    )
     from voice_translator.capture.soundcard_backend import SoundcardCaptureBackend
     from voice_translator.output.soundcard_backend import SoundcardOutputBackend
     from voice_translator.translator.nllb200_backend import Nllb200TranslatorBackend
@@ -221,6 +224,28 @@ def register_default_backends(
             device=ow_device,
         ),
         backend_cls=OpenAiWhisperAsrBackend,
+    )
+
+    # OpenAI Whisper API(クラウド)。extras: `asr-openai-api`(httpx)。
+    # capabilities=is_cloud=True で同意ダイアログが自動表示される(Phase D)。
+    owapi_model = _read_str(
+        config, ("backends_config", "openai_whisper_api", "model"), default="whisper-1"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "openai_whisper_api",
+        lambda: OpenAiWhisperApiAsrBackend(
+            api_key=_get_credential(config, "openai_whisper_api", "api_key"),
+            model=owapi_model,
+        ),
+        backend_cls=OpenAiWhisperApiAsrBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="OpenAI Whisper API",
+            terms_url="https://openai.com/policies/terms-of-use",
+            notes="OpenAI Whisper API。25MB/req 制限あり。",
+        ),
     )
 
     # NLLB-200 の device を config から取る

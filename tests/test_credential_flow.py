@@ -527,24 +527,83 @@ class TestBackendSwitch:
 # Phase F で実 backend クラスを書いたら、skip を外して実装に対して検証する。
 # 実 API key は環境変数 / pytest 引数 / モック HTTP のいずれかで注入する。
 # ============================================================
-@pytest.mark.skip(reason="Phase F: OpenAI Whisper API backend 実装後に有効化")
 class TestOpenAIWhisperApiCredentials:
     """OpenAI Whisper API backend の認証契約。
 
-    Phase F での実装後の流れ:
-    1. `src/voice_translator/asr/openai_whisper_api_backend.py` を作る
-    2. backend_setup.py に capabilities + backend_cls 付きで register
-    3. 環境変数 `OPENAI_API_KEY_VALID` / `OPENAI_API_KEY_INVALID` をセット、もしくは
-       httpx をモックして 401 / 200 / network error を再現
-    4. このクラスの @pytest.mark.skip を外す
+    Phase E-2 の認証フロー(spec → verify → CredentialsStore → MISSING_CREDENTIALS
+    ゲート → invalidate)を契約として表明する。実 API は呼ばず httpx をモック。
     """
 
-    def test_credential_spec_has_api_key(self) -> None: ...
-    def test_verify_with_valid_key_returns_ok(self) -> None: ...
-    def test_verify_with_invalid_key_returns_failure_401(self) -> None: ...
-    def test_verify_with_network_error_returns_failure_no_exception(self) -> None: ...
-    def test_verify_with_quota_exceeded_returns_failure(self) -> None: ...
-    def test_runtime_401_triggers_invalidate_verification(self) -> None: ...
+    def _backend_cls(self):
+        from voice_translator.asr.openai_whisper_api_backend import (
+            OpenAiWhisperApiAsrBackend,
+        )
+        return OpenAiWhisperApiAsrBackend
+
+    def test_credential_spec_has_api_key(self) -> None:
+        spec = self._backend_cls().credential_spec()
+        assert any(f.key_name == "api_key" and f.secret for f in spec)
+
+    def test_verify_with_valid_key_returns_ok(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        resp = MagicMock(status_code=200)
+        fake.get = MagicMock(return_value=resp)
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        result = self._backend_cls().verify_credentials({"api_key": "sk-valid"})
+        assert result.ok is True
+
+    def test_verify_with_invalid_key_returns_failure_401(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=401))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        result = self._backend_cls().verify_credentials({"api_key": "sk-bad"})
+        assert result.ok is False
+
+    def test_verify_with_network_error_returns_failure_no_exception(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(side_effect=RuntimeError("connection refused"))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        # 例外は呼び出し元に伝播せず VerifyResult で表現される
+        result = self._backend_cls().verify_credentials({"api_key": "sk-test"})
+        assert result.ok is False
+        assert result.message  # 何らかの message が入る
+
+    def test_verify_with_quota_exceeded_returns_failure(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=429))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        result = self._backend_cls().verify_credentials({"api_key": "sk-test"})
+        assert result.ok is False
+
+    def test_runtime_401_triggers_invalidate_verification(self, monkeypatch) -> None:
+        """transcribe 中の 401 は FatalError(=AppController が invalidate_verification を呼ぶ契約)。
+
+        ここでは backend が FatalError を投げるところまでを検証する
+        (invalidate_verification の呼び出し自体は AppController/Coordinator の責務)。
+        """
+        import sys
+
+        import numpy as np
+
+        from voice_translator.common.errors import FatalError
+
+        fake = MagicMock()
+        fake_client = MagicMock()
+        fake_client.post = MagicMock(return_value=MagicMock(status_code=401, text="bad key"))
+        fake.Client = MagicMock(return_value=fake_client)
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        backend = self._backend_cls()(api_key="sk-bad")
+        with pytest.raises(FatalError):
+            backend.transcribe(np.zeros(16000, dtype=np.float32))
 
 
 @pytest.mark.skip(reason="Phase F: DeepL API backend 実装後に有効化")

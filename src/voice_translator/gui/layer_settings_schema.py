@@ -352,6 +352,16 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("openai_whisper"),
+        # OpenAI Whisper API(クラウド)用の項目。モデル名(現状 whisper-1 のみ)を露出。
+        SettingField(
+            keys=("backends_config", "openai_whisper_api", "model"),
+            label="OpenAI API: モデル",
+            field_type="str",
+            default="whisper-1",
+            applies_when_backend="openai_whisper_api",
+            help_text="OpenAI Whisper API のモデル名。現状は `whisper-1` のみ。",
+        ),
+        _auto_load_toggle("openai_whisper_api"),
     ],
     LayerKind.TRANSLATOR: [
         SettingField(
