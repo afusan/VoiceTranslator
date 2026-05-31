@@ -120,23 +120,53 @@ class CredentialDialog(ctk.CTkToplevel):
         self.columnconfigure(1, weight=1)
 
     def _add_field_row(self, field, *, row: int) -> None:
-        """1 フィールド分の入力欄 + ヘルプを置く。"""
+        """1 フィールド分の入力欄 + ヘルプを置く。
+
+        `field_type="file"` のときは Entry の隣に「参照」ボタンを置き、
+        `tkinter.filedialog.askopenfilename` で選んだ絶対パスを Entry にセットする。
+        ファイル選択時は「設定済み」placeholder ではなく実パスを表示するほうが分かりやすい
+        ため、既存値があれば Entry の初期値に入れる(secret=False のとき)。
+        """
         existing = self._controller.get_credential(self._backend_name, field.key_name)
         self._has_existing[field.key_name] = bool(existing)
-        placeholder = (
-            "●●●●●●●● (設定済み、変更時のみ入力)" if existing else "(未設定)"
-        )
+        is_file = field.field_type == "file"
 
-        var = ctk.StringVar(value="")
+        # file タイプは既存値(パス)を Entry に出した方が分かりやすい
+        # (どこを指しているかが見える。secret=False が普通)
+        if is_file and existing and not field.secret:
+            initial_value = existing
+            placeholder = "(参照ボタンで選択)"
+        elif existing:
+            initial_value = ""
+            placeholder = "●●●●●●●● (設定済み、変更時のみ入力)"
+        else:
+            initial_value = ""
+            placeholder = "(未設定)" if not is_file else "(参照ボタンで選択)"
+
+        var = ctk.StringVar(value=initial_value)
         ctk.CTkLabel(self, text=field.label).grid(
             row=row, column=0, sticky="w", padx=12, pady=(8, 0)
         )
+
         entry_kwargs = {"textvariable": var, "placeholder_text": placeholder}
         if field.secret:
             entry_kwargs["show"] = "*"
-        ctk.CTkEntry(self, **entry_kwargs).grid(
-            row=row, column=1, sticky="ew", padx=12, pady=(8, 0)
-        )
+
+        if is_file:
+            # Entry + 参照ボタンを横並びにする内側 frame
+            row_frame = ctk.CTkFrame(self, fg_color="transparent")
+            row_frame.grid(row=row, column=1, sticky="ew", padx=12, pady=(8, 0))
+            row_frame.columnconfigure(0, weight=1)
+            ctk.CTkEntry(row_frame, **entry_kwargs).grid(row=0, column=0, sticky="ew")
+            ctk.CTkButton(
+                row_frame, text="参照…", width=80,
+                command=lambda v=var, fl=field: self._pick_file(v, fl),
+            ).grid(row=0, column=1, padx=(6, 0))
+        else:
+            ctk.CTkEntry(self, **entry_kwargs).grid(
+                row=row, column=1, sticky="ew", padx=12, pady=(8, 0)
+            )
+
         if field.help_text:
             ctk.CTkLabel(
                 self, text=field.help_text, text_color="#94a3b8",
@@ -146,6 +176,25 @@ class CredentialDialog(ctk.CTkToplevel):
                 sticky="w", padx=12, pady=(0, 4),
             )
         self._field_vars[field.key_name] = var
+
+    def _pick_file(self, var: "ctk.StringVar", field) -> None:
+        """ファイル選択ダイアログを開き、選択された絶対パスを var にセット。
+
+        `field.file_extensions` が指定されていれば filetypes として渡す。
+        キャンセル時は何もしない(既存値保持)。
+        """
+        from tkinter import filedialog
+
+        filetypes = list(field.file_extensions) if field.file_extensions else [
+            ("All files", "*.*"),
+        ]
+        path = filedialog.askopenfilename(
+            parent=self,
+            title=f"{field.label} のファイルを選択",
+            filetypes=filetypes,
+        )
+        if path:
+            var.set(path)
 
     # ----------------------------------------------------------
     def _on_test(self) -> None:
