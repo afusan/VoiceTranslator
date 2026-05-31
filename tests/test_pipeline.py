@@ -110,6 +110,10 @@ class FakeTranslator(TranslatorBackend):
 
 
 class FakeTts(TtsBackend):
+    @classmethod
+    def supported_output_languages(cls) -> list[str]:
+        return ["en", "ja"]
+
     def __init__(self, *, raise_exc: BaseException | None = None) -> None:
         self._raise = raise_exc
 

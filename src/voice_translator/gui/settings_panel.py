@@ -85,6 +85,8 @@ class SettingsPanel(ctk.CTkFrame):
         )
         if current_translator:
             self._refresh_target_language_choices(current_translator, notify_fallback=False)
+        # 起動時に TTS 互換も一度チェック(警告は出さない)
+        self._check_tts_output_lang_compatibility(notify_fallback=False)
 
     # ============================================================
     def _build_widgets(self) -> None:
@@ -264,6 +266,9 @@ class SettingsPanel(ctk.CTkFrame):
         # Translator backend 切替時は出力言語プルダウンを再構築
         if layer == LayerKind.TRANSLATOR:
             self._refresh_target_language_choices(value, notify_fallback=True)
+        # TTS backend 切替時は現在の出力言語が新 TTS で読めるか警告チェック
+        if layer == LayerKind.TTS:
+            self._check_tts_output_lang_compatibility(notify_fallback=True)
 
     # ============================================================
     # 入力言語プルダウンの連動(ASR backend ごとに対応言語が違う)
@@ -276,6 +281,8 @@ class SettingsPanel(ctk.CTkFrame):
     def _on_tgt_lang_changed(self, displayed: str) -> None:
         code = parse_language(displayed)
         self._controller.set_setting("languages", "tgt", code)
+        # tgt を変えた結果、現在の TTS が読めない言語になっていないか警告
+        self._check_tts_output_lang_compatibility(notify_fallback=True)
 
     def _refresh_input_language_choices(
         self, backend_name: str, *, notify_fallback: bool,
@@ -381,6 +388,53 @@ class SettingsPanel(ctk.CTkFrame):
         self._controller.set_setting("languages", "tgt", new_code)
         if notify_fallback:
             self._notify_tgt_lang_fallback(current_code, new_code, backend_name)
+        # tgt が fallback で変わった可能性があるので TTS 互換チェック
+        self._check_tts_output_lang_compatibility(notify_fallback=notify_fallback)
+
+    # ============================================================
+    # TTS 対応言語チェック(現在の出力言語が TTS で読めるか)
+    # ============================================================
+    def _check_tts_output_lang_compatibility(self, *, notify_fallback: bool) -> None:
+        """現在の TTS backend が現在の出力言語(tgt)を読み上げ可能か確認し、
+        対応外なら警告バナーを出す。
+
+        - ユーザ選択(TTS / tgt_lang)は変更しない: TTS は「結果に対する制約」で
+          因果関係が遠いため、勝手に切り替えず警告に留める
+        - 呼び出し箇所: TTS backend 切替時 / tgt_lang 切替時 /
+          Translator 切替後の fallback で tgt が変わった後
+        - `notify_fallback=False` は起動時の初期化用(バナーを出さない)
+        - 取得失敗 / 対応言語不明(空リスト)時は警告を出さない
+        """
+        tts_backend = str(
+            self._controller.get_setting("backends", LayerKind.TTS.value, default="")
+        )
+        if not tts_backend:
+            return
+        supported = self._controller.get_supported_output_languages(tts_backend)
+        if not supported:
+            # 「分からない」backend は警告を出さない(誤検知より沈黙)
+            return
+        current_tgt = str(self._controller.get_setting("languages", "tgt", default=""))
+        if current_tgt and current_tgt in supported:
+            return
+        if not notify_fallback:
+            return
+        self._notify_tts_unsupported_lang(current_tgt, tts_backend)
+
+    def _notify_tts_unsupported_lang(self, tgt_code: str, backend_name: str) -> None:
+        """TTS が現在の出力言語を読み上げられないことを通知バナーで明示する。"""
+        msg = (
+            f"TTS バックエンド {backend_name} は読み上げ言語 "
+            f"{format_language(tgt_code)} に対応していません"
+            "(Translator 出力言語を変えるか、別の TTS バックエンドに切り替えてください)"
+        )
+        if self._banner is not None:
+            try:
+                self._banner.show_warning(msg)
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        self._show_message(msg)
 
     def _notify_tgt_lang_fallback(
         self, old_code: str, new_code: str, backend_name: str,

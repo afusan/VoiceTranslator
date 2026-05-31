@@ -1454,6 +1454,54 @@ class TestTranslatorSupportedLanguages:
         assert ctrl.get_supported_target_languages("nllb200") == []
 
 
+class TestTtsSupportedOutputLanguages:
+    """TTS の対応読み上げ言語の問い合わせ口。"""
+
+    def test_returns_languages_from_registered_backend_class(self, config) -> None:
+        from voice_translator.common.backend_registry import BackendRegistry
+
+        class FakeTts:
+            @classmethod
+            def supported_output_languages(cls) -> list[str]:
+                return ["en", "ja"]
+
+        reg = BackendRegistry()
+        reg.register(
+            LayerKind.TTS, "fake_tts",
+            lambda: MagicMock(), backend_cls=FakeTts,
+        )
+        ctrl = AppController(registry=reg, config=config)
+        assert ctrl.get_supported_output_languages("fake_tts") == ["en", "ja"]
+
+    def test_unregistered_returns_empty(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_supported_output_languages("unknown") == []
+
+    def test_backend_class_not_provided_returns_empty(
+        self, populated_registry, config
+    ) -> None:
+        """populated_registry の sapi は backend_cls を渡さず登録 → 空。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_supported_output_languages("sapi") == []
+
+    def test_exception_returns_empty(self, config) -> None:
+        """`supported_output_languages` が例外を吐いても飲んで空を返す。"""
+        from voice_translator.common.backend_registry import BackendRegistry
+
+        class BrokenTts:
+            @classmethod
+            def supported_output_languages(cls) -> list[str]:
+                raise RuntimeError("boom")
+
+        reg = BackendRegistry()
+        reg.register(
+            LayerKind.TTS, "broken_tts",
+            lambda: MagicMock(), backend_cls=BrokenTts,
+        )
+        ctrl = AppController(registry=reg, config=config)
+        assert ctrl.get_supported_output_languages("broken_tts") == []
+
+
 class TestPhaseDCapabilityHint:
     """Phase D: BackendRegistry の capability hint。"""
 

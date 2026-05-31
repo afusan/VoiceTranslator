@@ -152,3 +152,25 @@ class TestFlushDelayWorkaround:
         backend = sapi_backend.SapiTtsBackend(flush_delay_sec=0)
         backend.synthesize("hello", "ja")
         assert calls == [], f"sleep が呼ばれてしまった: {calls}"
+
+
+class TestSupportedOutputLanguages:
+    """SAPI 対応読み上げ言語の宣言(Windows 標準 voice 前提)。"""
+
+    def test_returns_japanese_and_english(self) -> None:
+        """`["ja", "en"]` を classmethod として返す(インスタンス化不要)。"""
+        from voice_translator.tts.sapi_backend import SapiTtsBackend
+
+        langs = SapiTtsBackend.supported_output_languages()
+        assert isinstance(langs, list)
+        assert "ja" in langs
+        assert "en" in langs
+
+    def test_classmethod_callable_without_instance(self) -> None:
+        """pyttsx3 が無い環境でもクラスメソッドだけは呼べる(UI 用)。"""
+        # この test では fake_pyttsx3 fixture を受けない = pyttsx3 を mock しない
+        from voice_translator.tts.sapi_backend import SapiTtsBackend
+
+        # インスタンス化は失敗する可能性があるが、classmethod は呼べる
+        langs = SapiTtsBackend.supported_output_languages()
+        assert langs == ["ja", "en"]

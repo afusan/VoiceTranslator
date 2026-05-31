@@ -253,3 +253,118 @@ class TestRefreshTargetLanguageChoices:
     def test_dropdown_missing_is_noop(self, stub_tgt_panel) -> None:
         stub_tgt_panel._tgt_dropdown = None
         stub_tgt_panel._refresh_target_language_choices("any", notify_fallback=True)
+
+
+@pytest.fixture()
+def stub_tts_panel():
+    """TTS 互換チェック用 shim。"""
+    from voice_translator.gui.settings_panel import SettingsPanel
+
+    shim = MagicMock(spec=SettingsPanel)
+    shim._check_tts_output_lang_compatibility = (
+        SettingsPanel._check_tts_output_lang_compatibility.__get__(shim)
+    )
+    shim._notify_tts_unsupported_lang = (
+        SettingsPanel._notify_tts_unsupported_lang.__get__(shim)
+    )
+    shim._show_message = MagicMock()
+    shim._controller = MagicMock(name="controller")
+    shim._banner = MagicMock(name="banner")
+    return shim
+
+
+def _make_setting_fn(table: dict):
+    """get_setting(*keys, default=None) のモック実装を返す。"""
+    def fn(*keys, default=None):
+        return table.get(keys, default)
+    return fn
+
+
+class TestCheckTtsOutputLangCompatibility:
+    """`_check_tts_output_lang_compatibility` の挙動。
+
+    現在の TTS backend が現在の出力言語(tgt)を読めない場合に警告バナーを出す
+    こと、対応する場合や情報不十分な場合は黙ること、を検証する。
+    """
+
+    def test_warns_when_tts_does_not_support_current_tgt(
+        self, stub_tts_panel,
+    ) -> None:
+        stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
+            ("backends", "tts"): "fake_tts",
+            ("languages", "tgt"): "fr",
+        })
+        stub_tts_panel._controller.get_supported_output_languages.return_value = [
+            "en", "ja",
+        ]
+
+        stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=True)
+
+        stub_tts_panel._banner.show_warning.assert_called_once()
+
+    def test_no_warn_when_tts_supports_current_tgt(self, stub_tts_panel) -> None:
+        stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
+            ("backends", "tts"): "fake_tts",
+            ("languages", "tgt"): "ja",
+        })
+        stub_tts_panel._controller.get_supported_output_languages.return_value = [
+            "en", "ja",
+        ]
+
+        stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=True)
+
+        stub_tts_panel._banner.show_warning.assert_not_called()
+
+    def test_no_warn_when_supported_list_empty(self, stub_tts_panel) -> None:
+        """未知(空リスト)backend は警告を出さない(誤検知より沈黙)。"""
+        stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
+            ("backends", "tts"): "fake_tts",
+            ("languages", "tgt"): "fr",
+        })
+        stub_tts_panel._controller.get_supported_output_languages.return_value = []
+
+        stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=True)
+
+        stub_tts_panel._banner.show_warning.assert_not_called()
+
+    def test_no_warn_when_notify_fallback_false(self, stub_tts_panel) -> None:
+        """起動時の初期化(notify_fallback=False)では対応外でも警告しない。"""
+        stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
+            ("backends", "tts"): "fake_tts",
+            ("languages", "tgt"): "fr",
+        })
+        stub_tts_panel._controller.get_supported_output_languages.return_value = [
+            "en", "ja",
+        ]
+
+        stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=False)
+
+        stub_tts_panel._banner.show_warning.assert_not_called()
+
+    def test_no_warn_when_no_tts_backend(self, stub_tts_panel) -> None:
+        """TTS backend 未選択時は何もしない。"""
+        stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
+            ("backends", "tts"): "",
+            ("languages", "tgt"): "fr",
+        })
+
+        stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=True)
+
+        stub_tts_panel._banner.show_warning.assert_not_called()
+
+    def test_falls_back_to_show_message_when_banner_missing(
+        self, stub_tts_panel,
+    ) -> None:
+        """banner=None でも _show_message に落ちて例外にならない。"""
+        stub_tts_panel._banner = None
+        stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
+            ("backends", "tts"): "fake_tts",
+            ("languages", "tgt"): "fr",
+        })
+        stub_tts_panel._controller.get_supported_output_languages.return_value = [
+            "en", "ja",
+        ]
+
+        stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=True)
+
+        stub_tts_panel._show_message.assert_called_once()
