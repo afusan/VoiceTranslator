@@ -30,6 +30,7 @@ def patched_backend_setup(monkeypatch):
         ("voice_translator.asr.faster_whisper_backend", "FasterWhisperAsrBackend"),
         ("voice_translator.asr.openai_whisper_backend", "OpenAiWhisperAsrBackend"),
         ("voice_translator.asr.openai_whisper_api_backend", "OpenAiWhisperApiAsrBackend"),
+        ("voice_translator.asr.google_stt_backend", "GoogleSttAsrBackend"),
         ("voice_translator.translator.nllb200_backend", "Nllb200TranslatorBackend"),
         ("voice_translator.tts.sapi_backend", "SapiTtsBackend"),
         ("voice_translator.output.soundcard_backend", "SoundcardOutputBackend"),
@@ -59,10 +60,10 @@ class TestRegisterDefaultBackends:
         assert registry.list_names(LayerKind.VAD) == [
             "silero", "webrtcvad", "pyannote", "pvcobra",
         ]
-        # Phase F2 で openai-whisper(公式)+ OpenAI Whisper API を追加。
+        # Phase F2 で openai-whisper(公式)+ OpenAI Whisper API + Google STT を追加。
         # MVP の faster-whisper が先頭。
         assert registry.list_names(LayerKind.ASR) == [
-            "faster_whisper", "openai_whisper", "openai_whisper_api",
+            "faster_whisper", "openai_whisper", "openai_whisper_api", "google_stt",
         ]
         assert registry.list_names(LayerKind.TRANSLATOR) == ["nllb200"]
         assert registry.list_names(LayerKind.TTS) == ["sapi"]

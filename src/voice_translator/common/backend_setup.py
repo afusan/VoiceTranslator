@@ -29,6 +29,7 @@ def register_default_backends(
     from voice_translator.asr.openai_whisper_api_backend import (
         OpenAiWhisperApiAsrBackend,
     )
+    from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
     from voice_translator.capture.soundcard_backend import SoundcardCaptureBackend
     from voice_translator.output.soundcard_backend import SoundcardOutputBackend
     from voice_translator.translator.nllb200_backend import Nllb200TranslatorBackend
@@ -245,6 +246,28 @@ def register_default_backends(
             service_name="OpenAI Whisper API",
             terms_url="https://openai.com/policies/terms-of-use",
             notes="OpenAI Whisper API。25MB/req 制限あり。",
+        ),
+    )
+
+    # Google Cloud STT(クラウド)。サービスアカウント JSON ファイル認証。
+    # extras: `asr-google-stt`(google-cloud-speech)。
+    gstt_default_lang = _read_str(
+        config, ("backends_config", "google_stt", "default_language"), default="en"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "google_stt",
+        lambda: GoogleSttAsrBackend(
+            credentials_path=_get_credential(config, "google_stt", "credentials_path"),
+            default_language=gstt_default_lang,
+        ),
+        backend_cls=GoogleSttAsrBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="Google Cloud Speech-to-Text",
+            terms_url="https://cloud.google.com/speech-to-text",
+            notes="Google Cloud STT。サービスアカウント JSON で認証。",
         ),
     )
 
