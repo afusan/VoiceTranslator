@@ -30,6 +30,7 @@ def register_default_backends(
         OpenAiWhisperApiAsrBackend,
     )
     from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
+    from voice_translator.asr.deepgram_backend import DeepgramAsrBackend
     from voice_translator.capture.soundcard_backend import SoundcardCaptureBackend
     from voice_translator.output.soundcard_backend import SoundcardOutputBackend
     from voice_translator.translator.nllb200_backend import Nllb200TranslatorBackend
@@ -268,6 +269,28 @@ def register_default_backends(
             service_name="Google Cloud Speech-to-Text",
             terms_url="https://cloud.google.com/speech-to-text",
             notes="Google Cloud STT。サービスアカウント JSON で認証。",
+        ),
+    )
+
+    # Deepgram(クラウド)。prerecorded 短期接続パターン。
+    # extras: `asr-deepgram`(deepgram-sdk)。
+    dg_model = _read_str(
+        config, ("backends_config", "deepgram", "model"), default="nova-3"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "deepgram",
+        lambda: DeepgramAsrBackend(
+            api_key=_get_credential(config, "deepgram", "api_key"),
+            model=dg_model,
+        ),
+        backend_cls=DeepgramAsrBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="Deepgram",
+            terms_url="https://deepgram.com/terms",
+            notes="Deepgram Nova-3。prerecorded 同期 API(短期接続)。",
         ),
     )
 

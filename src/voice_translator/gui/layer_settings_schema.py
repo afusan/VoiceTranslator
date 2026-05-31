@@ -376,6 +376,16 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("google_stt"),
+        # Deepgram(クラウド)。モデル名のみ露出(現状 nova-3)。
+        SettingField(
+            keys=("backends_config", "deepgram", "model"),
+            label="Deepgram: モデル",
+            field_type="str",
+            default="nova-3",
+            applies_when_backend="deepgram",
+            help_text="Deepgram のモデル名(例: nova-3 / nova-2)。既定は nova-3。",
+        ),
+        _auto_load_toggle("deepgram"),
     ],
     LayerKind.TRANSLATOR: [
         SettingField(

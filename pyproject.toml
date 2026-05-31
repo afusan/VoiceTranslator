@@ -71,6 +71,11 @@ asr-openai-api = [
 asr-google-stt = [
     "google-cloud-speech>=2.27",
 ]
+# Deepgram(クラウド)。Nova-3 / prerecorded API。本ブランチではストリーミング
+# ではなく短期接続(1 発話の PCM を送って同期で結果取得)を採用。
+asr-deepgram = [
+    "deepgram-sdk>=3.7",
+]
 
 [tool.uv]
 conflicts = [
