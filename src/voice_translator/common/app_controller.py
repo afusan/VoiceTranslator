@@ -108,6 +108,10 @@ class AppController:
         # on_fatal/on_warn は (message, *, exc, stage, seq_id) を受ける。
         # GUI 側で stage / seq_id を使わなければ **kwargs で吸収可。
         self._on_utterance_done: Callable[[dict], None] = lambda r: None
+        # 音声合成完了の時点で UI に履歴を出すための前倒し通知。
+        # record は ledger のスナップショット(`peek`)で、t_playback_start / t_playback
+        # は含まれていない可能性あり。レイテンシ計算は on_utterance_done 側で行う。
+        self._on_text_ready: Callable[[dict], None] = lambda r: None
         self._on_fatal: Callable[..., None] = lambda m, **_kw: None
         self._on_warn: Callable[..., None] = lambda m, **_kw: None
         # 旧 single callback(後方互換)。新規コードは add_status_listener() を使う。
@@ -134,12 +138,15 @@ class AppController:
         self,
         *,
         on_utterance_done: Callable[[dict], None] | None = None,
+        on_text_ready: Callable[[dict], None] | None = None,
         on_fatal: Callable[..., None] | None = None,
         on_warn: Callable[..., None] | None = None,
         on_status_change: UiStatusListener | None = None,
     ) -> None:
         if on_utterance_done is not None:
             self._on_utterance_done = on_utterance_done
+        if on_text_ready is not None:
+            self._on_text_ready = on_text_ready
         if on_fatal is not None:
             self._on_fatal = on_fatal
         if on_warn is not None:
@@ -533,6 +540,17 @@ class AppController:
             self._emit_status(layer, ModelStatus.INIT)
             self._load_layer_locked(layer)
 
+    def evict_model_layer(self, layer: LayerKind) -> None:
+        """単一レイヤの backend を破棄するが、再 load はしない(2026-05-30)。
+
+        用途: LayerSettingsDialog の保存時に backends_config / 認証情報が変わったときに
+        呼ぶ。再 load はユーザが ControlPanel の中央「↻ ロード」を押したタイミングで
+        `load_models_async` 経由で行われる(冪等 load なので未ロードのレイヤだけ作る)。
+        """
+        with self._load_lock:
+            self._evict_backend_locked(layer)
+            self._emit_status(layer, ModelStatus.INIT)
+
     def _load_layer_locked(self, layer: LayerKind) -> None:
         """`load_lock` を保持中の caller から呼ぶ実体。
 
@@ -925,6 +943,7 @@ class AppController:
                 src_lang=src_lang,
                 tgt_lang=tgt_lang,
                 on_utterance_done=self._handle_utterance_done,
+                on_text_ready=self._handle_text_ready,
                 on_dropped=self._handle_dropped,
                 captured_queue_max_bytes=captured_max_bytes,
                 synthesized_queue_max_bytes=synthesized_max_bytes,
@@ -989,6 +1008,18 @@ class AppController:
         if not name:
             raise KeyError(f"backends.{layer.value} が設定されていません")
         return self._registry.create(layer, name)
+
+    def _handle_text_ready(self, record: dict) -> None:
+        """TTS 完了時に Coordinator から呼ばれる(UI 履歴の前倒し通知)。
+
+        ledger スナップショットを UI にそのまま流す。再生待ち / 再生時間ぶんだけ
+        履歴表示を早められる。レイテンシ計算や CSV ロガーへの記録は
+        `_handle_utterance_done`(Output 完了時)で従来通り行う。
+        """
+        try:
+            self._on_text_ready(record)
+        except Exception:  # noqa: BLE001
+            self._logger.exception("UI 前倒し通知コールバックで例外")
 
     def _handle_utterance_done(self, record: dict) -> None:
         """Output 完了時に Coordinator から呼ばれる。

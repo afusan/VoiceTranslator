@@ -186,6 +186,7 @@ def _build(
     chunks: list[PcmChunk] | None = None,
     asr: AsrBackend | None = None,
     on_done: Callable[[dict], None] | None = None,
+    on_text_ready: Callable[[dict], None] | None = None,
     on_dropped: Callable[[list[int], str], None] | None = None,
     # PCM 系はバイト基準。160 サンプル float32 = 640B。
     # default は十分大きい値(オーバーフローしない)、テスト側で 1 等を渡すと最小1件保持挙動になる。
@@ -210,6 +211,7 @@ def _build(
         src_lang="en",
         tgt_lang="ja",
         on_utterance_done=on_done,
+        on_text_ready=on_text_ready,
         on_dropped=on_dropped,
         read_timeout=0.01,
         captured_queue_max_bytes=captured_queue_max_bytes,
@@ -285,6 +287,32 @@ class TestPipelineLifecycle:
         # 9999 は drain で消えるはず
         assert 9999 not in coord.ledger
         coord.stop()
+
+
+# ============================================================
+# on_text_ready 前倒し通知(TTS 完了時点で UI に流す)
+# ============================================================
+class TestPipelineTextReadyCallback:
+    def test_text_ready_fires_per_utterance_with_text_payload(self) -> None:
+        text_ready: list[dict] = []
+        done: list[dict] = []
+        coord, output = _build(
+            chunks=[np.zeros(160, dtype=np.float32) for _ in range(3)],
+            on_done=lambda r: done.append(r),
+            on_text_ready=lambda r: text_ready.append(r),
+        )
+        coord.start(capture_source_id="dummy", output_device_id="dummy_out")
+        assert _wait_until(lambda: len(output.played) >= 3)
+        coord.stop()
+        # 前倒し通知と完了通知は同数発火し、テキスト/言語が揃っている
+        assert len(text_ready) == len(done) >= 3
+        for r in text_ready:
+            assert r["src_text"] == "hello"
+            assert r["tgt_text"] == "hello->ja"
+            assert r["src_lang"] == "en"
+            assert r["tgt_lang"] == "ja"
+            # ledger スナップショット由来なので少なくとも TTS 完了までは含む
+            assert "t_tts" in r.get("timeline", {})
 
 
 # ============================================================

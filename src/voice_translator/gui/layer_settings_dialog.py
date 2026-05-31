@@ -81,6 +81,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         self._status_subscription: "Subscription | None" = None
 
         self.title(f"{_LAYER_DISPLAY.get(layer, layer.value)} の設定")
+        # 初期 geometry は仮値。_build_widgets 後に必要高を計算して上書きする(2026-05-30)
         self.geometry("560x520")
         self.transient(parent)  # 親の前面に固定
         try:
@@ -91,6 +92,25 @@ class LayerSettingsDialog(ctk.CTkToplevel):
 
         self._build_widgets()
         self._subscribe_status()
+        # 動的サイズ調整: フィールド数で 保存/キャンセル が画面外に押し出される問題を解消。
+        # 上限 800 で画面端を超えないようにし、超える場合は将来 ScrollableFrame 化が必要
+        # (pendList 候補)。下限 420 はフィールド少数の backend でもボタンが見える保証。
+        self._adjust_geometry_to_content()
+
+    def _adjust_geometry_to_content(self) -> None:
+        """ビルド後の必要高さに合わせて geometry を再設定する。
+
+        widget 構築直後だと layout が未確定なので `update_idletasks` を挟む。
+        高さは下限 420 / 上限 800 にクランプして、極端な値を避ける。
+        失敗(widget 破棄済み等)は黙殺し、フォールバック geometry を残す。
+        """
+        try:
+            self.update_idletasks()
+            reqh = int(self.winfo_reqheight())
+            target_h = min(max(reqh + 20, 420), 800)
+            self.geometry(f"560x{target_h}")
+        except Exception:  # noqa: BLE001
+            pass
 
     # ----------------------------------------------------------
     def _build_widgets(self) -> None:
@@ -441,6 +461,11 @@ class LayerSettingsDialog(ctk.CTkToplevel):
 
         変換失敗が1つでもあれば書き込まず、エラーメッセージを下部に表示する。
         button / label_readonly は書き込み対象外。
+
+        2026-05-30: per-layer 「(再)ロード」ボタンを UI から外したため、本レイヤ選択中
+        backend の `backends_config` 値が変わった場合は **保存時に自動 evict** する
+        (= 中央ロードボタン押下で新しい設定値で作り直される)。`auto_load` や
+        `pipeline.*` などの「ロード時パラメータでない」キーは evict 対象外。
         """
         # 1) 全フィールドを変換(失敗があれば中止)
         new_values: list[tuple[tuple[str, ...], object]] = []
@@ -473,10 +498,28 @@ class LayerSettingsDialog(ctk.CTkToplevel):
                 return
             new_values.append((keys, value))
 
-        # 2) 書き戻し(ConfigStore 経路)
+        # 2) 書き戻し(ConfigStore 経路) — 書き込み前に旧値を控えて、変化検出に使う
+        current_backend = str(
+            self._controller.get_setting("backends", self._layer.value, default="")
+        )
+        backend_config_changed = False
         for keys, value in new_values:
+            old_value = self._controller.get_setting(*keys, default=None)
             self._controller.set_setting(*keys, value)
+            # backends_config.<current_backend>.* で値が変わったら自動 evict 対象
+            if (
+                len(keys) >= 3
+                and keys[0] == "backends_config"
+                and keys[1] == current_backend
+                and keys[2] != "auto_load"  # auto_load は load 時パラメータでないので除外
+                and old_value != value
+            ):
+                backend_config_changed = True
+
         # 認証情報(CredentialsStore 経路)
+        # 認証情報も「load 時に backend に注入される値」なので、変更があれば evict 対象
+        if credential_updates:
+            backend_config_changed = True
         for backend, key_name, value in credential_updates:
             try:
                 self._controller.set_credential(backend, key_name, value)
@@ -486,12 +529,32 @@ class LayerSettingsDialog(ctk.CTkToplevel):
                 )
                 return
 
-        self._message_label.configure(
-            text="保存しました。pipeline 値は次の「▶ 開始」で反映されます。",
-            text_color="#16a34a",
-        )
+        # 3) 設定変更があれば該当レイヤを evict(中央ロードボタン押下で再読込される)
+        if backend_config_changed:
+            self._evict_current_layer()
+            msg = "保存しました。中央「↻ ロード」ボタンで新しい設定を反映してください。"
+        else:
+            msg = "保存しました。pipeline 値は次の「▶ 開始」で反映されます。"
+
+        self._message_label.configure(text=msg, text_color="#16a34a")
         # 短いタイマで閉じる(成功メッセージを一瞬見せる)
         self.after(800, self._dismiss)
+
+    def _evict_current_layer(self) -> None:
+        """本ダイアログの layer の backend を evict する(設定変更を反映する準備)。
+
+        evict 後 backend は INIT 状態に戻り、status は AppController 経由で UI に通知される
+        ので、SettingsPanel の status label が「Init」に切り替わる。ユーザは中央の
+        「↻ ロード」を押すと新しい設定値で再ロードされる。
+        失敗(動作中のレイヤを触る等)は黙殺してメッセージのみで知らせる。
+        """
+        try:
+            # 直接 _evict_backend_locked を呼ぶのではなく、AppController 経由のヘルパ越し
+            # に行う。動作中(coordinator が backend を握っている)時は呼ばない方が安全だが、
+            # この箇所は dialog 保存なので動作中であることは稀。controller 側で例外を握る。
+            self._controller.evict_model_layer(self._layer)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _on_cancel(self) -> None:
         self._dismiss()
