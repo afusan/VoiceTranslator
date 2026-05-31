@@ -148,12 +148,20 @@ class CredentialField:
 
     1 行 = 1 入力欄。`secret=True` ならマスク表示(API key 等)、False なら平文
     (region コード等)。汎用 `CredentialDialog` がこの spec からフィールドを動的生成する。
+
+    `field_type`:
+    - `"text"` (既定): 通常の 1 行テキスト入力。`secret=True` でマスク表示。
+    - `"file"`: ファイル選択ボタン付き入力(サービスアカウント JSON 等)。
+      ファイル選択ダイアログで選んだ絶対パス文字列を CredentialsStore に保存する。
+      `secret` は False が想定だが、True なら入力値もマスクされる。
     """
 
     key_name: str               # 内部 ID(`CredentialsStore` の key 名と直結)
     label: str                  # UI ラベル(日本語 OK)
     secret: bool = True         # True=マスク入力 / False=平文表示
     help_text: str = ""         # 入力欄下のヘルプ(1 行)
+    field_type: str = "text"    # "text" / "file"
+    file_extensions: tuple[tuple[str, str], ...] = ()  # field_type="file" 用: [(label, "*.json"), ...]
 
 
 @dataclass(frozen=True)

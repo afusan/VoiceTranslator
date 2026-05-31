@@ -25,6 +25,12 @@ def register_default_backends(
     渡さない場合は各バックエンドのコンストラクタ既定値が使われる。
     """
     from voice_translator.asr.faster_whisper_backend import FasterWhisperAsrBackend
+    from voice_translator.asr.openai_whisper_backend import OpenAiWhisperAsrBackend
+    from voice_translator.asr.openai_whisper_api_backend import (
+        OpenAiWhisperApiAsrBackend,
+    )
+    from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
+    from voice_translator.asr.deepgram_backend import DeepgramAsrBackend
     from voice_translator.capture.soundcard_backend import SoundcardCaptureBackend
     from voice_translator.output.soundcard_backend import SoundcardOutputBackend
     from voice_translator.translator.nllb200_backend import Nllb200TranslatorBackend
@@ -199,6 +205,92 @@ def register_default_backends(
             model_size=fw_model_size,
             device=fw_device,
             compute_type=fw_compute_type,
+        ),
+        backend_cls=FasterWhisperAsrBackend,
+    )
+
+    # openai-whisper(公式)。faster-whisper と並走する別 backend。
+    # 重い whisper / torch の import は backend インスタンス生成時に行う。
+    # extras: `[project.optional-dependencies].asr-whisper-official` (後述)
+    ow_model_size = _read_str(
+        config, ("backends_config", "openai_whisper", "model_size"), default="small"
+    )
+    ow_device = _read_str(
+        config, ("backends_config", "openai_whisper", "device"), default="auto"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "openai_whisper",
+        lambda: OpenAiWhisperAsrBackend(
+            model_size=ow_model_size,
+            device=ow_device,
+        ),
+        backend_cls=OpenAiWhisperAsrBackend,
+    )
+
+    # OpenAI Whisper API(クラウド)。extras: `asr-openai-api`(httpx)。
+    # capabilities=is_cloud=True で同意ダイアログが自動表示される(Phase D)。
+    owapi_model = _read_str(
+        config, ("backends_config", "openai_whisper_api", "model"), default="whisper-1"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "openai_whisper_api",
+        lambda: OpenAiWhisperApiAsrBackend(
+            api_key=_get_credential(config, "openai_whisper_api", "api_key"),
+            model=owapi_model,
+        ),
+        backend_cls=OpenAiWhisperApiAsrBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="OpenAI Whisper API",
+            terms_url="https://openai.com/policies/terms-of-use",
+            notes="OpenAI Whisper API。25MB/req 制限あり。",
+        ),
+    )
+
+    # Google Cloud STT(クラウド)。サービスアカウント JSON ファイル認証。
+    # extras: `asr-google-stt`(google-cloud-speech)。
+    gstt_default_lang = _read_str(
+        config, ("backends_config", "google_stt", "default_language"), default="en"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "google_stt",
+        lambda: GoogleSttAsrBackend(
+            credentials_path=_get_credential(config, "google_stt", "credentials_path"),
+            default_language=gstt_default_lang,
+        ),
+        backend_cls=GoogleSttAsrBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="Google Cloud Speech-to-Text",
+            terms_url="https://cloud.google.com/speech-to-text",
+            notes="Google Cloud STT。サービスアカウント JSON で認証。",
+        ),
+    )
+
+    # Deepgram(クラウド)。prerecorded 短期接続パターン。
+    # extras: `asr-deepgram`(deepgram-sdk)。
+    dg_model = _read_str(
+        config, ("backends_config", "deepgram", "model"), default="nova-3"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "deepgram",
+        lambda: DeepgramAsrBackend(
+            api_key=_get_credential(config, "deepgram", "api_key"),
+            model=dg_model,
+        ),
+        backend_cls=DeepgramAsrBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="Deepgram",
+            terms_url="https://deepgram.com/terms",
+            notes="Deepgram Nova-3。prerecorded 同期 API(短期接続)。",
         ),
     )
 

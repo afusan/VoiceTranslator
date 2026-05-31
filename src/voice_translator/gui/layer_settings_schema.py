@@ -220,6 +220,14 @@ def _faster_whisper_model_options(
     return FasterWhisperAsrBackend.recommended_models()
 
 
+def _openai_whisper_model_options(
+    controller: "AppController", layer: LayerKind  # noqa: ARG001
+) -> list[ModelInfo]:
+    """openai-whisper(公式)の推奨モデル一覧を返す。"""
+    from voice_translator.asr.openai_whisper_backend import OpenAiWhisperAsrBackend
+    return OpenAiWhisperAsrBackend.recommended_models()
+
+
 def _recent_durations_label(layer: LayerKind) -> "SettingField":
     """直近処理時間平均の表示ラベル(Phase C2)。layer の状態変化に反応して更新される。
 
@@ -329,6 +337,55 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("faster_whisper"),
+        # openai-whisper(公式)用の同等項目。Whisper サイズ系は共通名だが、backend が
+        # 別なので config キーも別系統(backends_config.openai_whisper.*)。
+        SettingField(
+            keys=("backends_config", "openai_whisper", "model_size"),
+            label="Whisper モデル(公式)",
+            field_type="dropdown",
+            default="small",
+            applies_when_backend="openai_whisper",
+            options_fn=_openai_whisper_model_options,
+            help_text=(
+                "openai-whisper(公式)のモデルサイズ。faster-whisper より重い傾向。"
+                "tiny/base/small/medium/large-v3 から選択。"
+            ),
+        ),
+        _auto_load_toggle("openai_whisper"),
+        # OpenAI Whisper API(クラウド)用の項目。モデル名(現状 whisper-1 のみ)を露出。
+        SettingField(
+            keys=("backends_config", "openai_whisper_api", "model"),
+            label="OpenAI API: モデル",
+            field_type="str",
+            default="whisper-1",
+            applies_when_backend="openai_whisper_api",
+            help_text="OpenAI Whisper API のモデル名。現状は `whisper-1` のみ。",
+        ),
+        _auto_load_toggle("openai_whisper_api"),
+        # Google Cloud STT(クラウド)。auto 検出非対応のため、auto を選んだ時に
+        # 何の言語で投げるかを「default_language」で指定する。
+        SettingField(
+            keys=("backends_config", "google_stt", "default_language"),
+            label="Google STT: default 言語(auto 時)",
+            field_type="str",
+            default="en",
+            applies_when_backend="google_stt",
+            help_text=(
+                "Google STT は自動言語検出に未対応のため、入力言語が `auto` のときは"
+                "ここで指定した言語(ISO 639-1)で API を呼ぶ。"
+            ),
+        ),
+        _auto_load_toggle("google_stt"),
+        # Deepgram(クラウド)。モデル名のみ露出(現状 nova-3)。
+        SettingField(
+            keys=("backends_config", "deepgram", "model"),
+            label="Deepgram: モデル",
+            field_type="str",
+            default="nova-3",
+            applies_when_backend="deepgram",
+            help_text="Deepgram のモデル名(例: nova-3 / nova-2)。既定は nova-3。",
+        ),
+        _auto_load_toggle("deepgram"),
     ],
     LayerKind.TRANSLATOR: [
         SettingField(

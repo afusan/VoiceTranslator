@@ -527,24 +527,83 @@ class TestBackendSwitch:
 # Phase F で実 backend クラスを書いたら、skip を外して実装に対して検証する。
 # 実 API key は環境変数 / pytest 引数 / モック HTTP のいずれかで注入する。
 # ============================================================
-@pytest.mark.skip(reason="Phase F: OpenAI Whisper API backend 実装後に有効化")
 class TestOpenAIWhisperApiCredentials:
     """OpenAI Whisper API backend の認証契約。
 
-    Phase F での実装後の流れ:
-    1. `src/voice_translator/asr/openai_whisper_api_backend.py` を作る
-    2. backend_setup.py に capabilities + backend_cls 付きで register
-    3. 環境変数 `OPENAI_API_KEY_VALID` / `OPENAI_API_KEY_INVALID` をセット、もしくは
-       httpx をモックして 401 / 200 / network error を再現
-    4. このクラスの @pytest.mark.skip を外す
+    Phase E-2 の認証フロー(spec → verify → CredentialsStore → MISSING_CREDENTIALS
+    ゲート → invalidate)を契約として表明する。実 API は呼ばず httpx をモック。
     """
 
-    def test_credential_spec_has_api_key(self) -> None: ...
-    def test_verify_with_valid_key_returns_ok(self) -> None: ...
-    def test_verify_with_invalid_key_returns_failure_401(self) -> None: ...
-    def test_verify_with_network_error_returns_failure_no_exception(self) -> None: ...
-    def test_verify_with_quota_exceeded_returns_failure(self) -> None: ...
-    def test_runtime_401_triggers_invalidate_verification(self) -> None: ...
+    def _backend_cls(self):
+        from voice_translator.asr.openai_whisper_api_backend import (
+            OpenAiWhisperApiAsrBackend,
+        )
+        return OpenAiWhisperApiAsrBackend
+
+    def test_credential_spec_has_api_key(self) -> None:
+        spec = self._backend_cls().credential_spec()
+        assert any(f.key_name == "api_key" and f.secret for f in spec)
+
+    def test_verify_with_valid_key_returns_ok(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        resp = MagicMock(status_code=200)
+        fake.get = MagicMock(return_value=resp)
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        result = self._backend_cls().verify_credentials({"api_key": "sk-valid"})
+        assert result.ok is True
+
+    def test_verify_with_invalid_key_returns_failure_401(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=401))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        result = self._backend_cls().verify_credentials({"api_key": "sk-bad"})
+        assert result.ok is False
+
+    def test_verify_with_network_error_returns_failure_no_exception(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(side_effect=RuntimeError("connection refused"))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        # 例外は呼び出し元に伝播せず VerifyResult で表現される
+        result = self._backend_cls().verify_credentials({"api_key": "sk-test"})
+        assert result.ok is False
+        assert result.message  # 何らかの message が入る
+
+    def test_verify_with_quota_exceeded_returns_failure(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=429))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        result = self._backend_cls().verify_credentials({"api_key": "sk-test"})
+        assert result.ok is False
+
+    def test_runtime_401_triggers_invalidate_verification(self, monkeypatch) -> None:
+        """transcribe 中の 401 は FatalError(=AppController が invalidate_verification を呼ぶ契約)。
+
+        ここでは backend が FatalError を投げるところまでを検証する
+        (invalidate_verification の呼び出し自体は AppController/Coordinator の責務)。
+        """
+        import sys
+
+        import numpy as np
+
+        from voice_translator.common.errors import FatalError
+
+        fake = MagicMock()
+        fake_client = MagicMock()
+        fake_client.post = MagicMock(return_value=MagicMock(status_code=401, text="bad key"))
+        fake.Client = MagicMock(return_value=fake_client)
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+
+        backend = self._backend_cls()(api_key="sk-bad")
+        with pytest.raises(FatalError):
+            backend.transcribe(np.zeros(16000, dtype=np.float32))
 
 
 @pytest.mark.skip(reason="Phase F: DeepL API backend 実装後に有効化")
@@ -589,16 +648,77 @@ class TestAwsTranscribeCredentials:
     def test_runtime_credential_error_triggers_invalidate_verification(self) -> None: ...
 
 
-@pytest.mark.skip(reason="Phase F: Google Cloud STT backend 実装後に有効化(file_picker 型も要追加)")
 class TestGoogleCloudSttCredentials:
     """Google Cloud STT backend の認証契約(サービスアカウント JSON ファイル方式)。
 
-    注: Phase D の password 型では JSON ファイルを扱えないため、Phase F 着手時に
-    schema 側で `file_picker` 型を追加するか、JSON 全体を巨大 password 文字列として
-    扱うかを決める必要がある。
+    feature/asr-picks で `CredentialField.field_type="file"` を追加し、JSON ファイル
+    パスを CredentialsStore に保存する形で対応した。`verify_credentials` は
+    `google.oauth2.service_account.Credentials.from_service_account_file` の
+    成否で判定する。
     """
 
-    def test_credential_spec_requires_service_account_json(self) -> None: ...
-    def test_verify_with_valid_json_returns_ok(self) -> None: ...
-    def test_verify_with_invalid_json_returns_failure(self) -> None: ...
-    def test_verify_with_expired_credentials_returns_failure(self) -> None: ...
+    def _backend_cls(self):
+        from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
+        return GoogleSttAsrBackend
+
+    def _setup_google_modules(self, monkeypatch, tmp_path, *, file_loader_side_effect=None):
+        """google.cloud.speech と google.oauth2.service_account をモック差し替え、
+        ダミー JSON ファイルパスを返す。"""
+        import sys
+
+        json_path = tmp_path / "fake_sa.json"
+        json_path.write_text('{"type": "service_account"}', encoding="utf-8")
+
+        fake_oauth_module = MagicMock()
+        fake_oauth_sa = MagicMock()
+        cred_class = MagicMock()
+        if file_loader_side_effect is not None:
+            cred_class.from_service_account_file = MagicMock(side_effect=file_loader_side_effect)
+        else:
+            cred_class.from_service_account_file = MagicMock(return_value=MagicMock(name="creds"))
+        fake_oauth_sa.Credentials = cred_class
+        fake_oauth_module.service_account = fake_oauth_sa
+
+        fake_speech = MagicMock()
+        fake_speech.SpeechClient = MagicMock(return_value=MagicMock(name="speech_client"))
+
+        fake_google_cloud = MagicMock()
+        fake_google_cloud.speech = fake_speech
+
+        monkeypatch.setitem(sys.modules, "google", MagicMock())
+        monkeypatch.setitem(sys.modules, "google.cloud", fake_google_cloud)
+        monkeypatch.setitem(sys.modules, "google.cloud.speech", fake_speech)
+        monkeypatch.setitem(sys.modules, "google.oauth2", fake_oauth_module)
+        monkeypatch.setitem(sys.modules, "google.oauth2.service_account", fake_oauth_sa)
+        return str(json_path)
+
+    def test_credential_spec_requires_service_account_json(self) -> None:
+        spec = self._backend_cls().credential_spec()
+        assert any(
+            f.key_name == "credentials_path" and f.field_type == "file"
+            for f in spec
+        )
+
+    def test_verify_with_valid_json_returns_ok(self, monkeypatch, tmp_path) -> None:
+        json_path = self._setup_google_modules(monkeypatch, tmp_path)
+        result = self._backend_cls().verify_credentials({"credentials_path": json_path})
+        assert result.ok is True
+
+    def test_verify_with_invalid_json_returns_failure(self, monkeypatch, tmp_path) -> None:
+        json_path = self._setup_google_modules(
+            monkeypatch, tmp_path,
+            file_loader_side_effect=ValueError("missing field 'private_key'"),
+        )
+        result = self._backend_cls().verify_credentials({"credentials_path": json_path})
+        assert result.ok is False
+
+    def test_verify_with_expired_credentials_returns_failure(self, monkeypatch, tmp_path) -> None:
+        """期限切れ/失効した鍵 → クライアント初期化は通っても認証エラーで弾かれる想定。
+        本ブランチではモック上で「初期化失敗」として一般化(具体的な期限切れ判定は
+        実 API でしか起きないため契約レベルではここまで)。"""
+        json_path = self._setup_google_modules(
+            monkeypatch, tmp_path,
+            file_loader_side_effect=RuntimeError("token expired"),
+        )
+        result = self._backend_cls().verify_credentials({"credentials_path": json_path})
+        assert result.ok is False

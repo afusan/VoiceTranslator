@@ -192,26 +192,12 @@ class FasterWhisperAsrBackend(AsrBackend):
     # ----------------------------------------------------------
     # 対応言語の宣言(UI の言語プルダウン連動用)
     # ----------------------------------------------------------
-    # Whisper の対応言語コード(`whisper.tokenizer.LANGUAGES` 由来)。
-    # ハードコードしている理由は、faster-whisper 依存を import せずに UI から問い合わせ
-    # 可能にするため(設定ダイアログを開いただけで重い依存を引きずらない)。
-    # 上流更新時はここを追従更新する。`common/languages.py` に存在するコードのみを採用。
-    _WHISPER_LANGUAGES: tuple[str, ...] = (
-        "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo",
-        "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es",
-        "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw",
-        "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja",
-        "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo",
-        "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
-        "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt",
-        "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq",
-        "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl",
-        "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh",
-    )
-
+    # Whisper 99 言語は `common/whisper_languages.py` に共通定数として集約。
+    # faster-whisper / openai-whisper / OpenAI Whisper API の 3 backend で共有する。
     @classmethod
     def supported_input_languages(cls) -> list[str]:
-        return list(cls._WHISPER_LANGUAGES)
+        from voice_translator.common.whisper_languages import WHISPER_INPUT_LANGUAGES
+        return list(WHISPER_INPUT_LANGUAGES)
 
     @classmethod
     def supports_auto_detect(cls) -> bool:

@@ -56,6 +56,26 @@ vad-extra = [
     "pyannote.audio>=4.0",
     "pvcobra>=2.0",
 ]
+# Phase F2: 追加の ASR バックエンド。配布方針上、MVP の faster-whisper を
+# floor とし、別実装が欲しいユーザだけ extras で追加できる構成にする。
+# openai-whisper(公式)は PyTorch 直で重め。faster-whisper と並走する比較対象として用意。
+asr-whisper-official = [
+    "openai-whisper>=20240930",
+]
+# OpenAI Whisper API(クラウド)。HTTP クライアントを別 extras に切り出し、
+# 後続のクラウド backend(DeepL / Anthropic 等)から共有できるようにする。
+asr-openai-api = [
+    "httpx>=0.27",
+]
+# Google Cloud STT(クラウド)。サービスアカウント JSON 認証。
+asr-google-stt = [
+    "google-cloud-speech>=2.27",
+]
+# Deepgram(クラウド)。Nova-3 / prerecorded API。本ブランチではストリーミング
+# ではなく短期接続(1 発話の PCM を送って同期で結果取得)を採用。
+asr-deepgram = [
+    "deepgram-sdk>=3.7",
+]
 
 [tool.uv]
 conflicts = [
