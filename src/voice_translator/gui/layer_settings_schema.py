@@ -220,6 +220,14 @@ def _faster_whisper_model_options(
     return FasterWhisperAsrBackend.recommended_models()
 
 
+def _openai_whisper_model_options(
+    controller: "AppController", layer: LayerKind  # noqa: ARG001
+) -> list[ModelInfo]:
+    """openai-whisper(公式)の推奨モデル一覧を返す。"""
+    from voice_translator.asr.openai_whisper_backend import OpenAiWhisperAsrBackend
+    return OpenAiWhisperAsrBackend.recommended_models()
+
+
 def _recent_durations_label(layer: LayerKind) -> "SettingField":
     """直近処理時間平均の表示ラベル(Phase C2)。layer の状態変化に反応して更新される。
 
@@ -329,6 +337,21 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("faster_whisper"),
+        # openai-whisper(公式)用の同等項目。Whisper サイズ系は共通名だが、backend が
+        # 別なので config キーも別系統(backends_config.openai_whisper.*)。
+        SettingField(
+            keys=("backends_config", "openai_whisper", "model_size"),
+            label="Whisper モデル(公式)",
+            field_type="dropdown",
+            default="small",
+            applies_when_backend="openai_whisper",
+            options_fn=_openai_whisper_model_options,
+            help_text=(
+                "openai-whisper(公式)のモデルサイズ。faster-whisper より重い傾向。"
+                "tiny/base/small/medium/large-v3 から選択。"
+            ),
+        ),
+        _auto_load_toggle("openai_whisper"),
     ],
     LayerKind.TRANSLATOR: [
         SettingField(

@@ -56,6 +56,12 @@ vad-extra = [
     "pyannote.audio>=4.0",
     "pvcobra>=2.0",
 ]
+# Phase F2: 追加の ASR バックエンド。配布方針上、MVP の faster-whisper を
+# floor とし、別実装が欲しいユーザだけ extras で追加できる構成にする。
+# openai-whisper(公式)は PyTorch 直で重め。faster-whisper と並走する比較対象として用意。
+asr-whisper-official = [
+    "openai-whisper>=20240930",
+]
 
 [tool.uv]
 conflicts = [

@@ -25,6 +25,7 @@ def register_default_backends(
     渡さない場合は各バックエンドのコンストラクタ既定値が使われる。
     """
     from voice_translator.asr.faster_whisper_backend import FasterWhisperAsrBackend
+    from voice_translator.asr.openai_whisper_backend import OpenAiWhisperAsrBackend
     from voice_translator.capture.soundcard_backend import SoundcardCaptureBackend
     from voice_translator.output.soundcard_backend import SoundcardOutputBackend
     from voice_translator.translator.nllb200_backend import Nllb200TranslatorBackend
@@ -200,6 +201,26 @@ def register_default_backends(
             device=fw_device,
             compute_type=fw_compute_type,
         ),
+        backend_cls=FasterWhisperAsrBackend,
+    )
+
+    # openai-whisper(公式)。faster-whisper と並走する別 backend。
+    # 重い whisper / torch の import は backend インスタンス生成時に行う。
+    # extras: `[project.optional-dependencies].asr-whisper-official` (後述)
+    ow_model_size = _read_str(
+        config, ("backends_config", "openai_whisper", "model_size"), default="small"
+    )
+    ow_device = _read_str(
+        config, ("backends_config", "openai_whisper", "device"), default="auto"
+    )
+    registry.register(
+        LayerKind.ASR,
+        "openai_whisper",
+        lambda: OpenAiWhisperAsrBackend(
+            model_size=ow_model_size,
+            device=ow_device,
+        ),
+        backend_cls=OpenAiWhisperAsrBackend,
     )
 
     # NLLB-200 の device を config から取る
