@@ -42,6 +42,20 @@
 
 ---
 
+## [⏳保留 2026-05-31] TTS 音声クローニング(Voice Cloning)対応
+- **対象**: ElevenLabs Instant Voice Cloning(IVC, 1 分音声 → 即 voice_id 発行)等、ユーザのサンプル音声から voice を作る機能。Coqui XTTS-v2 のような zero-shot ローカルクローニングも将来候補。
+- **背景**: `feature/tts-picks` 検討時に挙がった機能。今回ピックの 4 backend(Piper / ElevenLabs / OpenAI TTS / Google Cloud TTS)は **全てプリメイド voice を持ち、クローニング無しで完結する** ため、MVP の TTS としては不要と判断。
+- **対応の見送り理由**: プリメイド voice(Piper の HF 配布モデル / ElevenLabs の Rachel 等 30 種 / OpenAI 6 voice / Google の Wavenet 多数)で MVP は十分成立。アプリ内 UI(サンプル音声選択 / 一覧 / 削除)+ paid 限定 API のテスト戦略は別途検討が必要。
+- **対応案(着手時)**:
+  - `TtsBackend.capabilities` に `supports_voice_cloning: bool` を追加し、True の backend のみ「声の管理…」UI を出す。
+  - I/F: `add_voice(name, sample_paths) -> VoiceRef` / `list_voices() -> [VoiceRef]` / `delete_voice(ref)`。
+  - 保存は `config.yaml` の `tts.<backend>.selected_voice_id` のみ。voice 一覧は backend 側(クラウド)が source of truth。
+  - 別ブランチ `feature/tts-voice-cloning` で対応。
+- **再検討トリガ**: ユーザから「自分の声で読ませたい」要望が出た時 / ElevenLabs を実運用で使い込んだあと。
+- **関連**: `docs/design/append/backendCandidates.html` の TTS テーブル(ElevenLabs 行の備考でプリメイド主軸と明記)。
+
+---
+
 ## [⏳保留 2026-05-30] 追加 VAD backend の依存 optional 化方針
 - **対象**: `pyproject.toml` の `[project.optional-dependencies].vad-extra` に入れた
   `webrtcvad-wheels` / `pyannote.audio` / `pvcobra`。`uv sync --extra vad-extra` で初めて入る。

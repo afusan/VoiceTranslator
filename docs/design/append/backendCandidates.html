@@ -327,7 +327,7 @@
 <table>
   <thead>
     <tr>
-      <th>名前</th><th>形態</th><th>認証</th><th>必要リソース</th><th>備考</th>
+      <th>名前</th><th>形態</th><th>認証</th><th>必要リソース</th><th>備考</th><th style="width: 60px;">追加</th>
     </tr>
   </thead>
   <tbody>
@@ -337,6 +337,7 @@
       <td class="no-auth">不要</td>
       <td>OS 内蔵</td>
       <td>Windows 同梱。声質は最低限。Mac/Linux では NG。音節繰返しバグの暫定対処中</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>VOICEVOX</td>
@@ -344,6 +345,7 @@
       <td class="no-auth">不要(別アプリ起動)</td>
       <td>RAM 1〜2GB</td>
       <td>日本語特化、無料、商用利用可(キャラ別に規約)。HTTP API で叩く</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>Coqui TTS / XTTS-v2</td>
@@ -351,13 +353,15 @@
       <td class="no-auth">不要</td>
       <td>RAM 3〜6GB / VRAM 4GB</td>
       <td>多言語、声質クローニング可。MPL2.0。重め</td>
+      <td class="nopick">—</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>Piper TTS</td>
       <td><span class="local">ローカル</span></td>
       <td class="no-auth">不要</td>
       <td>RAM ~0.5GB</td>
-      <td>ONNX、CPU 向け軽量。多言語、商用可。raspberrypi でも実用</td>
+      <td>ONNX、CPU 向け軽量。多言語、商用可。raspberrypi でも実用。<b>選定理由</b>: マルチ OS かつ無認証ローカルの唯一現実解(CPU floor 配布方針と整合)。SAPI の Windows 縛りを外せる</td>
+      <td class="pick-mark">✓</td>
     </tr>
     <tr>
       <td>edge-tts</td>
@@ -365,27 +369,31 @@
       <td class="no-auth">不要(非公式)</td>
       <td>~50MB</td>
       <td>Edge ブラウザ内蔵 API を叩く。無料だが MS 規約上グレー、本番運用不向き</td>
+      <td class="nopick">—</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>ElevenLabs</td>
       <td><span class="cloud">クラウド</span></td>
       <td class="auth-key">API key</td>
       <td>~50MB</td>
-      <td>$5/月〜。声質トップクラス、声クローニング可。月額制で従量も</td>
+      <td>$5/月〜。声質トップクラス、プリメイド voice 約 30(Rachel / Adam 等)を API key 1 つで利用可能。声クローニング(IVC)も可だが今回は未対応(pendList 参照)。<b>選定理由</b>: 高品質クラウド TTS の代表枠。OpenAI/Google とは別系列のサービスを試す材料(レイテンシ・声質の体感比較)。クローニング無しでもプリメイド voice 単体で十分実用</td>
+      <td class="pick-mark">✓</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>OpenAI TTS</td>
       <td><span class="cloud">クラウド</span></td>
       <td class="auth-key">API key</td>
       <td>~50MB</td>
-      <td>$15/百万文字。6 声、自然。日本語も実用</td>
+      <td>$15/百万文字。6 声、自然。日本語も実用。<b>選定理由</b>: 既存 `openai_gpt` の API key を共有でき、追加運用コストが最小。SAPI からの置換効果が分かりやすい</td>
+      <td class="pick-mark">✓</td>
     </tr>
-    <tr>
+    <tr class="pick">
       <td>Google Cloud TTS</td>
       <td><span class="cloud">クラウド</span></td>
       <td class="auth-key">サービスアカウント JSON</td>
       <td>~100MB</td>
-      <td>$16/百万文字 (Wavenet)。多声・SSML 対応。日本語声多数</td>
+      <td>$16/百万文字 (Wavenet)。多声・SSML 対応。日本語声多数。<b>選定理由</b>: 既存 `google_stt` のサービスアカウント JSON を流用可能。SSML / 多声で表現幅を試す材料</td>
+      <td class="pick-mark">✓</td>
     </tr>
     <tr>
       <td>Azure Speech (Neural Voice)</td>
@@ -393,6 +401,7 @@
       <td class="auth-key">サブスクリプションキー</td>
       <td>~100MB</td>
       <td>$16/百万文字。Neural 声多数。F0 無料 tier あり</td>
+      <td class="nopick">—</td>
     </tr>
     <tr>
       <td>Amazon Polly</td>
@@ -400,6 +409,7 @@
       <td class="auth-key">IAM credentials</td>
       <td>~100MB</td>
       <td>$4/百万文字 (Standard) / $16 (Neural)。多言語、SSML 対応</td>
+      <td class="nopick">—</td>
     </tr>
   </tbody>
 </table>
