@@ -2,6 +2,11 @@
 
 役割: バックエンド/デバイス/言語ペア/ログ出力先 のプルダウン+入力欄と、
 設定の保存/読込ボタンを提供する。レイヤ別のモデルステータス(英語表示)も併記する。
+
+入力言語(src)プルダウンは ASR backend ごとの対応言語に動的に追従する:
+- backend 切替時に `_refresh_input_language_choices` で選択肢を再構築
+- 既存設定値が新 backend で非対応のときは自動 fallback + 通知バナー
+- 表示は `"en (English)"` 形式、内部値は `"en"`(共通言語テーブルで変換)
 """
 
 from __future__ import annotations
@@ -9,6 +14,7 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from voice_translator.common.app_controller import AppController
+from voice_translator.common.languages import format_language, parse_language
 from voice_translator.common.types import LayerKind, ModelStatus
 
 from .consent_dialog import ConsentDialog
@@ -24,10 +30,15 @@ _LAYER_LABELS: list[tuple[LayerKind, str]] = [
     (LayerKind.OUTPUT, "音声出力"),
 ]
 
-_LANG_CHOICES: list[str] = [
-    "auto", "en", "ja", "zh", "ko", "es", "fr", "de", "it", "pt", "ru", "ar",
+# 翻訳先(tgt)言語の候補: 当面は固定リスト(Translator backend ごとの連動は別ブランチ)。
+# auto は出力言語としては意味が無いので含めない。
+_TGT_LANG_CHOICES: list[str] = [
+    "en", "ja", "zh", "ko", "es", "fr", "de", "it", "pt", "ru", "ar",
     "hi", "th", "vi", "id", "tr",
 ]
+
+# ASR backend が未登録 / 対応言語不明 のときの fallback 候補(最低限の MVP セット)。
+_FALLBACK_INPUT_LANGS: list[str] = list(_TGT_LANG_CHOICES)
 
 # ModelStatus → 色マップ(customtkinter は色名そのまま使える)
 _STATUS_COLORS: dict[ModelStatus, str] = {
@@ -41,21 +52,32 @@ _STATUS_COLORS: dict[ModelStatus, str] = {
 class SettingsPanel(ctk.CTkFrame):
     """設定操作のパネル + レイヤ別モデルステータス表示。"""
 
-    def __init__(self, master, controller: AppController) -> None:
+    def __init__(self, master, controller: AppController, *, banner=None) -> None:
         super().__init__(master)
         self._controller = controller
+        # 通知バナー(入力言語の自動 fallback などをユーザに伝える)。
+        # None でも動作する(その場合は print に落とす)。
+        self._banner = banner
 
         self._backend_vars: dict[LayerKind, ctk.StringVar] = {}
         self._status_labels: dict[LayerKind, ctk.CTkLabel] = {}
         self._capture_var = ctk.StringVar(value="(未選択)")
         self._output_var = ctk.StringVar(value="(未選択)")
-        self._src_var = ctk.StringVar(value=str(controller.get_setting("languages", "src", default="auto")))
-        self._tgt_var = ctk.StringVar(value=str(controller.get_setting("languages", "tgt", default="ja")))
+        # 言語プルダウンは表示形式 "en (English)" を保持。内部値(コード)と区別する。
+        initial_src = str(controller.get_setting("languages", "src", default="auto"))
+        initial_tgt = str(controller.get_setting("languages", "tgt", default="ja"))
+        self._src_var = ctk.StringVar(value=format_language(initial_src))
+        self._tgt_var = ctk.StringVar(value=format_language(initial_tgt))
+        self._src_dropdown: ctk.CTkOptionMenu | None = None  # 後で再構築するので保持
         self._log_dir_var = ctk.StringVar(value=str(controller.get_setting("log", "directory", default="./logs")))
 
         self._build_widgets()
         self._populate_devices_into_dropdowns()
         self._sync_all_status_labels()
+        # 起動時に入力言語プルダウンを ASR backend の対応言語に合わせて構築
+        current_asr = str(controller.get_setting("backends", LayerKind.ASR.value, default=""))
+        if current_asr:
+            self._refresh_input_language_choices(current_asr, notify_fallback=False)
 
     # ============================================================
     def _build_widgets(self) -> None:
@@ -121,25 +143,28 @@ class SettingsPanel(ctk.CTkFrame):
         self._output_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         row += 1
 
-        # src 言語
+        # src 言語(ASR backend に追従して再構築される)
         ctk.CTkLabel(self, text="入力言語 (src):").grid(
             row=row, column=0, sticky="w", padx=10, pady=2
         )
-        ctk.CTkOptionMenu(
-            self, values=_LANG_CHOICES, variable=self._src_var,
-            command=lambda v: self._controller.set_setting("languages", "src", v),
-        ).grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
+        self._src_dropdown = ctk.CTkOptionMenu(
+            self,
+            values=[format_language(c) for c in _FALLBACK_INPUT_LANGS],  # 初期は fallback
+            variable=self._src_var,
+            command=self._on_src_lang_changed,
+        )
+        self._src_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         row += 1
 
-        # tgt 言語
+        # tgt 言語(Translator backend 連動は別ブランチ。当面は固定リスト)
         ctk.CTkLabel(self, text="出力言語 (tgt):").grid(
             row=row, column=0, sticky="w", padx=10, pady=2
         )
         ctk.CTkOptionMenu(
             self,
-            values=[c for c in _LANG_CHOICES if c != "auto"],
+            values=[format_language(c) for c in _TGT_LANG_CHOICES],
             variable=self._tgt_var,
-            command=lambda v: self._controller.set_setting("languages", "tgt", v),
+            command=self._on_tgt_lang_changed,
         ).grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
         row += 1
 
@@ -225,6 +250,82 @@ class SettingsPanel(ctk.CTkFrame):
         self._controller.set_setting("backends", layer.value, value)
         # set_setting 側でステータスは更新されるが、ラベル反映は明示的に行う
         self._sync_all_status_labels()
+        # ASR backend 切替時は入力言語プルダウンを新 backend の対応言語に合わせる
+        if layer == LayerKind.ASR:
+            self._refresh_input_language_choices(value, notify_fallback=True)
+
+    # ============================================================
+    # 入力言語プルダウンの連動(ASR backend ごとに対応言語が違う)
+    # ============================================================
+    def _on_src_lang_changed(self, displayed: str) -> None:
+        """入力言語プルダウンの変更ハンドラ。表示形式を内部コードに変換して保存。"""
+        code = parse_language(displayed)
+        self._controller.set_setting("languages", "src", code)
+
+    def _on_tgt_lang_changed(self, displayed: str) -> None:
+        code = parse_language(displayed)
+        self._controller.set_setting("languages", "tgt", code)
+
+    def _refresh_input_language_choices(
+        self, backend_name: str, *, notify_fallback: bool,
+    ) -> None:
+        """ASR backend に応じて入力言語プルダウンの選択肢を再構築する。
+
+        - backend の `supported_input_languages()` を引いて選択肢を組み立てる
+        - 取得失敗 / 未対応 backend のときは fallback リストを使う
+        - 既存設定値が新 backend で非対応のときは自動 fallback
+          (auto 対応なら "auto"、非対応なら先頭言語)+ 通知バナーで明示
+        - `notify_fallback=False` のときは通知を出さない(起動時の初回構築用)
+        """
+        if self._src_dropdown is None:
+            return  # 初期化未完了時の防御
+
+        codes = self._controller.get_supported_input_languages(backend_name)
+        if not codes:
+            codes = list(_FALLBACK_INPUT_LANGS)
+        # 重複除去 + ソート(UI 表示の安定性)
+        codes = sorted(set(codes))
+        # auto 対応 backend なら先頭に追加
+        if self._controller.supports_auto_detect(backend_name):
+            codes = ["auto"] + codes
+
+        # 選択肢を再構築
+        labels = [format_language(c) for c in codes]
+        self._src_dropdown.configure(values=labels)
+
+        # 既存設定値の検証
+        current_code = str(self._controller.get_setting("languages", "src", default="auto"))
+        if current_code in codes:
+            # 表示形式を新リストの対応ラベルに合わせる(format_language の変化に追従)
+            self._src_var.set(format_language(current_code))
+            return
+
+        # 非対応 → fallback
+        new_code = "auto" if "auto" in codes else codes[0]
+        self._src_var.set(format_language(new_code))
+        self._controller.set_setting("languages", "src", new_code)
+        if notify_fallback:
+            self._notify_lang_fallback(current_code, new_code, backend_name)
+
+    def _notify_lang_fallback(self, old_code: str, new_code: str, backend_name: str) -> None:
+        """入力言語が自動変更されたことを通知バナーで明示する。
+
+        backend 切替の副作用として言語が変わるのは UI 操作の自然な帰結なので、
+        確認ダイアログは出さず通知のみ(CLAUDE.md「ユーザ設定を勝手に変更しない」原則の
+        例外扱い、ただし「黙って変える」のは避ける)。
+        """
+        msg = (
+            f"入力言語を {format_language(old_code)} から {format_language(new_code)} に変更しました"
+            f"({backend_name} が {old_code} に対応していないため)"
+        )
+        if self._banner is not None:
+            try:
+                self._banner.show_warning(msg)
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        # banner が無い / 失敗時はログに落とす(テスト環境含む)
+        self._show_message(msg)
 
     def _gate_cloud_consent(self, layer: LayerKind, backend_name: str) -> bool:
         """クラウド backend なら同意ダイアログで gate する。同意あり/不要なら True。

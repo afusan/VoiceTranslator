@@ -1357,6 +1357,72 @@ class TestPhaseE2CredentialFlow:
             ctrl.stop_pipeline()
 
 
+class TestAsrSupportedLanguages:
+    """ASR の対応言語問い合わせ口(`get_supported_input_languages` / `supports_auto_detect`)。
+
+    registry 経由で backend_cls からクラスメソッドを呼ぶ。未登録 / 例外は防御で空 / False。
+    """
+
+    def test_returns_languages_from_registered_backend_class(self, config) -> None:
+        from voice_translator.common.backend_registry import BackendRegistry
+
+        class FakeAsrCls:
+            @classmethod
+            def supported_input_languages(cls) -> list[str]:
+                return ["en", "ja", "fr"]
+
+            @classmethod
+            def supports_auto_detect(cls) -> bool:
+                return True
+
+        reg = BackendRegistry()
+        reg.register(
+            LayerKind.ASR, "fake_asr",
+            lambda: MagicMock(), backend_cls=FakeAsrCls,
+        )
+        ctrl = AppController(registry=reg, config=config)
+        assert ctrl.get_supported_input_languages("fake_asr") == ["en", "ja", "fr"]
+        assert ctrl.supports_auto_detect("fake_asr") is True
+
+    def test_unregistered_backend_returns_empty(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_supported_input_languages("unknown") == []
+        assert ctrl.supports_auto_detect("unknown") is False
+
+    def test_backend_class_not_provided_returns_empty(
+        self, populated_registry, config
+    ) -> None:
+        """populated_registry は backend_cls を渡さず register しているので
+        get_backend_class が None を返し、防御で空リストになる。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert ctrl.get_supported_input_languages("faster_whisper") == []
+        assert ctrl.supports_auto_detect("faster_whisper") is False
+
+    def test_exception_in_class_method_swallowed(self, config) -> None:
+        from voice_translator.common.backend_registry import BackendRegistry
+
+        class BrokenAsrCls:
+            @classmethod
+            def supported_input_languages(cls) -> list[str]:
+                raise RuntimeError("boom")
+
+            @classmethod
+            def supports_auto_detect(cls) -> bool:
+                raise RuntimeError("boom")
+
+        reg = BackendRegistry()
+        reg.register(
+            LayerKind.ASR, "broken",
+            lambda: MagicMock(), backend_cls=BrokenAsrCls,
+        )
+        ctrl = AppController(registry=reg, config=config)
+        # 例外は飲んで防御値
+        assert ctrl.get_supported_input_languages("broken") == []
+        assert ctrl.supports_auto_detect("broken") is False
+
+
 class TestPhaseDCapabilityHint:
     """Phase D: BackendRegistry の capability hint。"""
 

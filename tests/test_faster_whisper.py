@@ -216,3 +216,50 @@ class TestDeviceSelection:
         assert len(call_log) == 2
         assert call_log[0]["device"] == "cuda"
         assert call_log[1]["device"] == "cpu"
+
+
+class TestSupportedInputLanguages:
+    """対応言語 I/F(クラスメソッド、未ロードでも問い合わせ可能)。"""
+
+    def test_returns_whisper_languages(self) -> None:
+        from voice_translator.asr.faster_whisper_backend import (
+            FasterWhisperAsrBackend,
+        )
+
+        langs = FasterWhisperAsrBackend.supported_input_languages()
+        # Whisper 99 言語の代表をいくつか含む
+        assert "en" in langs
+        assert "ja" in langs
+        assert "zh" in langs
+        # "auto" はリストに含めない(supports_auto_detect で別途宣言)
+        assert "auto" not in langs
+
+    def test_supports_auto_detect(self) -> None:
+        from voice_translator.asr.faster_whisper_backend import (
+            FasterWhisperAsrBackend,
+        )
+
+        assert FasterWhisperAsrBackend.supports_auto_detect() is True
+
+    def test_all_codes_known_in_language_table(self) -> None:
+        """faster-whisper の返すコードは全て共通言語テーブルに存在する。"""
+        from voice_translator.asr.faster_whisper_backend import (
+            FasterWhisperAsrBackend,
+        )
+        from voice_translator.common.languages import LANGUAGE_NAMES
+
+        langs = FasterWhisperAsrBackend.supported_input_languages()
+        unknown = [c for c in langs if c not in LANGUAGE_NAMES]
+        assert not unknown, f"共通言語テーブルに未登録のコード: {unknown}"
+
+    def test_no_load_required(self, monkeypatch) -> None:
+        """faster_whisper モジュール未インストール環境でもクラスメソッドは呼べる。"""
+        # sys.modules から faster_whisper を消す(インストール済み環境用)
+        monkeypatch.delitem(sys.modules, "faster_whisper", raising=False)
+        from voice_translator.asr.faster_whisper_backend import (
+            FasterWhisperAsrBackend,
+        )
+
+        # 例外なく呼べること
+        langs = FasterWhisperAsrBackend.supported_input_languages()
+        assert len(langs) > 50  # 99 言語のはず
