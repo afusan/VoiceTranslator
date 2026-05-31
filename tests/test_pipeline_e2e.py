@@ -55,6 +55,10 @@ class EchoAsr(AsrBackend):
     def transcribe(self, pcm, src_lang_hint: str = "auto") -> tuple[str, str]:
         return f"text({pcm.shape[0]} samples)", "en"
 
+    @classmethod
+    def supported_input_languages(cls) -> list[str]:
+        return ["en"]
+
 
 class SuffixTranslator(TranslatorBackend):
     def translate(self, src_text: str, src_lang: str, tgt_lang: str) -> str:

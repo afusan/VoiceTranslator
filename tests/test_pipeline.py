@@ -78,6 +78,14 @@ class FakeAsr(AsrBackend):
             raise self._raise
         return "hello", "en"
 
+    @classmethod
+    def supported_input_languages(cls) -> list[str]:
+        return ["en", "ja"]
+
+    @classmethod
+    def supports_auto_detect(cls) -> bool:
+        return True
+
 
 class FakeTranslator(TranslatorBackend):
     def __init__(
@@ -176,6 +184,10 @@ class SpyingAsr(AsrBackend):
     def transcribe(self, pcm, src_lang_hint: str = "auto") -> tuple[str, str]:
         self.calls.append(int(pcm.shape[0]))
         return "hello", "en"
+
+    @classmethod
+    def supported_input_languages(cls) -> list[str]:
+        return ["en"]
 
 
 # ============================================================

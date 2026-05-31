@@ -284,6 +284,42 @@ class AppController:
         """
         return self._registry.get_capability_hint(layer, name)
 
+    # ---- ASR 対応言語の問い合わせ口 ----
+    def get_supported_input_languages(self, backend_name: str) -> list[str]:
+        """指定 ASR backend の対応入力言語(ISO 639-1)を返す。
+
+        backend クラスのクラスメソッド `supported_input_languages()` を呼ぶ。
+        backend 未登録 / メソッド未実装 / 例外時は空リスト(UI 側で fallback)。
+        backend ロードは発生しない(設定ダイアログを開いただけで重い import を
+        引きずらないため)。
+        """
+        cls = self._registry.get_backend_class(LayerKind.ASR, backend_name)
+        if cls is None:
+            return []
+        try:
+            return list(cls.supported_input_languages())
+        except Exception:  # noqa: BLE001
+            self._logger.exception(
+                "supported_input_languages の呼び出し失敗 backend=%s", backend_name
+            )
+            return []
+
+    def supports_auto_detect(self, backend_name: str) -> bool:
+        """指定 ASR backend が言語自動検出に対応するか。
+
+        backend 未登録 / 例外時は False(安全側 = "auto" を選ばせない)。
+        """
+        cls = self._registry.get_backend_class(LayerKind.ASR, backend_name)
+        if cls is None:
+            return False
+        try:
+            return bool(cls.supports_auto_detect())
+        except Exception:  # noqa: BLE001
+            self._logger.exception(
+                "supports_auto_detect の呼び出し失敗 backend=%s", backend_name
+            )
+            return False
+
     # ---- Phase E-2: 認証フロー(spec / verify / verified 管理) ----
     def get_credential_spec(self, layer: LayerKind, name: str) -> list[CredentialField]:
         """指定 backend の認証情報スペック。

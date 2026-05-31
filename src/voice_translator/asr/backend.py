@@ -34,6 +34,27 @@ class AsrBackend(BackendBase, ABC):
             - lang: 検出/指定された言語(ISO 639-1)。
         """
 
+    @classmethod
+    @abstractmethod
+    def supported_input_languages(cls) -> list[str]:
+        """対応する入力言語(ISO 639-1)の名目リスト。
+
+        - `"auto"` は含めない(自動検出可否は `supports_auto_detect` で別途宣言)
+        - クラスメソッドにする理由: UI が backend 名から問い合わせる時点で
+          backend をロード済みとは限らない。設定ダイアログを開いただけで
+          load を走らせないために、未ロード状態でも答えられる必要がある
+        - 「モデル DL 状況で対応言語が変わる」型の backend は本 I/F では表現しない
+          (本アプリでは対象外)
+        """
+
+    @classmethod
+    def supports_auto_detect(cls) -> bool:
+        """言語自動検出に対応するか(= UI で `"auto"` を選ばせてよいか)。
+
+        既定 False。自動検出を持つ backend(Whisper 系等)は True を返すこと。
+        """
+        return False
+
     def capabilities(self) -> BackendCapabilities:
         """対応言語等のメタ情報。"""
         return BackendCapabilities()
