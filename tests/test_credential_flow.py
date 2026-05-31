@@ -606,15 +606,53 @@ class TestOpenAIWhisperApiCredentials:
             backend.transcribe(np.zeros(16000, dtype=np.float32))
 
 
-@pytest.mark.skip(reason="Phase F: DeepL API backend 実装後に有効化")
 class TestDeepLApiCredentials:
-    """DeepL API backend の認証契約。Free / Pro エンドポイント切替の検証も含める想定。"""
+    """DeepL API backend の認証契約。Free / Pro エンドポイント切替の検証も含める。"""
 
-    def test_credential_spec_has_api_key(self) -> None: ...
-    def test_verify_with_valid_key_returns_ok(self) -> None: ...
-    def test_verify_with_invalid_key_returns_failure_403(self) -> None: ...
-    def test_verify_with_quota_exceeded_456_returns_failure(self) -> None: ...
-    def test_runtime_456_triggers_invalidate_verification(self) -> None: ...
+    def _backend_cls(self):
+        from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
+        return DeepLTranslatorBackend
+
+    def test_credential_spec_has_api_key(self) -> None:
+        spec = self._backend_cls().credential_spec()
+        assert any(f.key_name == "api_key" and f.secret for f in spec)
+
+    def test_verify_with_valid_key_returns_ok(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=200))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "key:fx"})
+        assert r.ok is True
+
+    def test_verify_with_invalid_key_returns_failure_403(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=403))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "bad"})
+        assert r.ok is False
+
+    def test_verify_with_quota_exceeded_456_returns_failure(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=456))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "key:fx"})
+        assert r.ok is False
+
+    def test_runtime_456_triggers_invalidate_verification(self, monkeypatch) -> None:
+        """transcribe 中の 456 は FatalError(=AppController が invalidate を呼ぶ契約)。"""
+        import sys
+        from voice_translator.common.errors import FatalError
+        fake = MagicMock()
+        client = MagicMock()
+        client.post = MagicMock(return_value=MagicMock(status_code=456, text="quota"))
+        fake.Client = MagicMock(return_value=client)
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        backend = self._backend_cls()(api_key="key:fx")
+        with pytest.raises(FatalError):
+            backend.translate("hi", "en", "ja")
 
 
 @pytest.mark.skip(reason="Phase F: OpenAI TTS API backend 実装後に有効化")
@@ -627,14 +665,88 @@ class TestOpenAITtsApiCredentials:
     def test_runtime_401_triggers_invalidate_verification(self) -> None: ...
 
 
-@pytest.mark.skip(reason="Phase F: Anthropic Claude API backend 実装後に有効化")
 class TestAnthropicClaudeApiCredentials:
     """Anthropic Claude API backend(翻訳用途)の認証契約。"""
 
-    def test_credential_spec_has_api_key(self) -> None: ...
-    def test_verify_with_valid_key_returns_ok(self) -> None: ...
-    def test_verify_with_invalid_key_returns_failure(self) -> None: ...
-    def test_runtime_401_triggers_invalidate_verification(self) -> None: ...
+    def _backend_cls(self):
+        from voice_translator.translator.anthropic_claude_backend import (
+            AnthropicClaudeTranslatorBackend,
+        )
+        return AnthropicClaudeTranslatorBackend
+
+    def test_credential_spec_has_api_key(self) -> None:
+        spec = self._backend_cls().credential_spec()
+        assert any(f.key_name == "api_key" and f.secret for f in spec)
+
+    def test_verify_with_valid_key_returns_ok(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.post = MagicMock(return_value=MagicMock(status_code=200))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "sk-ant-x"})
+        assert r.ok is True
+
+    def test_verify_with_invalid_key_returns_failure(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.post = MagicMock(return_value=MagicMock(status_code=401))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "bad"})
+        assert r.ok is False
+
+    def test_runtime_401_triggers_invalidate_verification(self, monkeypatch) -> None:
+        import sys
+        from voice_translator.common.errors import FatalError
+        fake = MagicMock()
+        client = MagicMock()
+        client.post = MagicMock(return_value=MagicMock(status_code=401, text="bad"))
+        fake.Client = MagicMock(return_value=client)
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        backend = self._backend_cls()(api_key="bad")
+        with pytest.raises(FatalError):
+            backend.translate("hi", "en", "ja")
+
+
+class TestOpenAIGptTranslatorCredentials:
+    """OpenAI GPT(翻訳用途)backend の認証契約。"""
+
+    def _backend_cls(self):
+        from voice_translator.translator.openai_gpt_backend import (
+            OpenAiGptTranslatorBackend,
+        )
+        return OpenAiGptTranslatorBackend
+
+    def test_credential_spec_has_api_key(self) -> None:
+        spec = self._backend_cls().credential_spec()
+        assert any(f.key_name == "api_key" and f.secret for f in spec)
+
+    def test_verify_with_valid_key_returns_ok(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=200))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "sk-x"})
+        assert r.ok is True
+
+    def test_verify_with_invalid_key_returns_failure(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=401))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "bad"})
+        assert r.ok is False
+
+    def test_runtime_401_triggers_invalidate_verification(self, monkeypatch) -> None:
+        import sys
+        from voice_translator.common.errors import FatalError
+        fake = MagicMock()
+        client = MagicMock()
+        client.post = MagicMock(return_value=MagicMock(status_code=401, text="bad"))
+        fake.Client = MagicMock(return_value=client)
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        backend = self._backend_cls()(api_key="bad")
+        with pytest.raises(FatalError):
+            backend.translate("hi", "en", "ja")
 
 
 @pytest.mark.skip(reason="Phase F: AWS Transcribe backend 実装後に有効化")

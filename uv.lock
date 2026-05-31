@@ -7490,6 +7490,15 @@ cuda = [
     { name = "torch", version = "2.12.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
     { name = "torchaudio", version = "2.11.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
+translator-anthropic = [
+    { name = "httpx" },
+]
+translator-deepl = [
+    { name = "httpx" },
+]
+translator-openai-api = [
+    { name = "httpx" },
+]
 vad-extra = [
     { name = "pvcobra" },
     { name = "pyannote-audio" },
@@ -7510,6 +7519,9 @@ requires-dist = [
     { name = "faster-whisper", specifier = ">=1.0" },
     { name = "google-cloud-speech", marker = "extra == 'asr-google-stt'", specifier = ">=2.27" },
     { name = "httpx", marker = "extra == 'asr-openai-api'", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'translator-anthropic'", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'translator-deepl'", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'translator-openai-api'", specifier = ">=0.27" },
     { name = "keyring", specifier = ">=24.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "openai-whisper", marker = "extra == 'asr-whisper-official'", specifier = ">=20240930" },
@@ -7528,7 +7540,7 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.40" },
     { name = "webrtcvad-wheels", marker = "extra == 'vad-extra'", specifier = ">=2.0.10" },
 ]
-provides-extras = ["cpu", "cuda", "vad-extra", "asr-whisper-official", "asr-openai-api", "asr-google-stt", "asr-deepgram"]
+provides-extras = ["cpu", "cuda", "vad-extra", "asr-whisper-official", "asr-openai-api", "asr-google-stt", "asr-deepgram", "translator-deepl", "translator-openai-api", "translator-anthropic"]
 
 [package.metadata.requires-dev]
 dev = [

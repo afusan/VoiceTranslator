@@ -40,6 +40,13 @@ _RECOMMENDED_MODELS: tuple[ModelInfo, ...] = (
         vram_gb_if_gpu=4.0,
         download_size_gb=5.0,
     ),
+    ModelInfo(
+        name="facebook/nllb-200-3.3B",
+        display_name="3.3B (~13GB, GPU 推奨)",
+        ram_gb=13.0,
+        vram_gb_if_gpu=10.0,
+        download_size_gb=13.0,
+    ),
 )
 
 
