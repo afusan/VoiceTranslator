@@ -228,6 +228,18 @@ def _openai_whisper_model_options(
     return OpenAiWhisperAsrBackend.recommended_models()
 
 
+def _nllb200_model_options(
+    controller: "AppController", layer: LayerKind  # noqa: ARG001
+) -> list[ModelInfo]:
+    """NLLB-200 の推奨モデル一覧を返す(dropdown の options_fn)。
+
+    既存 backend のインスタンスメソッド `list_recommended_models` をクラス側でも
+    呼べるようにしているのは、UI が backend ロード前に問い合わせるため。
+    """
+    from voice_translator.translator.nllb200_backend import _RECOMMENDED_MODELS
+    return list(_RECOMMENDED_MODELS)
+
+
 def _recent_durations_label(layer: LayerKind) -> "SettingField":
     """直近処理時間平均の表示ラベル(Phase C2)。layer の状態変化に反応して更新される。
 
@@ -395,7 +407,41 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             default=10,
             help_text="翻訳済みテキストを TTS に渡すキューの上限件数。",
         ),
+        SettingField(
+            keys=("backends_config", "nllb200", "model_name"),
+            label="NLLB-200 モデル",
+            field_type="dropdown",
+            default="facebook/nllb-200-distilled-600M",
+            applies_when_backend="nllb200",
+            options_fn=_nllb200_model_options,
+            help_text=(
+                "NLLB-200 のモデル名(HF id)。distilled-600M / distilled-1.3B / "
+                "1.3B / 3.3B から選択。大型は GPU 推奨。"
+            ),
+        ),
         _auto_load_toggle("nllb200"),
+        # DeepL は backend 固有設定なし(API key のみ)
+        _auto_load_toggle("deepl"),
+        # OpenAI GPT
+        SettingField(
+            keys=("backends_config", "openai_gpt", "model"),
+            label="OpenAI GPT: モデル",
+            field_type="str",
+            default="gpt-4o-mini",
+            applies_when_backend="openai_gpt",
+            help_text="OpenAI Chat Completions のモデル名(例: gpt-4o-mini / gpt-4o)。",
+        ),
+        _auto_load_toggle("openai_gpt"),
+        # Anthropic Claude
+        SettingField(
+            keys=("backends_config", "anthropic_claude", "model"),
+            label="Anthropic Claude: モデル",
+            field_type="str",
+            default="claude-haiku-4-5-20251001",
+            applies_when_backend="anthropic_claude",
+            help_text="Anthropic Messages のモデル名(例: claude-haiku-4-5-20251001)。",
+        ),
+        _auto_load_toggle("anthropic_claude"),
     ],
     LayerKind.TTS: [
         SettingField(

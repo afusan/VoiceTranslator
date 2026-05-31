@@ -35,6 +35,12 @@ def register_default_backends(
     from voice_translator.output.soundcard_backend import SoundcardOutputBackend
     from voice_translator.translator.nllb200_backend import Nllb200TranslatorBackend
     from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
+    from voice_translator.translator.openai_gpt_backend import (
+        OpenAiGptTranslatorBackend,
+    )
+    from voice_translator.translator.anthropic_claude_backend import (
+        AnthropicClaudeTranslatorBackend,
+    )
     from voice_translator.tts.sapi_backend import SapiTtsBackend
     from voice_translator.vad.silero_backend import SileroVadBackend
     # Phase F1 で追加した VAD 群。依存は `[project.optional-dependencies].vad-extra`(opt-in)。
@@ -328,6 +334,49 @@ def register_default_backends(
             service_name="DeepL API",
             terms_url="https://www.deepl.com/pro-license",
             notes="DeepL API(Free/Pro 自動判定)。日本語品質トップ。",
+        ),
+    )
+
+    # OpenAI GPT(クラウド)。LLM 翻訳。extras: `translator-openai-api`。
+    gpt_model = _read_str(
+        config, ("backends_config", "openai_gpt", "model"), default="gpt-4o-mini"
+    )
+    registry.register(
+        LayerKind.TRANSLATOR,
+        "openai_gpt",
+        lambda: OpenAiGptTranslatorBackend(
+            api_key=_get_credential(config, "openai_gpt", "api_key"),
+            model=gpt_model,
+        ),
+        backend_cls=OpenAiGptTranslatorBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="OpenAI GPT API",
+            terms_url="https://openai.com/policies/terms-of-use",
+            notes="OpenAI GPT(LLM 翻訳)。temperature=0.2。",
+        ),
+    )
+
+    # Anthropic Claude(クラウド)。LLM 翻訳。extras: `translator-anthropic`。
+    claude_model = _read_str(
+        config, ("backends_config", "anthropic_claude", "model"),
+        default="claude-haiku-4-5-20251001",
+    )
+    registry.register(
+        LayerKind.TRANSLATOR,
+        "anthropic_claude",
+        lambda: AnthropicClaudeTranslatorBackend(
+            api_key=_get_credential(config, "anthropic_claude", "api_key"),
+            model=claude_model,
+        ),
+        backend_cls=AnthropicClaudeTranslatorBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="Anthropic Claude API",
+            terms_url="https://www.anthropic.com/legal/aup",
+            notes="Anthropic Claude(LLM 翻訳)。temperature=0.2。",
         ),
     )
 
