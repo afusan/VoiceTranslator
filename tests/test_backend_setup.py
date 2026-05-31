@@ -33,6 +33,7 @@ def patched_backend_setup(monkeypatch):
         ("voice_translator.asr.google_stt_backend", "GoogleSttAsrBackend"),
         ("voice_translator.asr.deepgram_backend", "DeepgramAsrBackend"),
         ("voice_translator.translator.nllb200_backend", "Nllb200TranslatorBackend"),
+        ("voice_translator.translator.deepl_backend", "DeepLTranslatorBackend"),
         ("voice_translator.tts.sapi_backend", "SapiTtsBackend"),
         ("voice_translator.output.soundcard_backend", "SoundcardOutputBackend"),
     ]:
@@ -67,7 +68,8 @@ class TestRegisterDefaultBackends:
             "faster_whisper", "openai_whisper", "openai_whisper_api",
             "google_stt", "deepgram",
         ]
-        assert registry.list_names(LayerKind.TRANSLATOR) == ["nllb200"]
+        # Phase F2 で DeepL を追加。MVP の nllb200 が先頭。
+        assert registry.list_names(LayerKind.TRANSLATOR) == ["nllb200", "deepl"]
         assert registry.list_names(LayerKind.TTS) == ["sapi"]
         assert registry.list_names(LayerKind.OUTPUT) == ["soundcard"]
 

@@ -91,6 +91,7 @@ LANGUAGE_NAMES: dict[str, str] = {
     "ms": "Malay",
     "mt": "Maltese",
     "my": "Burmese",
+    "nb": "Norwegian Bokmål",
     "ne": "Nepali",
     "nl": "Dutch",
     "nn": "Norwegian Nynorsk",

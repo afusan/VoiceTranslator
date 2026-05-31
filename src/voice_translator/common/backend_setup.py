@@ -34,6 +34,7 @@ def register_default_backends(
     from voice_translator.capture.soundcard_backend import SoundcardCaptureBackend
     from voice_translator.output.soundcard_backend import SoundcardOutputBackend
     from voice_translator.translator.nllb200_backend import Nllb200TranslatorBackend
+    from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
     from voice_translator.tts.sapi_backend import SapiTtsBackend
     from voice_translator.vad.silero_backend import SileroVadBackend
     # Phase F1 で追加した VAD 群。依存は `[project.optional-dependencies].vad-extra`(opt-in)。
@@ -310,6 +311,24 @@ def register_default_backends(
             model_name=nllb_model_name, device=nllb_device,
         ),
         backend_cls=Nllb200TranslatorBackend,
+    )
+
+    # DeepL API(クラウド)。Free/Pro は API key 末尾 `:fx` で自動判定。
+    # extras: `translator-deepl`(httpx)。
+    registry.register(
+        LayerKind.TRANSLATOR,
+        "deepl",
+        lambda: DeepLTranslatorBackend(
+            api_key=_get_credential(config, "deepl", "api_key"),
+        ),
+        backend_cls=DeepLTranslatorBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="DeepL API",
+            terms_url="https://www.deepl.com/pro-license",
+            notes="DeepL API(Free/Pro 自動判定)。日本語品質トップ。",
+        ),
     )
 
     # SAPI は config から rate を取って渡す(設定なしなら既定 180)

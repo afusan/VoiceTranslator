@@ -76,6 +76,17 @@ asr-google-stt = [
 asr-deepgram = [
     "deepgram-sdk>=3.7",
 ]
+# Translator(クラウド)系。HTTP クライアントは asr-openai-api の httpx を流用する
+# のが理想だが、各 backend を独立 extras にして必要分だけ入れられる構成を維持。
+translator-deepl = [
+    "httpx>=0.27",
+]
+translator-openai-api = [
+    "httpx>=0.27",
+]
+translator-anthropic = [
+    "httpx>=0.27",
+]
 
 [tool.uv]
 conflicts = [
