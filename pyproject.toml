@@ -87,6 +87,26 @@ translator-openai-api = [
 translator-anthropic = [
     "httpx>=0.27",
 ]
+# TTS(音声合成)系。Piper はローカル、他はクラウド。
+# Piper TTS(ONNX 軽量ローカル、マルチ OS)。
+# piper-tts は onnxruntime と huggingface_hub を引っ張る。
+tts-piper = [
+    "piper-tts>=1.2",
+    "onnxruntime>=1.16",
+    "huggingface_hub>=0.24",
+]
+# ElevenLabs(クラウド)。`output_format=pcm_16000` で raw PCM を取得するため httpx で十分。
+tts-elevenlabs = [
+    "httpx>=0.27",
+]
+# OpenAI TTS(クラウド)。`/v1/audio/speech` を直接叩く。
+tts-openai-api = [
+    "httpx>=0.27",
+]
+# Google Cloud TTS(クラウド)。サービスアカウント JSON 認証。
+tts-google = [
+    "google-cloud-texttospeech>=2.16",
+]
 
 [tool.uv]
 conflicts = [

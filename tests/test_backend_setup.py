@@ -37,6 +37,10 @@ def patched_backend_setup(monkeypatch):
         ("voice_translator.translator.openai_gpt_backend", "OpenAiGptTranslatorBackend"),
         ("voice_translator.translator.anthropic_claude_backend", "AnthropicClaudeTranslatorBackend"),
         ("voice_translator.tts.sapi_backend", "SapiTtsBackend"),
+        ("voice_translator.tts.piper_backend", "PiperTtsBackend"),
+        ("voice_translator.tts.elevenlabs_backend", "ElevenLabsTtsBackend"),
+        ("voice_translator.tts.openai_tts_backend", "OpenAiTtsBackend"),
+        ("voice_translator.tts.google_cloud_tts_backend", "GoogleCloudTtsBackend"),
         ("voice_translator.output.soundcard_backend", "SoundcardOutputBackend"),
     ]:
         mod_name, cls_name = path
@@ -75,7 +79,11 @@ class TestRegisterDefaultBackends:
         assert registry.list_names(LayerKind.TRANSLATOR) == [
             "nllb200", "deepl", "openai_gpt", "anthropic_claude",
         ]
-        assert registry.list_names(LayerKind.TTS) == ["sapi"]
+        # Phase F2 で Piper / ElevenLabs / OpenAI TTS / Google Cloud TTS を追加。
+        # MVP の sapi が先頭。
+        assert registry.list_names(LayerKind.TTS) == [
+            "sapi", "piper", "elevenlabs", "openai_tts", "google_tts",
+        ]
         assert registry.list_names(LayerKind.OUTPUT) == ["soundcard"]
 
     def test_factory_create_invokes_class(self, patched_backend_setup) -> None:

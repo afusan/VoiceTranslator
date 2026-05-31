@@ -240,6 +240,41 @@ def _nllb200_model_options(
     return list(_RECOMMENDED_MODELS)
 
 
+def _piper_voice_options(
+    controller: "AppController", layer: LayerKind  # noqa: ARG001
+) -> list[ModelInfo]:
+    """Piper TTS の推奨 voice 一覧(dropdown の options_fn)。
+
+    voice 名そのものをモデル名として扱う(初回利用時に HF から DL される)。
+    """
+    from voice_translator.tts.piper_backend import RECOMMENDED_VOICES
+    return [ModelInfo(name=v, display_name=v) for v in RECOMMENDED_VOICES]
+
+
+def _elevenlabs_model_options(
+    controller: "AppController", layer: LayerKind  # noqa: ARG001
+) -> list[ModelInfo]:
+    """ElevenLabs の TTS モデル一覧(dropdown の options_fn)。"""
+    from voice_translator.tts.elevenlabs_backend import SUPPORTED_MODELS
+    return [ModelInfo(name=m, display_name=m) for m in SUPPORTED_MODELS]
+
+
+def _openai_tts_voice_options(
+    controller: "AppController", layer: LayerKind  # noqa: ARG001
+) -> list[ModelInfo]:
+    """OpenAI TTS のプリメイド voice 一覧(dropdown の options_fn)。"""
+    from voice_translator.tts.openai_tts_backend import SUPPORTED_VOICES
+    return [ModelInfo(name=v, display_name=v) for v in SUPPORTED_VOICES]
+
+
+def _openai_tts_model_options(
+    controller: "AppController", layer: LayerKind  # noqa: ARG001
+) -> list[ModelInfo]:
+    """OpenAI TTS のモデル一覧(tts-1 / tts-1-hd)。"""
+    from voice_translator.tts.openai_tts_backend import SUPPORTED_MODELS
+    return [ModelInfo(name=m, display_name=m) for m in SUPPORTED_MODELS]
+
+
 def _recent_durations_label(layer: LayerKind) -> "SettingField":
     """直近処理時間平均の表示ラベル(Phase C2)。layer の状態変化に反応して更新される。
 
@@ -456,6 +491,88 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("sapi"),
+        # Piper TTS(ローカル、マルチ OS、ONNX)
+        SettingField(
+            keys=("backends_config", "piper", "voice_name"),
+            label="Piper: voice",
+            field_type="dropdown",
+            default="en_US-amy-low",
+            applies_when_backend="piper",
+            options_fn=_piper_voice_options,
+            help_text=(
+                "Piper の voice モデル名(`<lang_country>-<speaker>-<quality>` 形式)。"
+                "初回利用時に Hugging Face `rhasspy/piper-voices` から DL される。"
+                "日本語(ja)voice は標準配布なし。"
+            ),
+        ),
+        _auto_load_toggle("piper"),
+        # ElevenLabs(クラウド、プリメイド voice)
+        SettingField(
+            keys=("backends_config", "elevenlabs", "voice_id"),
+            label="ElevenLabs: voice_id",
+            field_type="str",
+            default="21m00Tcm4TlvDq8ikWAM",  # Rachel
+            applies_when_backend="elevenlabs",
+            help_text=(
+                "ElevenLabs のプリメイド voice ID。デフォルトは Rachel(英語女性)。"
+                "他の voice は ElevenLabs ダッシュボードの Voices ページから ID を取得。"
+            ),
+        ),
+        SettingField(
+            keys=("backends_config", "elevenlabs", "model_id"),
+            label="ElevenLabs: モデル",
+            field_type="dropdown",
+            default="eleven_multilingual_v2",
+            applies_when_backend="elevenlabs",
+            options_fn=_elevenlabs_model_options,
+            help_text=(
+                "多言語: `eleven_multilingual_v2`(29 言語、品質寄り)。"
+                "低レイテンシ: `eleven_turbo_v2_5`。"
+                "英語専用: `eleven_monolingual_v1`。"
+            ),
+        ),
+        _auto_load_toggle("elevenlabs"),
+        # OpenAI TTS(クラウド、プリメイド 6 voice)
+        SettingField(
+            keys=("backends_config", "openai_tts", "voice"),
+            label="OpenAI TTS: voice",
+            field_type="dropdown",
+            default="alloy",
+            applies_when_backend="openai_tts",
+            options_fn=_openai_tts_voice_options,
+            help_text="プリメイド 6 voice(alloy / echo / fable / onyx / nova / shimmer)。",
+        ),
+        SettingField(
+            keys=("backends_config", "openai_tts", "model"),
+            label="OpenAI TTS: モデル",
+            field_type="dropdown",
+            default="tts-1",
+            applies_when_backend="openai_tts",
+            options_fn=_openai_tts_model_options,
+            help_text="tts-1(低レイテンシ)/ tts-1-hd(高品質)。",
+        ),
+        _auto_load_toggle("openai_tts"),
+        # Google Cloud TTS(クラウド、サービスアカウント JSON)
+        SettingField(
+            keys=("backends_config", "google_tts", "voice_name"),
+            label="Google TTS: voice 名",
+            field_type="str",
+            default="",
+            applies_when_backend="google_tts",
+            help_text=(
+                "Google TTS の voice 名(例: `en-US-Wavenet-A`、`ja-JP-Neural2-B`)。"
+                "空欄なら言語コードから既定 voice が自動選択される。"
+            ),
+        ),
+        SettingField(
+            keys=("backends_config", "google_tts", "default_language"),
+            label="Google TTS: default 言語",
+            field_type="str",
+            default="en",
+            applies_when_backend="google_tts",
+            help_text="`tgt_lang` が空のときに使う既定言語(ISO 639-1)。",
+        ),
+        _auto_load_toggle("google_tts"),
     ],
     LayerKind.OUTPUT: [
         SettingField(
