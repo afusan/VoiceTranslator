@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>レイテンシ計測区間の整理</title>
+<style>
+  body { font-family: "Segoe UI", "Meiryo", sans-serif; max-width: 1100px; margin: 1.5rem auto; padding: 0 1rem; color:#1f2937; }
+  h1 { border-bottom: 2px solid #2563eb; padding-bottom: 0.3rem; }
+  h2 { margin-top: 2rem; color:#1e40af; }
+  table { border-collapse: collapse; width: 100%; margin: 0.8rem 0; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 10px; vertical-align: top; font-size: 14px; }
+  th { background: #eff6ff; text-align: left; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .timeline { background: #f1f5f9; padding: 16px; border-radius: 8px; overflow-x: auto; }
+  .timeline svg { display: block; min-width: 920px; }
+  .lab    { font: 12px "Segoe UI", sans-serif; fill: #0f172a; }
+  .lab-sm { font: 11px "Segoe UI", sans-serif; fill: #475569; }
+  .point  { fill: #ef4444; stroke: white; stroke-width: 1.5; }
+  .bar    { fill: #93c5fd; }
+  .bar-proc { fill: #fde68a; }
+  .bar-wait { fill: #d8b4fe; }
+  .bar-out  { fill: #6ee7b7; }
+  .axis   { stroke: #334155; stroke-width: 1.5; }
+  .tick   { stroke: #334155; stroke-width: 1; }
+  .recommend { background: #ecfccb; padding: 12px 16px; border-left: 5px solid #65a30d; border-radius: 4px; }
+  .note { background: #fef3c7; padding: 10px 14px; border-left: 4px solid #d97706; border-radius: 4px; font-size: 14px; }
+  code { background: #e2e8f0; padding: 1px 5px; border-radius: 3px; }
+  .legend { font-size: 13px; margin: 8px 0; }
+  .legend span.box { display: inline-block; width: 14px; height: 12px; vertical-align: middle; margin-right: 4px; border: 1px solid #94a3b8; }
+</style>
+</head>
+<body>
+
+<h1>レイテンシ計測区間の整理</h1>
+
+<p>本アプリは「マイクで声を拾う → 発話の区切り検出 → 文字起こし → 翻訳 → 音声合成 → 再生」を順番に流すパイプラインで、各処理の<strong>開始時刻と完了時刻</strong>を 1 発話ごとに記録している。GUI に出す「平均レイテンシ」がどこからどこまでを指しているか、どこに変更できるかを整理する。</p>
+
+<h2>1. 記録されている時刻(役割ベース)</h2>
+
+<table>
+  <thead>
+    <tr><th>マーカー</th><th>意味(役割)</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>① 録音開始</td><td>発話の<strong>先頭の音</strong>がマイクに入った瞬間(発話区切り検出器が「ここから発話」と判定した時刻)</td></tr>
+    <tr><td>② 発話終端確定</td><td>発話区切り検出器が「<strong>ここで一区切り</strong>」と判定し、文字起こし待ち行列に投入した瞬間</td></tr>
+    <tr><td>③ 文字起こし開始</td><td>待ち行列から取り出して、文字起こしエンジンに渡した瞬間</td></tr>
+    <tr><td>④ 文字起こし完了</td><td>テキストと言語が確定した瞬間</td></tr>
+    <tr><td>⑤ 翻訳開始</td><td>翻訳エンジンに渡した瞬間</td></tr>
+    <tr><td>⑥ 翻訳完了</td><td>訳文が確定した瞬間</td></tr>
+    <tr><td>⑦ 音声合成開始</td><td>音声合成エンジンに渡した瞬間</td></tr>
+    <tr><td>⑧ 音声合成完了</td><td>再生用の音声データが揃った瞬間</td></tr>
+    <tr><td>⑨ 再生指示発行</td><td>再生エンジンに「再生して」と指示した瞬間</td></tr>
+    <tr><td>⑩ 再生指示戻り</td><td>再生エンジン側の関数が呼び出し元に制御を返した瞬間 <span style="color:#b45309;">(※ 実装次第で「再生キューに積み終わった」か「再生し終わった」かが変わる)</span></td></tr>
+  </tbody>
+</table>
+
+<h2>2. 時系列の図</h2>
+
+<div class="timeline">
+<svg viewBox="0 0 980 360" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- メイン軸 -->
+  <line x1="40" y1="320" x2="960" y2="320" class="axis"/>
+  <text x="940" y="345" class="lab-sm">時刻 →</text>
+
+  <!-- セクションの帯 -->
+  <!-- 発話そのものの時間: ① ~ ② -->
+  <rect x="60"  y="40" width="200" height="22" class="bar"/>
+  <text x="160" y="55" class="lab" text-anchor="middle">発話そのもの(声が出ている時間)</text>
+
+  <!-- 待ち: ② -> ③ -->
+  <rect x="260" y="80" width="50"  height="18" class="bar-wait"/>
+  <text x="285" y="93" class="lab-sm" text-anchor="middle">待ち</text>
+
+  <!-- 処理: 文字起こし ③ -> ④ -->
+  <rect x="310" y="80" width="120" height="18" class="bar-proc"/>
+  <text x="370" y="93" class="lab" text-anchor="middle">文字起こし</text>
+
+  <!-- 待ち -->
+  <rect x="430" y="80" width="30"  height="18" class="bar-wait"/>
+
+  <!-- 翻訳 ⑤ -> ⑥ -->
+  <rect x="460" y="80" width="110" height="18" class="bar-proc"/>
+  <text x="515" y="93" class="lab" text-anchor="middle">翻訳</text>
+
+  <!-- 待ち -->
+  <rect x="570" y="80" width="20"  height="18" class="bar-wait"/>
+
+  <!-- 音声合成 ⑦ -> ⑧ -->
+  <rect x="590" y="80" width="100" height="18" class="bar-proc"/>
+  <text x="640" y="93" class="lab" text-anchor="middle">音声合成</text>
+
+  <!-- 待ち -->
+  <rect x="690" y="80" width="20"  height="18" class="bar-wait"/>
+
+  <!-- 再生 ⑨ -> ⑩ -->
+  <rect x="710" y="80" width="170" height="18" class="bar-out"/>
+  <text x="795" y="93" class="lab" text-anchor="middle">再生(指示〜戻り)</text>
+
+  <!-- ポイントマーカー -->
+  <g>
+    <!-- ① 録音開始 (x=60) -->
+    <circle cx="60"  cy="320" r="5" class="point"/>
+    <line x1="60"  y1="320" x2="60"  y2="40" stroke="#ef4444" stroke-dasharray="3,3" stroke-width="1"/>
+    <text x="60"   y="340" class="lab-sm" text-anchor="middle">① 録音開始</text>
+
+    <!-- ② 発話終端 (x=260) -->
+    <circle cx="260" cy="320" r="5" class="point"/>
+    <line x1="260" y1="320" x2="260" y2="40" stroke="#ef4444" stroke-dasharray="3,3" stroke-width="1"/>
+    <text x="260" y="340" class="lab-sm" text-anchor="middle">② 発話終端確定</text>
+
+    <!-- ③ 文字起こし開始 (x=310) -->
+    <circle cx="310" cy="320" r="5" class="point"/>
+    <text x="310" y="280" class="lab-sm" text-anchor="middle">③</text>
+    <text x="310" y="295" class="lab-sm" text-anchor="middle">文字起こし開始</text>
+
+    <!-- ④ 文字起こし完了 (x=430) -->
+    <circle cx="430" cy="320" r="5" class="point"/>
+    <text x="430" y="280" class="lab-sm" text-anchor="middle">④</text>
+    <text x="430" y="295" class="lab-sm" text-anchor="middle">完了</text>
+
+    <!-- ⑤ 翻訳開始 (x=460) -->
+    <circle cx="460" cy="320" r="5" class="point"/>
+    <text x="460" y="260" class="lab-sm" text-anchor="middle">⑤ 翻訳開始</text>
+
+    <!-- ⑥ 翻訳完了 (x=570) -->
+    <circle cx="570" cy="320" r="5" class="point"/>
+    <text x="570" y="260" class="lab-sm" text-anchor="middle">⑥ 翻訳完了</text>
+
+    <!-- ⑦ 音声合成開始 (x=590) -->
+    <circle cx="590" cy="320" r="5" class="point"/>
+    <text x="590" y="240" class="lab-sm" text-anchor="middle">⑦ 音声合成開始</text>
+
+    <!-- ⑧ 音声合成完了 (x=690) -->
+    <circle cx="690" cy="320" r="5" class="point"/>
+    <text x="690" y="240" class="lab-sm" text-anchor="middle">⑧ 音声合成完了</text>
+
+    <!-- ⑨ 再生指示発行 (x=710) -->
+    <circle cx="710" cy="320" r="5" class="point"/>
+    <line x1="710" y1="320" x2="710" y2="40" stroke="#2563eb" stroke-dasharray="3,3" stroke-width="1"/>
+    <text x="710" y="220" class="lab-sm" text-anchor="middle">⑨ 再生指示</text>
+
+    <!-- ⑩ 再生指示戻り (x=880) -->
+    <circle cx="880" cy="320" r="5" class="point"/>
+    <line x1="880" y1="320" x2="880" y2="40" stroke="#2563eb" stroke-dasharray="3,3" stroke-width="1"/>
+    <text x="880" y="220" class="lab-sm" text-anchor="middle">⑩ 再生戻り</text>
+  </g>
+
+  <!-- 現在のGUI表示区間: ① -> ⑩ -->
+  <line x1="60"  y1="20" x2="880" y2="20" stroke="#dc2626" stroke-width="3"/>
+  <line x1="60"  y1="14" x2="60"  y2="26" stroke="#dc2626" stroke-width="3"/>
+  <line x1="880" y1="14" x2="880" y2="26" stroke="#dc2626" stroke-width="3"/>
+  <text x="470" y="14" text-anchor="middle" class="lab" fill="#dc2626" font-weight="bold">▼ 今の GUI 表示(① 録音開始 〜 ⑩ 再生戻り)— 発話の長さがそのまま乗る</text>
+
+  <!-- 推奨区間: ② -> ⑨ -->
+  <line x1="260" y1="135" x2="710" y2="135" stroke="#16a34a" stroke-width="3"/>
+  <line x1="260" y1="129" x2="260" y2="141" stroke="#16a34a" stroke-width="3"/>
+  <line x1="710" y1="129" x2="710" y2="141" stroke="#16a34a" stroke-width="3"/>
+  <text x="485" y="155" text-anchor="middle" class="lab" fill="#16a34a" font-weight="bold">▼ 推奨案 A(② 発話終端 〜 ⑨ 再生指示) = 「喋り終わってから音が返るまで」</text>
+
+</svg>
+
+<div class="legend">
+  <span class="box" style="background:#93c5fd;"></span>発話そのもの &nbsp;
+  <span class="box" style="background:#d8b4fe;"></span>各段の待ち時間 &nbsp;
+  <span class="box" style="background:#fde68a;"></span>各段の処理時間 &nbsp;
+  <span class="box" style="background:#6ee7b7;"></span>再生
+</div>
+</div>
+
+<h2>3. 今の GUI が出している区間</h2>
+
+<p><strong>「① 録音開始 → ⑩ 再生戻り」</strong>。つまり「最初の音がマイクに入ってから、再生関数の戻りまで」の総時間を平均している。</p>
+
+<p>この区間には<strong>発話そのものの長さ</strong>がまるごと含まれる。たとえば 5 秒の文を喋ったら、内部処理がどんなに速くても表示は 5 秒以上になる。「翻訳が速いか遅いか」「会話の応答が速いか」を体感する指標としては<strong>分かりにくい</strong>。</p>
+
+<h2>4. 区間の候補</h2>
+
+<table>
+  <thead>
+    <tr><th>案</th><th>区間</th><th>意味</th><th>用途</th><th>注意</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>A(推奨)</strong></td>
+      <td>② 発話終端 → ⑨ 再生指示</td>
+      <td>「喋り終わってから音が返ってくるまで」</td>
+      <td>会話の応答遅延を体感したい時。一般ユーザ向けの「平均レイテンシ」として最適</td>
+      <td>発話そのものの長さは含まれない</td>
+    </tr>
+    <tr>
+      <td>B</td>
+      <td>③ 文字起こし開始 → ⑨ 再生指示</td>
+      <td>「内部処理パイプラインだけの所要時間」(各段の待ち時間も含む)</td>
+      <td>開発・性能チューニング向け</td>
+      <td>体感とはやや遠い</td>
+    </tr>
+    <tr>
+      <td>C</td>
+      <td>① 録音開始 → ⑨ 再生指示</td>
+      <td>今の表示の「⑩ 戻り」を「⑨ 指示」に置き換えた版</td>
+      <td>今の表示の小改善</td>
+      <td>発話の長さが乗る問題は解決しない</td>
+    </tr>
+    <tr>
+      <td>D</td>
+      <td>段ごとに別々に表示(文字起こし / 翻訳 / 音声合成)</td>
+      <td>各段の処理時間を個別に出す</td>
+      <td>どこが遅いか一目で分かる</td>
+      <td>1 つの数字にはならない / 表示スペース増</td>
+    </tr>
+    <tr>
+      <td>E</td>
+      <td>⑧ 音声合成完了 → ⑨ 再生指示</td>
+      <td>「処理は終わったのに音が出ない時間」(出力待ちのみ)</td>
+      <td>出力側の滞留デバッグ用</td>
+      <td>常時表示する値ではない</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>5. 推奨</h2>
+
+<div class="recommend">
+<p><strong>GUI トップの「平均レイテンシ」は案 A(② 発話終端 → ⑨ 再生指示)に変更する。</strong></p>
+<p>必要なら、ステータスセクションに案 D(段別の経過時間)を追加表示すれば、「数字が悪いときにどこが原因か」も確認できる二段構成になる。</p>
+</div>
+
+<h2>6. 補足: ⑩ 再生戻りの意味</h2>
+
+<div class="note">
+再生エンジンの実装次第で <strong>⑩ の意味が変わる</strong>:
+<ul>
+  <li>再生バッファに書いて即返るタイプ(典型的なオーディオ出力ライブラリ)→ ⑩ ≒ ⑨。レイテンシ表示には差が出ない</li>
+  <li>再生完了まで待つタイプ → ⑩ には「再生時間そのもの」が乗る。会話被りの指標としては使えるが、応答遅延の指標としては不適</li>
+</ul>
+案 A は <strong>⑨(再生指示)</strong> で止めることで、この実装差分の影響を受けないようにする狙いもある。
+</div>
+
+</body>
+</html>
