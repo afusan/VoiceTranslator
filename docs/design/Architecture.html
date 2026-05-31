@@ -309,8 +309,8 @@
   <li><strong>Input</strong>: PCMチャンク連続取得 → VAD が無音で区切り → <code>seq_id = SequenceGenerator.next()</code> → <code>ledger.init(seq_id, t_capture, t_vad_end, src_lang_hint)</code> → <code>captured_queue.put(RawPayload(seq_id, pcm, hint))</code></li>
   <li><strong>ASR</strong>: captured_queue から取出 → <code>(src_text, src_lang) = asr.transcribe(pcm, hint)</code> → <code>ledger.record(seq_id, t_asr=now, src_text, src_lang)</code> → (任意) <code>text_logger.write_src(seq_id, src_text, src_lang)</code> → <code>recognized_queue.put(TranscribedPayload(seq_id, src_text, src_lang))</code></li>
   <li><strong>Translator</strong>: recognized_queue から取出 → <code>tgt_text = translator.translate(src_text, src_lang, tgt_lang)</code> → <code>ledger.record(seq_id, t_translate, tgt_text, tgt_lang)</code> → (任意) <code>text_logger.write_tgt(seq_id, tgt_text, tgt_lang)</code> → <code>translated_queue.put(TranslatedPayload(seq_id, tgt_text, tgt_lang))</code></li>
-  <li><strong>TTS</strong>: translated_queue から取出 → <code>(pcm, sr) = tts.synthesize(tgt_text, tgt_lang)</code> → <code>ledger.record(seq_id, t_tts)</code> → <code>synthesized_queue.put(SynthesizedPayload(seq_id, pcm, sr))</code></li>
-  <li><strong>Output</strong>: synthesized_queue から取出 → <code>output.play(pcm, sr)</code> → <code>ledger.record(seq_id, t_playback)</code> → <code>record = ledger.pop(seq_id)</code> → <code>jsonl.write(record)</code> → <code>on_utterance_done(seq_id, record)</code></li>
+  <li><strong>TTS</strong>: translated_queue から取出 → <code>(pcm, sr) = tts.synthesize(tgt_text, tgt_lang)</code> → <code>ledger.record(seq_id, t_tts)</code> → <code>on_text_ready(ledger.peek(seq_id))</code>(UI 履歴の前倒し通知。音より先にテキストを出す) → <code>synthesized_queue.put(SynthesizedPayload(seq_id, pcm, sr))</code></li>
+  <li><strong>Output</strong>: synthesized_queue から取出 → <code>output.play(pcm, sr)</code> → <code>ledger.record(seq_id, t_playback)</code> → <code>record = ledger.pop(seq_id)</code> → <code>jsonl.write(record)</code> → <code>on_utterance_done(seq_id, record)</code>(レイテンシ確定通知)</li>
 </ol>
 
 <!-- =================================================== -->

@@ -62,6 +62,7 @@ class ControlPanel(ctk.CTkFrame):
         # AppController からのコールバックを受け取る
         self._controller.set_callbacks(
             on_utterance_done=self._on_utterance_from_thread,
+            on_text_ready=self._on_text_ready_from_thread,
             on_fatal=self._on_fatal_from_thread,
             on_warn=self._on_warn_from_thread,
             on_status_change=self._on_status_from_thread,
@@ -316,6 +317,14 @@ class ControlPanel(ctk.CTkFrame):
     def _on_utterance_from_thread(self, record: dict) -> None:
         self.after(0, lambda: self._apply_utterance(record))
 
+    def _on_text_ready_from_thread(self, record: dict) -> None:
+        """TTS 完了時(= 音声合成完了の時点)に呼ばれる前倒し通知。
+
+        履歴表示はこちらで行い、レイテンシ計算は `_apply_utterance`(Output 完了後)
+        で行う 2 段構成。発話が長い再生でも、テキストは音より先に出せる。
+        """
+        self.after(0, lambda: self._apply_text_ready(record))
+
     def _on_fatal_from_thread(
         self, message: str, *, exc=None, stage=None, seq_id=None, suppressed=0
     ) -> None:
@@ -516,10 +525,12 @@ class ControlPanel(ctk.CTkFrame):
 
     # ---- メインスレッドでの反映 ----
     def _apply_utterance(self, record: dict) -> None:
-        # 計測区間: 「発話の終端確定 → 再生指示の発行」
-        # 体感の「喋り終わってから音が返ってくるまで」に対応(発話そのものの長さは含めない)。
-        # 区間端から端まで(録音開始 → 再生戻り)のトータルは processtime.csv の
-        # `total_ms` 列で見られるため GUI 側はこの区間 1 つに絞る。
+        """Output 完了時に呼ばれる。レイテンシ計算のみを行う(履歴は前倒し済み)。
+
+        計測区間: 「発話の終端確定 → 再生指示の発行」
+        体感の「喋り終わってから音が返ってくるまで」に対応(発話そのものの長さは含めない)。
+        トータル時間(録音開始 → 再生戻り)や段別の内訳は processtime.csv で見られる。
+        """
         timeline = record.get("timeline", {}) or {}
         t_start = timeline.get("t_vad_end")
         t_end = timeline.get("t_playback_start")
@@ -531,6 +542,12 @@ class ControlPanel(ctk.CTkFrame):
                 text=f"平均レイテンシ: {avg:.2f} 秒(直近{len(self._latencies)}件)"
             )
 
+    def _apply_text_ready(self, record: dict) -> None:
+        """TTS 完了時に呼ばれる前倒し通知。履歴ボックスに翻訳結果を表示する。
+
+        ledger スナップショットを使うため、`t_playback_start` 以降は含まれない。
+        レイテンシ表示は `_apply_utterance`(Output 完了後)で別途更新される。
+        """
         seq = record.get("seq_id", "?")
         src_lang = record.get("src_lang", "")
         tgt_lang = record.get("tgt_lang", "")

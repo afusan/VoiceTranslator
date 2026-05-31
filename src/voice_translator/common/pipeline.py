@@ -98,6 +98,7 @@ class PipelineCoordinator:
         src_lang: str = "auto",
         tgt_lang: str = "ja",
         on_utterance_done: Callable[[dict], None] | None = None,
+        on_text_ready: Callable[[dict], None] | None = None,
         on_dropped: Callable[[list[int], str], None] | None = None,
         read_timeout: float = 0.1,
         captured_queue_max_bytes: int = 10_000_000,
@@ -123,6 +124,11 @@ class PipelineCoordinator:
         self._src_lang = src_lang
         self._tgt_lang = tgt_lang
         self._on_utterance_done = on_utterance_done
+        # on_text_ready: TTS 完了直後(= 音声合成完了の時点)に呼ぶコールバック。
+        # UI 履歴を「音が鳴るより前」に出すための前倒し通知。record は ledger の
+        # スナップショット(`peek`)で、t_playback_start / t_playback は未確定。
+        # レイテンシ計算は on_utterance_done(Output 完了後)側で別途行う。
+        self._on_text_ready = on_text_ready
         self._on_dropped = on_dropped
         self._read_timeout = read_timeout
         # Phase E: リトライ機構のパラメータ。RecoverableError → 指数バックオフで再試行。
@@ -426,6 +432,15 @@ class PipelineCoordinator:
 
             self._ledger.mark_time(msg.seq_id, "t_tts")
             self._dump.on_tts(msg.seq_id, pcm, samplerate)
+            # 音声合成完了の時点で UI に「テキストできた」通知を流す(前倒し表示用)。
+            # 再生待ち / 再生時間ぶんだけ早く履歴に出せる。失敗しても本体は止めない。
+            if self._on_text_ready is not None:
+                try:
+                    snapshot = self._ledger.peek(msg.seq_id)
+                    snapshot.setdefault("seq_id", msg.seq_id)
+                    self._on_text_ready(snapshot)
+                except Exception:  # noqa: BLE001
+                    self._logger.exception("on_text_ready callback failed")
             next_msg = PipelineMessage(
                 seq_id=msg.seq_id,
                 payload=SynthesizedPayload(tts_pcm=pcm, tts_samplerate=samplerate),
