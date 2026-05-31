@@ -47,6 +47,11 @@ class ControlPanel(ctk.CTkFrame):
         self._banner = banner                  # NotificationBanner(あれば起動失敗を流す)
         self._state: str = "idle"  # idle / loading / running / stopping
         self._latencies: deque[float] = deque(maxlen=10)
+        # GUI 操作イベントの履歴(起動失敗 / 停止例外 / 致命的エラー 等)。
+        # 「最近の翻訳」widget を翻訳結果に純化するため、エラー系は status textbox 側に表示する。
+        # backend 由来エラーは `_collect_recent_errors` で別途集約されるので、
+        # ここは GUI 操作起源のもの専用(2026-05-30)。
+        self._gui_event_log: deque[str] = deque(maxlen=10)
 
         # 各レイヤの現在のステータス(初期値は AppController から取得)
         self._layer_statuses: dict[LayerKind, ModelStatus] = dict(
@@ -186,7 +191,7 @@ class ControlPanel(ctk.CTkFrame):
 
     def _apply_load_failed(self, message: str) -> None:
         self._show_failure_banner(f"ロード失敗: {message}")
-        self._append_history(f"[ロード失敗] {message}")
+        self._append_status_event(f"[ロード失敗] {message}")
         self._sync_ready_state()
 
     def _do_start_async(self) -> None:
@@ -217,7 +222,8 @@ class ControlPanel(ctk.CTkFrame):
                 self._status_label.configure(text=f"起動失敗: {e}")
             except Exception:  # noqa: BLE001 - widget 破棄済み等
                 pass
-            self._append_history(f"[起動失敗] {e}")
+            # 履歴は status textbox 側に積む(従来は _append_history で翻訳履歴に混ぜていた)
+            self._append_status_event(f"[起動失敗] {e}")
             return
         self._state = "starting"
         self._toggle_btn.configure(text="開始中…", state="disabled")
@@ -238,7 +244,7 @@ class ControlPanel(ctk.CTkFrame):
         try:
             self._controller.stop_pipeline()
         except Exception as e:  # noqa: BLE001
-            self._append_history(f"[停止時例外] {e}")
+            self._append_status_event(f"[停止時例外] {e}")
         self._state = "idle"
         # 停止後はバックエンドが残っているので即 ready 状態に戻す
         self._sync_ready_state()
@@ -265,7 +271,7 @@ class ControlPanel(ctk.CTkFrame):
     def _apply_loader_failed(self, message: str) -> None:
         # 非同期ロード失敗も同期失敗と同じ 4 段フィードバックで通知
         self._show_failure_banner(f"起動失敗: {message}")
-        self._append_history(f"[起動失敗] {message}")
+        self._append_status_event(f"[起動失敗] {message}")
         self._state = "idle"
         # 起動失敗時は現在のレイヤ状態を見て ready 表示を更新
         self._sync_ready_state()
@@ -346,11 +352,26 @@ class ControlPanel(ctk.CTkFrame):
     _STATUS_REFRESH_INTERVAL_MS = 3000  # 3 秒ごとにエラー履歴等を再フェッチ
 
     def _refresh_status_text(self) -> None:
-        """`AppController.get_status_summary()` を取得してテキストボックスを更新する。"""
+        """`AppController.get_status_summary()` + GUI 操作イベント履歴を表示する。
+
+        構成:
+          1. レイヤ別 backend 状態
+          2. 最近の backend エラー(controller 側)
+          3. 操作イベント(本パネル側、起動失敗 / 致命的エラー 等。新しい順)
+        """
         try:
             summary = self._controller.get_status_summary()
         except Exception as e:  # noqa: BLE001
             summary = f"(ステータス取得に失敗: {e})"
+
+        # GUI 操作イベントを末尾に付加(あれば)
+        if self._gui_event_log:
+            lines = [summary, "", "操作イベント:"]
+            # 新しいものから 5 件まで(直近を見たい想定)
+            for ev in list(self._gui_event_log)[-5:][::-1]:
+                lines.append(f"  {ev}")
+            summary = "\n".join(lines)
+
         try:
             self._status_text.configure(state="normal")
             self._status_text.delete("1.0", "end")
@@ -359,6 +380,19 @@ class ControlPanel(ctk.CTkFrame):
         except Exception:  # noqa: BLE001
             # widget が破棄済み等の場合は無視
             pass
+
+    def _append_status_event(self, message: str) -> None:
+        """操作起源のイベント(起動失敗 / 停止例外 / 致命的エラー 等)を status textbox に積む。
+
+        履歴は 10 件まで(`_gui_event_log` の maxlen)、表示は新しい順 5 件。
+        積んだら即時 `_refresh_status_text` で反映する(3 秒の周期更新を待たない)。
+        ステータスセクションが畳まれていれば見えないが、開けば最新が出る。
+        """
+        from time import strftime
+
+        stamped = f"[{strftime('%H:%M:%S')}] {message}"
+        self._gui_event_log.append(stamped)
+        self._refresh_status_text()
 
     def _schedule_status_refresh(self) -> None:
         """周期的にステータスを再描画する。`on_status_change` の通知漏れに対する保険。"""
@@ -489,7 +523,7 @@ class ControlPanel(ctk.CTkFrame):
         self._append_history(text)
 
     def _apply_fatal(self, message: str) -> None:
-        self._append_history(f"[致命的エラー] {message}")
+        self._append_status_event(f"[致命的エラー] {message}")
         self._state = "idle"
         # ready 表示を更新(基本は全 LOADED 維持なので "▶ 開始" 復活)
         self._sync_ready_state()
