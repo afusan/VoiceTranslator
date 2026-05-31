@@ -116,6 +116,19 @@ class ControlPanel(ctk.CTkFrame):
         self._status_section.grid(
             row=3, column=0, columnspan=3, rowspan=2, sticky="nsew", padx=10, pady=(6, 4)
         )
+        # body 内: ツールバー(クリアボタン) + textbox を縦並びに。
+        # クリア対象は GUI 操作イベント履歴(`_gui_event_log`)のみ。
+        # レイヤ状態と backend エラー集約は AppController が管理しているので、
+        # ここで消しても次回 refresh で復活する(これは意図通り)。
+        status_toolbar = ctk.CTkFrame(self._status_section.body, fg_color="transparent")
+        status_toolbar.pack(fill="x", padx=2, pady=(0, 2))
+        self._status_clear_btn = ctk.CTkButton(
+            status_toolbar,
+            text="操作イベントをクリア",
+            width=160,
+            command=self._on_clear_status_events,
+        )
+        self._status_clear_btn.pack(side="right")
         self._status_text = ctk.CTkTextbox(
             self._status_section.body, height=140, wrap="word"
         )
@@ -534,6 +547,17 @@ class ControlPanel(ctk.CTkFrame):
         # 警告は UI には出さない(app.log に残るので、調査時はログを参照)。
         # UI には致命的エラーだけを表示し、ユーザが「動いている/止まった」を判別しやすくする。
         return
+
+    # ============================================================
+    def _on_clear_status_events(self) -> None:
+        """ステータスの「操作イベント」履歴をクリアする。
+
+        対象は `_gui_event_log`(起動失敗 / 停止例外 / 致命的エラー 等の GUI 操作起源)。
+        レイヤ別 backend 状態と最近の backend エラーは AppController 側が持っているので
+        ここではクリアしない(次の refresh で再表示される、これは意図通り)。
+        """
+        self._gui_event_log.clear()
+        self._refresh_status_text()
 
     # ============================================================
     def _on_clear_history(self) -> None:
