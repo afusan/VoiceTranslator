@@ -42,6 +42,10 @@ def register_default_backends(
         AnthropicClaudeTranslatorBackend,
     )
     from voice_translator.tts.sapi_backend import SapiTtsBackend
+    from voice_translator.tts.piper_backend import PiperTtsBackend
+    from voice_translator.tts.elevenlabs_backend import ElevenLabsTtsBackend
+    from voice_translator.tts.openai_tts_backend import OpenAiTtsBackend
+    from voice_translator.tts.google_cloud_tts_backend import GoogleCloudTtsBackend
     from voice_translator.vad.silero_backend import SileroVadBackend
     # Phase F1 で追加した VAD 群。依存は `[project.optional-dependencies].vad-extra`(opt-in)。
     # backend クラス自体の import は実依存(webrtcvad/pyannote.audio/pvcobra)を引かないので、
@@ -383,7 +387,107 @@ def register_default_backends(
     # SAPI は config から rate を取って渡す(設定なしなら既定 180)
     sapi_rate = _read_int(config, ("backends_config", "sapi", "rate"), default=180)
     registry.register(
-        LayerKind.TTS, "sapi", lambda: SapiTtsBackend(rate=sapi_rate)
+        LayerKind.TTS, "sapi", lambda: SapiTtsBackend(rate=sapi_rate),
+        backend_cls=SapiTtsBackend,
+    )
+
+    # Piper TTS(ローカル、マルチ OS、ONNX)。extras: `tts-piper`。
+    piper_voice = _read_str(
+        config, ("backends_config", "piper", "voice_name"),
+        default="en_US-amy-low",
+    )
+    piper_device = _read_str(
+        config, ("backends_config", "piper", "device"), default="auto"
+    )
+    registry.register(
+        LayerKind.TTS,
+        "piper",
+        lambda: PiperTtsBackend(voice_name=piper_voice, device=piper_device),
+        backend_cls=PiperTtsBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=False,
+            requires_credentials=False,
+            notes="Piper TTS (ONNX, CPU 軽量)。voice モデルは初回 DL。",
+        ),
+    )
+
+    # ElevenLabs TTS(クラウド)。extras: `tts-elevenlabs`(httpx)。
+    elevenlabs_voice = _read_str(
+        config, ("backends_config", "elevenlabs", "voice_id"),
+        default="21m00Tcm4TlvDq8ikWAM",  # Rachel
+    )
+    elevenlabs_model = _read_str(
+        config, ("backends_config", "elevenlabs", "model_id"),
+        default="eleven_multilingual_v2",
+    )
+    registry.register(
+        LayerKind.TTS,
+        "elevenlabs",
+        lambda: ElevenLabsTtsBackend(
+            api_key=_get_credential(config, "elevenlabs", "api_key"),
+            voice_id=elevenlabs_voice,
+            model_id=elevenlabs_model,
+        ),
+        backend_cls=ElevenLabsTtsBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="ElevenLabs",
+            terms_url="https://elevenlabs.io/terms-of-use",
+            notes="ElevenLabs TTS。プリメイド voice 主軸。クローニングは未対応(pendList)。",
+        ),
+    )
+
+    # OpenAI TTS(クラウド)。extras: `tts-openai-api`(httpx)。
+    openai_tts_voice = _read_str(
+        config, ("backends_config", "openai_tts", "voice"), default="alloy"
+    )
+    openai_tts_model = _read_str(
+        config, ("backends_config", "openai_tts", "model"), default="tts-1"
+    )
+    registry.register(
+        LayerKind.TTS,
+        "openai_tts",
+        lambda: OpenAiTtsBackend(
+            api_key=_get_credential(config, "openai_tts", "api_key"),
+            voice=openai_tts_voice,
+            model=openai_tts_model,
+        ),
+        backend_cls=OpenAiTtsBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="OpenAI TTS",
+            terms_url="https://openai.com/policies/terms-of-use",
+            notes="OpenAI TTS。プリメイド 6 voice。response_format=pcm で 24kHz mono。",
+        ),
+    )
+
+    # Google Cloud TTS(クラウド)。サービスアカウント JSON 認証。
+    # extras: `tts-google`(google-cloud-texttospeech)。
+    google_tts_voice = _read_str(
+        config, ("backends_config", "google_tts", "voice_name"), default=""
+    )
+    google_tts_default_lang = _read_str(
+        config, ("backends_config", "google_tts", "default_language"),
+        default="en",
+    )
+    registry.register(
+        LayerKind.TTS,
+        "google_tts",
+        lambda: GoogleCloudTtsBackend(
+            credentials_path=_get_credential(config, "google_tts", "credentials_path"),
+            voice_name=google_tts_voice,
+            default_language=google_tts_default_lang,
+        ),
+        backend_cls=GoogleCloudTtsBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="Google Cloud Text-to-Speech",
+            terms_url="https://cloud.google.com/text-to-speech",
+            notes="Google Cloud TTS。LINEAR16 PCM、SSML 対応(本実装は text 入力のみ)。",
+        ),
     )
 
     registry.register(LayerKind.OUTPUT, "soundcard", SoundcardOutputBackend)

@@ -655,14 +655,45 @@ class TestDeepLApiCredentials:
             backend.translate("hi", "en", "ja")
 
 
-@pytest.mark.skip(reason="Phase F: OpenAI TTS API backend 実装後に有効化")
 class TestOpenAITtsApiCredentials:
-    """OpenAI TTS API backend の認証契約(Whisper と同じ API key を使う想定)。"""
+    """OpenAI TTS API backend の認証契約(Whisper / GPT と同じ key 形式、別保存)。"""
 
-    def test_credential_spec_has_api_key(self) -> None: ...
-    def test_verify_with_valid_key_returns_ok(self) -> None: ...
-    def test_verify_with_invalid_key_returns_failure(self) -> None: ...
-    def test_runtime_401_triggers_invalidate_verification(self) -> None: ...
+    def _backend_cls(self):
+        from voice_translator.tts.openai_tts_backend import OpenAiTtsBackend
+        return OpenAiTtsBackend
+
+    def test_credential_spec_has_api_key(self) -> None:
+        spec = self._backend_cls().credential_spec()
+        assert any(f.key_name == "api_key" and f.secret for f in spec)
+
+    def test_verify_with_valid_key_returns_ok(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=200))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "sk-x"})
+        assert r.ok is True
+
+    def test_verify_with_invalid_key_returns_failure(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=401))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "bad"})
+        assert r.ok is False
+
+    def test_runtime_401_triggers_invalidate_verification(self, monkeypatch) -> None:
+        """synthesize 中の 401 は FatalError(=AppController が invalidate を呼ぶ契約)。"""
+        import sys
+        from voice_translator.common.errors import FatalError
+        fake = MagicMock()
+        fake.post = MagicMock(return_value=MagicMock(status_code=401, text="bad"))
+        # HTTPError は exception 階層として呼ばれない経路なので、ベタな MagicMock 例外で十分
+        fake.HTTPError = type("HTTPError", (Exception,), {})
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        backend = self._backend_cls()(api_key="bad")
+        with pytest.raises(FatalError):
+            backend.synthesize("hi", "en")
 
 
 class TestAnthropicClaudeApiCredentials:
@@ -831,6 +862,106 @@ class TestGoogleCloudSttCredentials:
         json_path = self._setup_google_modules(
             monkeypatch, tmp_path,
             file_loader_side_effect=RuntimeError("token expired"),
+        )
+        result = self._backend_cls().verify_credentials({"credentials_path": json_path})
+        assert result.ok is False
+
+
+class TestElevenLabsTtsCredentials:
+    """ElevenLabs TTS backend の認証契約(API key 1 つ、`xi-api-key` ヘッダ)。"""
+
+    def _backend_cls(self):
+        from voice_translator.tts.elevenlabs_backend import ElevenLabsTtsBackend
+        return ElevenLabsTtsBackend
+
+    def test_credential_spec_has_api_key(self) -> None:
+        spec = self._backend_cls().credential_spec()
+        assert any(f.key_name == "api_key" and f.secret for f in spec)
+
+    def test_verify_with_valid_key_returns_ok(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=200))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "xi-x"})
+        assert r.ok is True
+
+    def test_verify_with_invalid_key_returns_failure(self, monkeypatch) -> None:
+        import sys
+        fake = MagicMock()
+        fake.get = MagicMock(return_value=MagicMock(status_code=401))
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        r = self._backend_cls().verify_credentials({"api_key": "bad"})
+        assert r.ok is False
+
+    def test_runtime_401_triggers_invalidate_verification(self, monkeypatch) -> None:
+        import sys
+        from voice_translator.common.errors import FatalError
+        fake = MagicMock()
+        fake.post = MagicMock(return_value=MagicMock(status_code=401, text="bad"))
+        fake.HTTPError = type("HTTPError", (Exception,), {})
+        monkeypatch.setitem(sys.modules, "httpx", fake)
+        backend = self._backend_cls()(api_key="bad")
+        with pytest.raises(FatalError):
+            backend.synthesize("hi", "en")
+
+
+class TestGoogleCloudTtsCredentials:
+    """Google Cloud TTS backend の認証契約(サービスアカウント JSON ファイル方式)。
+
+    GoogleCloudSttCredentials と同形(共通の field_type='file' + JSON ロード)。
+    """
+
+    def _backend_cls(self):
+        from voice_translator.tts.google_cloud_tts_backend import GoogleCloudTtsBackend
+        return GoogleCloudTtsBackend
+
+    def _setup_google_modules(self, monkeypatch, tmp_path, *, file_loader_side_effect=None):
+        """`google.cloud.texttospeech` と `google.oauth2.service_account` を mock 差し替え。"""
+        import sys
+
+        json_path = tmp_path / "fake_sa.json"
+        json_path.write_text('{"type": "service_account"}', encoding="utf-8")
+
+        fake_oauth_module = MagicMock()
+        fake_oauth_sa = MagicMock()
+        cred_class = MagicMock()
+        if file_loader_side_effect is not None:
+            cred_class.from_service_account_file = MagicMock(side_effect=file_loader_side_effect)
+        else:
+            cred_class.from_service_account_file = MagicMock(return_value=MagicMock(name="creds"))
+        fake_oauth_sa.Credentials = cred_class
+        fake_oauth_module.service_account = fake_oauth_sa
+
+        fake_tts = MagicMock()
+        fake_tts.TextToSpeechClient = MagicMock(return_value=MagicMock(name="tts_client"))
+
+        fake_google_cloud = MagicMock()
+        fake_google_cloud.texttospeech = fake_tts
+
+        monkeypatch.setitem(sys.modules, "google", MagicMock())
+        monkeypatch.setitem(sys.modules, "google.cloud", fake_google_cloud)
+        monkeypatch.setitem(sys.modules, "google.cloud.texttospeech", fake_tts)
+        monkeypatch.setitem(sys.modules, "google.oauth2", fake_oauth_module)
+        monkeypatch.setitem(sys.modules, "google.oauth2.service_account", fake_oauth_sa)
+        return str(json_path)
+
+    def test_credential_spec_requires_service_account_json(self) -> None:
+        spec = self._backend_cls().credential_spec()
+        assert any(
+            f.key_name == "credentials_path" and f.field_type == "file"
+            for f in spec
+        )
+
+    def test_verify_with_valid_json_returns_ok(self, monkeypatch, tmp_path) -> None:
+        json_path = self._setup_google_modules(monkeypatch, tmp_path)
+        result = self._backend_cls().verify_credentials({"credentials_path": json_path})
+        assert result.ok is True
+
+    def test_verify_with_invalid_json_returns_failure(self, monkeypatch, tmp_path) -> None:
+        json_path = self._setup_google_modules(
+            monkeypatch, tmp_path,
+            file_loader_side_effect=ValueError("missing field 'private_key'"),
         )
         result = self._backend_cls().verify_credentials({"credentials_path": json_path})
         assert result.ok is False
