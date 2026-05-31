@@ -516,11 +516,15 @@ class ControlPanel(ctk.CTkFrame):
 
     # ---- メインスレッドでの反映 ----
     def _apply_utterance(self, record: dict) -> None:
+        # 計測区間: 「発話の終端確定 → 再生指示の発行」
+        # 体感の「喋り終わってから音が返ってくるまで」に対応(発話そのものの長さは含めない)。
+        # 区間端から端まで(録音開始 → 再生戻り)のトータルは processtime.csv の
+        # `total_ms` 列で見られるため GUI 側はこの区間 1 つに絞る。
         timeline = record.get("timeline", {}) or {}
-        t_cap = timeline.get("t_capture")
-        t_play = timeline.get("t_playback")
-        if t_cap is not None and t_play is not None:
-            latency = t_play - t_cap
+        t_start = timeline.get("t_vad_end")
+        t_end = timeline.get("t_playback_start")
+        if t_start is not None and t_end is not None:
+            latency = t_end - t_start
             self._latencies.append(latency)
             avg = sum(self._latencies) / len(self._latencies)
             self._latency_label.configure(
