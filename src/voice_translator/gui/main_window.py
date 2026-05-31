@@ -51,7 +51,9 @@ class MainWindow(ctk.CTk):
             on_toggle=self._on_settings_toggle,
         )
         self._settings_section.pack(fill="both", expand=False, padx=10, pady=(10, 5))
-        self._settings = SettingsPanel(self._settings_section.body, controller)
+        self._settings = SettingsPanel(
+            self._settings_section.body, controller, banner=self._banner,
+        )
         self._settings.pack(fill="both", expand=True)
 
         # banner の `before` を SettingsSection に向けておく(バナー表示時に上に出る)
