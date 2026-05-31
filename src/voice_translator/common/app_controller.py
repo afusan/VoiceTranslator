@@ -320,6 +320,25 @@ class AppController:
             )
             return False
 
+    # ---- Translator 対応出力言語の問い合わせ口 ----
+    def get_supported_target_languages(self, backend_name: str) -> list[str]:
+        """指定 Translator backend の対応出力言語(ISO 639-1)を返す。
+
+        backend クラスのクラスメソッド `supported_target_languages()` を呼ぶ。
+        backend 未登録 / メソッド未実装 / 例外時は空リスト(UI 側で fallback)。
+        backend ロードは発生しない(ASR の get_supported_input_languages と対称)。
+        """
+        cls = self._registry.get_backend_class(LayerKind.TRANSLATOR, backend_name)
+        if cls is None:
+            return []
+        try:
+            return list(cls.supported_target_languages())
+        except Exception:  # noqa: BLE001
+            self._logger.exception(
+                "supported_target_languages の呼び出し失敗 backend=%s", backend_name
+            )
+            return []
+
     # ---- Phase E-2: 認証フロー(spec / verify / verified 管理) ----
     def get_credential_spec(self, layer: LayerKind, name: str) -> list[CredentialField]:
         """指定 backend の認証情報スペック。

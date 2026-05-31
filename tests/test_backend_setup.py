@@ -192,7 +192,7 @@ class TestNllb200ConfigIntegration:
         register_default_backends(registry)
         registry.create(LayerKind.TRANSLATOR, "nllb200")
         patched_backend_setup["Nllb200TranslatorBackend"].assert_called_with(
-            device="auto"
+            model_name="facebook/nllb-200-distilled-600M", device="auto",
         )
 
     def test_device_read_from_config(self, patched_backend_setup, tmp_path) -> None:
@@ -206,7 +206,7 @@ class TestNllb200ConfigIntegration:
         register_default_backends(registry, config)
         registry.create(LayerKind.TRANSLATOR, "nllb200")
         patched_backend_setup["Nllb200TranslatorBackend"].assert_called_with(
-            device="cuda"
+            model_name="facebook/nllb-200-distilled-600M", device="cuda",
         )
 
     def test_empty_string_falls_back_to_default(
@@ -222,7 +222,7 @@ class TestNllb200ConfigIntegration:
         register_default_backends(registry, config)
         registry.create(LayerKind.TRANSLATOR, "nllb200")
         patched_backend_setup["Nllb200TranslatorBackend"].assert_called_with(
-            device="auto"
+            model_name="facebook/nllb-200-distilled-600M", device="auto",
         )
 
 

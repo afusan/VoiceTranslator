@@ -88,6 +88,10 @@ class FakeAsr(AsrBackend):
 
 
 class FakeTranslator(TranslatorBackend):
+    @classmethod
+    def supported_target_languages(cls) -> list[str]:
+        return ["en", "ja"]
+
     def __init__(
         self,
         *,
@@ -1015,6 +1019,11 @@ class TestPipelineQueueFullConcurrency:
 
         class SlowFirstTranslator(TranslatorBackend):
             """1回目だけ意図的にブロックする翻訳。"""
+
+            @classmethod
+            def supported_target_languages(cls) -> list[str]:
+                return ["en", "ja"]
+
             def __init__(self) -> None:
                 self._count = 0
                 self._lock = _t.Lock()
