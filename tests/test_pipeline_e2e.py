@@ -70,6 +70,10 @@ class SuffixTranslator(TranslatorBackend):
 
 
 class SilentTts(TtsBackend):
+    @classmethod
+    def supported_output_languages(cls) -> list[str]:
+        return ["en", "ja"]
+
     def synthesize(self, text: str, tgt_lang: str) -> tuple[np.ndarray, int]:
         return np.zeros(160, dtype=np.float32), 16000
 

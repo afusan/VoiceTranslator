@@ -33,6 +33,19 @@ class TtsBackend(BackendBase, ABC):
             - samplerate: PCM のサンプルレート(Hz)。Output 側で参照する。
         """
 
+    @classmethod
+    @abstractmethod
+    def supported_output_languages(cls) -> list[str]:
+        """対応する読み上げ言語(ISO 639-1)の名目リスト。
+
+        - クラスメソッド: UI が backend 名から問い合わせる時点で backend を
+          ロード済みとは限らない。設定ダイアログを開いただけで重い import を
+          引きずらないため、未ロード状態でも答えられる必要がある
+        - `"auto"` は含めない(読み上げ言語に「自動」は意味を持たない)
+        - 空リストを返した場合 UI は「未知 = 警告しない」として扱う
+          (OS 依存などで動的に変わるケースで「分からない」を表明する選択肢)
+        """
+
     def capabilities(self) -> BackendCapabilities:
         """対応言語/声質等のメタ情報。"""
         return BackendCapabilities()

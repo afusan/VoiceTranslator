@@ -98,6 +98,21 @@ class SapiTtsBackend(TtsBackend):
         return pcm, samplerate
 
     # ----------------------------------------------------------
+    @classmethod
+    def supported_output_languages(cls) -> list[str]:
+        """Windows SAPI が読み上げ可能な言語(保守的な宣言)。
+
+        Windows 10/11 標準では日本語(Haruka 等)/英語(Zira/David 等)の voice が
+        プリインストールされているため、この 2 つを宣言する。
+
+        他言語 voice を追加インストールしている環境でも「対応外」と表示される
+        ことになるが、SAPI は voice 列挙時に言語コードを安定して取れないケースが
+        多く、動的検出は信頼性が低い(`_try_set_voice_for_lang` のヒューリスティック
+        と同じ理由)。明示宣言ベースに割り切る。
+        """
+        return ["ja", "en"]
+
+    # ----------------------------------------------------------
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
             supported_languages=(),  # SAPI 側にインストールされた声に依存
