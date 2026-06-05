@@ -216,7 +216,7 @@ backend 実装者は **エラーを適切な `AppError` サブクラスに分け
 | `AppError` (基底例外) | `severity` (FATAL/RECOVERABLE/SKIP/WARN) を持つ。各バックエンドは下位例外をこれに包んで送出する。 |
 | `DeviceValidator` | 起動時に「入力デバイス ≠ 出力デバイス」を保証。違反時は FatalError で起動拒否。 |
 | `cache_check` (モジュール) | `check_faster_whisper / check_nllb200 / check_silero / check_sapi / check_soundcard` の関数群。`huggingface_hub.try_to_load_from_cache` で軽量にキャッシュ有無を判定。 |
-| `capture.process_enumerator` (モジュール) | WASAPI AudioSession を pycaw / psutil で列挙するヘルパー(段階 3)。役割は ProcTap backend と `ProcessSelectDialog` で共有する「音声出力中プロセスの一覧」と「セッションの IAudioMeterInformation(試聴メータ用)」の提供。`enumerate_active_processes() -> list[CaptureSource]` は `AudioSessionState.Active` のみ採用、PID 単位で dedupe、`psutil.Process(pid).name()` で名前補完(失敗時 `"unknown"`)。`get_session_meter(pid)` は試聴ダイアログ用に `GetPeakValue()` を持つメータを返す。pycaw / psutil 呼び出しは `_list_active_sessions` / `_resolve_process_name` に隔離し、テストは monkeypatch で完全置換できる構造。 |
+| `capture.process_enumerator` (モジュール) | WASAPI AudioSession を pycaw / psutil で列挙 + 試聴 peak を供給するヘルパー(段階 3)。役割は ProcTap backend と `ProcessSelectDialog` で共有する「音声出力中プロセスの一覧」と「peak 値の継続供給」の提供。**永続 COM ワーカスレッド `_PeakWorker` を 1 つだけ持ち**、全 pycaw 呼び出しはそのスレッド内で実行する(GUI スレッドの STA と pycaw の MTA 要求が競合するため)。公開 API は `enumerate_active_processes()` / `start_audition(pid) -> bool` / `stop_audition()` / `latest_peak() -> float` / `is_auditioning()` / `dispose()`。試聴中はワーカ内部で 5fps poll が peak を取って atomic float に保持、GUI スレッドは `latest_peak()` を atomic 読みするだけ(スレッド境界を毎ティックまたがない)。`enumerate_active_processes` は `AudioSessionState.Active` のみ採用 + PID 単位 dedupe + `psutil.Process(pid).name()` で名前補完(失敗時 `"unknown"`)。pycaw / psutil / comtypes 呼び出しは `_list_active_sessions` / `_resolve_process_name` / `_PeakWorker._run` に隔離、テストでは monkeypatch で完全置換できる。 |
 
 ### `AppError` の severity と挙動
 
@@ -239,7 +239,7 @@ backend 実装者は **エラーを適切な `AppError` サブクラスに分け
 | `LayerSettingsDialog` | 単一レイヤの設定編集ウィンドウ(CTkToplevel)。`layer_settings_schema.LAYER_SETTINGS` のスキーマに従ってラベル + 入力欄を動的に構築し、保存時に `AppController.set_setting` で ConfigStore に書き戻す。バックエンド条件付きフィールド(SAPI rate 等)に対応。 |
 | `layer_settings_schema` モジュール | レイヤ別の編集可能な設定項目を `SettingField(keys, label, field_type, default, help_text, applies_when_backend)` の集まりで宣言。新項目はここに追加するだけで GUI に出る(スキーマ駆動)。 |
 | `ProcessSelectDialog` | per-process キャプチャ用のプロセス選択ダイアログ(CTkToplevel)。段階 3 で追加。`capture_kind == PROCESS` の入力ソースを選ぶ専用 UI で、`SettingsPanel` の「プロセス選択…」ボタンから呼ばれる。構成: 列挙テーブル(プロセス名 + PID、ラジオ選択) / ↻ 更新 / ▶ 試聴開始・■ 停止トグル / レベルメータ(`CTkProgressBar`、`pycaw.IAudioMeterInformation.GetPeakValue()` を 30fps poll) / OK・Cancel。試聴は本番パイプラインと完全独立(WASAPI Process Loopback を開かない、pycaw メータのみ)。 |
-| `ProcessSelectController` | `ProcessSelectDialog` の状態機械を GUI 非依存に切り出したもの。列挙 / 選択 PID / 試聴 ON-OFF / peak decay を保持。GUI 不要のロジック単体テストはこのクラスを直接生成して検証する(enumerator / meter_getter を差替可能)。 |
+| `ProcessSelectController` | `ProcessSelectDialog` の状態機械を GUI 非依存に切り出したもの。列挙 / 選択 PID / 試聴 ON-OFF / peak decay を保持。`_PeakProvider` Protocol を経由して peak 供給元(本番は `process_enumerator` モジュールの永続ワーカ、テストは fake)を差し替えられる。GUI 不要のロジック単体テストはこのクラスを直接生成して fake provider で検証する。 |
 
 ### スレッドセーフ規約
 

@@ -23,6 +23,27 @@
 
 ---
 
+## [✅完了 2026-06-05] ProcTap 段階 3 のスレッド処理を Peak Worker 方式に整理
+- **対応ブランチ**: `refactor/process-peak-worker`
+- **対応内容**:
+  - 段階 3 初版は GUI スレッドでの pycaw 呼び出しが COM モード競合 (`RPC_E_CHANGED_MODE`) を
+    起こす問題に対し、毎 peak ごとに新規スレッドを `start()` + `join()` する暫定対応だった
+    (30fps × 60sec = 1800 スレッド生成/分という非効率)
+  - 永続 COM ワーカスレッド `_PeakWorker` を導入(1 個固定、`CoInitialize` も 1 回だけ)。
+    試聴中はワーカが内部で **5fps poll** で peak を取って `_latest_peak: float` を atomic 保持し、
+    GUI スレッドは `latest_peak()` を atomic 読みするだけ
+  - 公開 API を `start_audition(pid)` / `stop_audition()` / `latest_peak()` / `is_auditioning()`
+    / `dispose()` に整理。旧 `get_session_meter` / `_MeterProxy` / `_run_in_com_thread` は廃止
+  - `ProcessSelectController` は `_PeakProvider` Protocol 経由に変更(本番は `process_enumerator`
+    モジュールを束ねた `_DefaultProvider`、テストは fake)
+- **効果**:
+  - 試聴中の毎秒スレッド生成: 30 → 0(永続スレッド 1 個)
+  - CoInitialize 回数: 30/sec → 1/process
+  - GUI スレッドと COM 操作が完全分離
+- **未対応**(下記別エントリ):
+
+---
+
 ## [✅完了 2026-06-05] ProcTap 取り込み 段階 3: プロセス列挙と試聴メータ
 - **対応ブランチ**: `feature/proctap-process-list`
 - **対応内容**:

@@ -14,15 +14,18 @@
 だけ。これにより GUI 不要のロジック単体テストが書けるようにする(設計判断:
 `docs/design/feature-proctap-process-list/Plan.md` 2-1〜2-5 参照)。
 
-試聴経路:
+試聴経路(2026-06-05 リファクタ後):
 - 本番の `ProcessAudioCapture`(WASAPI Process Loopback)は使わず、pycaw の
-  `IAudioMeterInformation.GetPeakValue()` を 30fps poll するのみ。
-- WASAPI ストリームを開かないので超軽量。本番パイプラインと完全に独立。
+  `IAudioMeterInformation.GetPeakValue()` を **永続 COM ワーカスレッド** が 5fps で内部
+  poll し、最新値を atomic に保持する。
+- GUI スレッドはワーカが保持する `latest_peak()` を atomic 読みするだけ。スレッド
+  境界をまたがず軽量。WASAPI ストリームを開かないので本番パイプラインと完全独立。
+- 詳細は `capture/process_enumerator.py` の `_PeakWorker` 参照。
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Protocol
 
 import customtkinter as ctk
 
@@ -33,8 +36,41 @@ if TYPE_CHECKING:
     pass
 
 
-_POLL_INTERVAL_MS = 33  # ~30fps
-_DEFAULT_DECAY = 0.85   # VU メータ風: 急上昇・緩降下
+_POLL_INTERVAL_MS = 100  # 10fps の GUI 再描画(ワーカ側 5fps poll より頻度高め = フィルタ安定)
+_DEFAULT_DECAY = 0.85    # VU メータ風: 急上昇・緩降下
+
+
+# ============================================================
+# Peak 供給インタフェース(差し替え可能)
+# ============================================================
+class _PeakProvider(Protocol):
+    """試聴 peak 供給の Protocol。本番は `process_enumerator` モジュール、テストは fake。
+
+    モジュール直の関数(`pe.enumerate_active_processes` 等)を関数ポインタで束ねた
+    duck-typed な provider として使う。`ProcessSelectController` はこの Protocol だけに
+    依存し、`process_enumerator` の永続ワーカ実装に直結しない。
+    """
+
+    def enumerate(self) -> list[CaptureSource]: ...
+    def start_audition(self, pid: int) -> bool: ...
+    def stop_audition(self) -> None: ...
+    def latest_peak(self) -> float: ...
+
+
+class _DefaultProvider:
+    """本番経路。`process_enumerator` モジュールの公開 API を Protocol に束ねる。"""
+
+    def enumerate(self) -> list[CaptureSource]:
+        return pe.enumerate_active_processes()
+
+    def start_audition(self, pid: int) -> bool:
+        return pe.start_audition(pid)
+
+    def stop_audition(self) -> None:
+        pe.stop_audition()
+
+    def latest_peak(self) -> float:
+        return pe.latest_peak()
 
 
 # ============================================================
@@ -45,28 +81,24 @@ class ProcessSelectController:
 
     役割: 列挙 / 選択 / 試聴 ON-OFF / peak decay の状態機械を 1 つに集約し、
     UI から GUI 非依存に呼べるようにする。テストは本クラスを直接生成して
-    enumerator / meter_getter を差し替えで検証できる。
+    `provider`(`_PeakProvider`) を差し替えで検証できる。
 
     引数:
-        enumerator: `enumerate_active_processes` 互換の関数(差替えポイント)
-        meter_getter: `get_session_meter(pid)` 互換の関数(差替えポイント)
+        provider: peak 供給 Protocol 実装。未指定なら `_DefaultProvider`(本番経路)。
         decay: peak の VU メータ風 decay 係数(0.0〜1.0、デフォルト 0.85)
     """
 
     def __init__(
         self,
         *,
-        enumerator: Optional[Callable[[], list[CaptureSource]]] = None,
-        meter_getter: Optional[Callable[[int], object]] = None,
+        provider: Optional[_PeakProvider] = None,
         decay: float = _DEFAULT_DECAY,
     ) -> None:
-        self._enumerate = enumerator if enumerator is not None else pe.enumerate_active_processes
-        self._get_meter = meter_getter if meter_getter is not None else pe.get_session_meter
+        self._provider: _PeakProvider = provider if provider is not None else _DefaultProvider()
         self._decay = decay
         self._sources: list[CaptureSource] = []
         self._selected_pid: int | None = None
         self._auditioning: bool = False
-        self._current_meter: object | None = None
         self._current_peak: float = 0.0
 
     # ---- 公開状態 -----------------------------------------------------------
@@ -89,7 +121,7 @@ class ProcessSelectController:
     # ---- 操作 ---------------------------------------------------------------
     def refresh(self) -> None:
         """列挙し直す。選択中 PID が新リストに無ければ未選択に戻し、試聴も停止。"""
-        self._sources = list(self._enumerate())
+        self._sources = list(self._provider.enumerate())
         if self._selected_pid is not None and not any(
             self._to_pid(s) == self._selected_pid for s in self._sources
         ):
@@ -105,37 +137,40 @@ class ProcessSelectController:
             self.stop_audition()
 
     def start_audition(self) -> bool:
-        """試聴開始。選択 PID が無い・メータが取れないときは False を返す。"""
+        """試聴開始。選択 PID が無い・メータが取れないときは False を返す。
+
+        provider.start_audition(pid) を呼んでワーカ側 poll を始動させる。GUI 側は
+        以降 `latest_peak()`(via tick)を atomic 読みするだけ。
+        """
         if self._selected_pid is None:
             return False
-        meter = self._get_meter(self._selected_pid)
-        if meter is None:
+        if not self._provider.start_audition(self._selected_pid):
             return False
-        self._current_meter = meter
         self._auditioning = True
         self._current_peak = 0.0
         return True
 
     def stop_audition(self) -> None:
-        """試聴停止。peak は decay 経由でゼロに落とすのではなく即時 0 に。"""
+        """試聴停止。ワーカ側 poll を止めて、表示 peak も即時 0。"""
+        if self._auditioning:
+            self._provider.stop_audition()
         self._auditioning = False
-        self._current_meter = None
         self._current_peak = 0.0
 
     def tick(self) -> float:
-        """poll の 1 ティック。最新 peak を取って decay 適用、現在の表示値を返す。
+        """poll の 1 ティック。最新 peak を atomic 読みして decay 適用、表示値を返す。
 
         試聴 OFF の場合は decay のみ適用(残光のフェードアウト)。
-        meter 例外時は peak=0 として decay 継続。
+        provider 例外時は peak=0 として decay 継続。
         """
-        if not self._auditioning or self._current_meter is None:
+        if not self._auditioning:
             self._current_peak = self._current_peak * self._decay
             if self._current_peak < 1e-4:
                 self._current_peak = 0.0
             return self._current_peak
 
         try:
-            raw_peak = float(self._current_meter.GetPeakValue())
+            raw_peak = float(self._provider.latest_peak())
         except Exception:
             raw_peak = 0.0
         self._current_peak = max(raw_peak, self._current_peak * self._decay)
