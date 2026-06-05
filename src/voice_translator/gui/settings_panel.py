@@ -455,6 +455,11 @@ class SettingsPanel(ctk.CTkFrame):
             self._apply_tts_none_visual()
             if internal_value != _TTS_NONE_INTERNAL:
                 self._check_tts_output_lang_compatibility(notify_fallback=True)
+        # CAPTURE backend 切替: 入力デバイスプルダウンを新 backend の `list_sources` で再列挙
+        # (P5。ProcTap など複数 capture backend が並ぶ未来に備え、上段=backend / 下段=source の
+        #  連動を保つ。Output 側は触らない)。
+        if layer == LayerKind.CAPTURE:
+            self._refresh_capture_sources_dropdown()
 
     # ============================================================
     # 入力言語プルダウンの連動(ASR backend ごとに対応言語が違う)
@@ -659,44 +664,71 @@ class SettingsPanel(ctk.CTkFrame):
         )
 
     def _populate_devices_into_dropdowns(self) -> None:
+        """入力ソース / 出力デバイスの両方を再列挙する(初期化 / 再読込 / 再列挙ボタン用)。
+
+        個別に呼びたい場合は `_refresh_capture_sources_dropdown` /
+        `_refresh_output_devices_dropdown` を直接使う(P5: CAPTURE backend 切替時に
+        input 側だけ再列挙したい等)。
+        """
+        self._refresh_capture_sources_dropdown()
+        self._refresh_output_devices_dropdown()
+
+    def _refresh_capture_sources_dropdown(self) -> None:
+        """入力ソースプルダウンを「現在の `backends.capture` backend」に基づき再列挙する。
+
+        - `AppController.list_capture_sources()` は現在の `backends.capture` 設定を
+          見て当該 backend のソースを返す(`_create` 経由)。
+        - 既存の `devices.input` 値が新ソース一覧に含まれていれば選択を維持。
+          含まれていなければ先頭ソースに fallback し ConfigStore を更新する。
+        - 取得失敗時は「(取得失敗: ...)」を表示し `_capture_id_map` を空にする
+          (UI を壊さない)。
+        """
         try:
             sources = self._controller.list_capture_sources()
         except Exception as e:  # noqa: BLE001
-            sources = []
             self._capture_dropdown.configure(values=[f"(取得失敗: {e})"])
+            self._capture_id_map = {}
+            return
+
+        if not sources:
+            self._capture_dropdown.configure(values=["(入力デバイスなし)"])
+            self._capture_id_map = {}
+            return
+
+        self._capture_dropdown.configure(values=[s.display_name for s in sources])
+        self._capture_id_map = {s.display_name: s.source_id for s in sources}
+        current_id = self._controller.get_setting("devices", "input")
+        for s in sources:
+            if s.source_id == current_id:
+                self._capture_var.set(s.display_name)
+                return
+        # 既存値が新一覧に無い → 先頭に fallback
+        self._capture_var.set(sources[0].display_name)
+        self._controller.set_setting("devices", "input", sources[0].source_id)
+
+    def _refresh_output_devices_dropdown(self) -> None:
+        """出力デバイスプルダウンを再列挙する(挙動は capture 側と対称)。"""
         try:
             devices = self._controller.list_output_devices()
         except Exception as e:  # noqa: BLE001
-            devices = []
             self._output_dropdown.configure(values=[f"(取得失敗: {e})"])
-
-        if sources:
-            self._capture_dropdown.configure(values=[s.display_name for s in sources])
-            self._capture_id_map = {s.display_name: s.source_id for s in sources}
-            current_id = self._controller.get_setting("devices", "input")
-            for s in sources:
-                if s.source_id == current_id:
-                    self._capture_var.set(s.display_name)
-                    break
-            else:
-                self._capture_var.set(sources[0].display_name)
-                self._controller.set_setting("devices", "input", sources[0].source_id)
-        else:
-            self._capture_id_map = {}
-
-        if devices:
-            self._output_dropdown.configure(values=[d.display_name for d in devices])
-            self._output_id_map = {d.display_name: d.device_id for d in devices}
-            current_id = self._controller.get_setting("devices", "output")
-            for d in devices:
-                if d.device_id == current_id:
-                    self._output_var.set(d.display_name)
-                    break
-            else:
-                self._output_var.set(devices[0].display_name)
-                self._controller.set_setting("devices", "output", devices[0].device_id)
-        else:
             self._output_id_map = {}
+            return
+
+        if not devices:
+            self._output_dropdown.configure(values=["(出力デバイスなし)"])
+            self._output_id_map = {}
+            return
+
+        self._output_dropdown.configure(values=[d.display_name for d in devices])
+        self._output_id_map = {d.display_name: d.device_id for d in devices}
+        current_id = self._controller.get_setting("devices", "output")
+        for d in devices:
+            if d.device_id == current_id:
+                self._output_var.set(d.display_name)
+                return
+        self._output_var.set(devices[0].display_name)
+        self._controller.set_setting("devices", "output", devices[0].device_id)
 
     def _on_capture_changed(self, display_name: str) -> None:
         device_id = self._capture_id_map.get(display_name)
