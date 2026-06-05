@@ -41,16 +41,30 @@ class LayerKind(str, Enum):
 # ============================================================
 # デバイス/ソース情報
 # ============================================================
+class CaptureKind(str, Enum):
+    """音声取得の単位。`AudioCaptureBackend` の宣言と `CaptureSource` のメタ情報で使う。
+
+    - DEVICE  : 物理デバイス単位(マイク / スピーカ ループバック等)。soundcard backend。
+    - PROCESS : プロセス単位(per-process キャプチャ)。ProcTap 等の段階 2 で追加予定。
+    """
+
+    DEVICE = "device"
+    PROCESS = "process"
+
+
 @dataclass(frozen=True)
 class CaptureSource:
     """取得元(マイク/スピーカLB/特定アプリ等)を表す識別情報。
 
     役割: AudioCaptureBackend.list_sources() の戻り値。GUI のプルダウン項目に使われる。
+    `kind` は当該ソースがデバイス単位 / プロセス単位のどちらかを示す(GUI で kind 別の
+    プルダウン構築や、表示の出し分けに使う)。既定は `DEVICE`(従来 backend の互換)。
     """
 
-    source_id: str             # バックエンド内で一意な識別子(デバイス名や process id 等)
-    display_name: str          # GUI 表示用ラベル
-    is_loopback: bool = False  # スピーカ等の出力デバイスのループバックなら True
+    source_id: str                          # バックエンド内で一意な識別子(デバイス名や process id 等)
+    display_name: str                       # GUI 表示用ラベル
+    is_loopback: bool = False               # スピーカ等の出力デバイスのループバックなら True
+    kind: CaptureKind = CaptureKind.DEVICE  # 取得単位(段階 1 / 2026-06-05 で追加)
 
 
 @dataclass(frozen=True)

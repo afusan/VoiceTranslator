@@ -284,6 +284,27 @@ class AppController:
         """
         return self._registry.get_capability_hint(layer, name)
 
+    # ---- 音声取得 backend の取得単位 ----
+    def get_capture_kind(self, backend_name: str):
+        """指定 capture backend の取得単位(`CaptureKind`)を返す。
+
+        backend 未登録 / 例外時は `CaptureKind.DEVICE`(安全側 = 従来挙動)を返す。
+        backend クラスの `capture_kind()` クラスメソッドを呼ぶだけ(インスタンス化しない)。
+        """
+        from .types import CaptureKind
+
+        cls = self._registry.get_backend_class(LayerKind.CAPTURE, backend_name)
+        if cls is None:
+            return CaptureKind.DEVICE
+        try:
+            kind = cls.capture_kind()
+        except Exception:  # noqa: BLE001
+            self._logger.exception(
+                "capture_kind の呼び出し失敗 backend=%s", backend_name
+            )
+            return CaptureKind.DEVICE
+        return kind
+
     # ---- ASR 対応言語の問い合わせ口 ----
     def get_supported_input_languages(self, backend_name: str) -> list[str]:
         """指定 ASR backend の対応入力言語(ISO 639-1)を返す。

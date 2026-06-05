@@ -29,7 +29,10 @@
 | **P2** | `feature/dynamic-languages` | R2 のうち **言語の動的変更** | 小 | ✅ 実装・テスト完了(`e10e6a7`)。master マージ待ち |
 | **P3** | `feature/text-only-output` → `refactor/text-only-via-tts-none` | R3(出力 backend なしモード)。**最終形は TTS=(なし) 選択値から派生** | 中 | ✅ 実装・テスト完了(`69fea7c`)。master マージ待ち |
 | **P4** | `feature/dynamic-devices` | R2 のうち **入出力デバイスの動的変更**(停止→再開方式) | 中 | ☐ 未着手 |
-| **P5** | `feature/capture-backend-split` | R4(入力 backend のデバイス単位への分解、ProcTap 連携の土台) | 中〜大 | ☐ 未着手 |
+| **P5** | `feature/capture-backend-split` | R4(入力 backend のデバイス単位への分解、ProcTap 連携の土台) | 中〜大 | ✅ 実装完了(`9dad6b0`)。master マージ待ち |
+| **P6-1** | `feature/capture-kind` | ProcTap 取り込み 段階 1(`CaptureKind` 概念導入 + Python 3.12 化) | 小 | ✅ 実装完了。pendList 上で段階 2/3 を起票 |
+| **P6-2** | `feature/proctap-backend`(未作成) | ProcTap 取り込み 段階 2(`ProcTapCaptureBackend` 本体 + リサンプル) | 中 | ☐ 未着手(pendList 起票済み) |
+| **P6-3** | `feature/proctap-process-list`(未作成) | ProcTap 取り込み 段階 3(`pycaw` 連携でプロセス列挙 + エコーバック確認) | 中 | ☐ 未着手(pendList 起票済み) |
 
 順序の理由:
 - **P1 を先に**: 触る範囲が狭く副作用がない。ドッグフーディング体験が一気に上がる。後続の UI 改修と競合しにくい形に整えてから動的変更系へ。

@@ -4,6 +4,46 @@
 
 ---
 
+## [⏳保留 2026-06-05] ProcTap 取り込み 段階 2: ProcTapCaptureBackend 本体実装
+- **対象**: `proctap` パッケージ(`C:\work\claudeWork\ProcTap`、PyPI `proc-tap`)を
+  `AudioCaptureBackend` の実装として組み込む。
+- **背景**: 段階 1(`feature/capture-kind`)で `CaptureKind` 概念を導入し、`PROCESS` kind を
+  宣言する backend を並べる土台ができた。本フェーズで実装本体を入れる。
+- **必要な作業**:
+  - `pyproject.toml` の extras に `capture-proctap = ["proc-tap>=..."]` を追加(opt-in)
+  - `src/voice_translator/capture/proctap_backend.py` 新規:
+    - `capture_kind() -> CaptureKind.PROCESS` 宣言
+    - `list_sources()` は別途プロセス列挙(段階 3 の `pycaw` 連携前は仮実装)
+    - `start(pid_str)` / `read_chunk()` で `ProcessAudioCapture` を呼ぶ
+    - **48kHz/2ch/float32 → 16kHz/1ch/float32 のリサンプル + ダウンミックス**
+      (`scipy.signal.resample_poly` + チャンネル平均化)
+  - `backend_setup.py` に register
+  - small + large テスト(`test_proctap_backend_large.py`、実 wheel + 実プロセス)
+- **未確認**: PyPI に Python 3.12 wheel があるか(本リポジトリ同梱は cp312 だが PyPI 配布も同じか要確認)。
+- **着手トリガ**: 段階 1 マージ後すぐ。
+
+---
+
+## [⏳保留 2026-06-05] ProcTap 取り込み 段階 3: プロセス列挙とエコーバック確認
+- **対象**: 段階 2 で `ProcTapCaptureBackend` を作ったあと、「音声出力中のプロセスのみ列挙」+
+  「エコーバック確認機能」を追加する。
+- **背景**: 全プロセス列挙は使いにくい(数百件)。「現在音を出しているプロセス」だけ並べる方が UX が良い。
+  さらに、ユーザが選んだ対象から本当に音が来ているかを確認できる「エコーバック」UI を併設する。
+- **必要な作業**:
+  - Windows: `pycaw`(`AudioUtilities.GetAllSessions()` + `IAudioMeterInformation`)で
+    音声セッション + ピークレベル取得 → 「現在音を出している」プロセスだけ表示
+  - 列挙結果から `ProcTapCaptureBackend.list_sources()` のソースリストを生成
+  - エコーバック確認 UI(別ダイアログ?ControlPanel に簡易メータ?):
+    - 選択中プロセスのキャプチャストリームをタップしてレベルメータ表示
+    - 「鳴っているか」をユーザが視覚的に確認
+- **設計判断ポイント**(着手時に詰める):
+  - プロセス一覧の更新タイミング(都度列挙? 定期 polling? ユーザ操作時のみ?)
+  - 「音声出力中」の判定閾値(peak level でフィルタするか、セッション状態でフィルタするか)
+  - エコーバック UI の置き場所(ControlPanel / 別ダイアログ / SettingsPanel 内)
+- **着手トリガ**: 段階 2 完了後。
+
+---
+
 ## [✅完了 2026-06-05] 出力モード(TTS=(なし))対応 — text_only モード
 - **対応ブランチ**:
   - `feature/text-only-output`(初実装。`pipeline.output_mode` キーで切替)
