@@ -261,3 +261,134 @@ class TestListActiveSessions:
 
         # 例外は呑んで空リストにする(列挙失敗で全 UI が落ちないように)
         assert pe._list_active_sessions() == []
+
+
+# ============================================================
+# COM ワーカースレッド経由実行(GUI スレッドの COM 状態と競合させない)
+# ============================================================
+class TestRunInComThread:
+    def _install_fake_comtypes(self, monkeypatch):
+        """`comtypes` を fake module で差し替え、CoInitialize/CoUninitialize を観測。"""
+        import sys
+        import types
+
+        calls: list[str] = []
+
+        def fake_co_initialize():
+            calls.append("init")
+
+        def fake_co_uninitialize():
+            calls.append("uninit")
+
+        fake = types.ModuleType("comtypes")
+        fake.CoInitialize = fake_co_initialize
+        fake.CoUninitialize = fake_co_uninitialize
+        monkeypatch.setitem(sys.modules, "comtypes", fake)
+        return calls
+
+    def test_runs_func_in_worker_and_returns_result(self, monkeypatch):
+        import threading
+        self._install_fake_comtypes(monkeypatch)
+        captured_thread: list[str] = []
+
+        def work():
+            captured_thread.append(threading.current_thread().name)
+            return 42
+
+        result = pe._run_in_com_thread(work)
+        assert result == 42
+        # 呼び出し元(=この pytest スレッド)と別スレッドで実行されている
+        assert captured_thread[0] != threading.current_thread().name
+
+    def test_calls_co_initialize_and_uninitialize(self, monkeypatch):
+        calls = self._install_fake_comtypes(monkeypatch)
+        pe._run_in_com_thread(lambda: 1)
+        assert calls == ["init", "uninit"]
+
+    def test_uninitialize_called_even_on_exception(self, monkeypatch):
+        calls = self._install_fake_comtypes(monkeypatch)
+
+        def boom():
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            pe._run_in_com_thread(boom)
+        assert calls == ["init", "uninit"]
+
+    def test_propagates_func_exception(self, monkeypatch):
+        self._install_fake_comtypes(monkeypatch)
+
+        def boom():
+            raise ValueError("bad")
+
+        with pytest.raises(ValueError, match="bad"):
+            pe._run_in_com_thread(boom)
+
+    def test_timeout_raises_timeout_error(self, monkeypatch):
+        import time
+        self._install_fake_comtypes(monkeypatch)
+
+        def slow():
+            time.sleep(0.5)
+            return "too late"
+
+        with pytest.raises(TimeoutError):
+            pe._run_in_com_thread(slow, timeout=0.05)
+
+    def test_co_initialize_oserror_is_swallowed(self, monkeypatch):
+        """既に別モードで COM 初期化済みのケース。CoInitialize が OSError でも続行。"""
+        import sys
+        import types
+
+        def fake_co_initialize():
+            raise OSError("already in another mode")
+
+        def fake_co_uninitialize():
+            pass
+
+        fake = types.ModuleType("comtypes")
+        fake.CoInitialize = fake_co_initialize
+        fake.CoUninitialize = fake_co_uninitialize
+        monkeypatch.setitem(sys.modules, "comtypes", fake)
+
+        assert pe._run_in_com_thread(lambda: "ok") == "ok"
+
+
+# ============================================================
+# MeterProxy: peak 取得が COM ワーカ経由になる
+# ============================================================
+class TestMeterProxy:
+    def test_get_peak_value_goes_through_com_thread(self, monkeypatch):
+        import sys
+        import types
+        import threading
+
+        co_calls: list[str] = []
+
+        def co_init():
+            co_calls.append("init")
+
+        def co_uninit():
+            co_calls.append("uninit")
+
+        fake_co = types.ModuleType("comtypes")
+        fake_co.CoInitialize = co_init
+        fake_co.CoUninitialize = co_uninit
+        monkeypatch.setitem(sys.modules, "comtypes", fake_co)
+
+        class FakeRaw:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def GetPeakValue(self):  # noqa: N802
+                self.calls.append(threading.current_thread().name)
+                return 0.55
+
+        raw = FakeRaw()
+        proxy = pe._MeterProxy(raw)
+        value = proxy.GetPeakValue()
+        assert value == pytest.approx(0.55)
+        # peak 取得は別スレッドで動いた
+        assert raw.calls and raw.calls[0] != threading.current_thread().name
+        # COM 初期化/解放が走った
+        assert co_calls == ["init", "uninit"]
