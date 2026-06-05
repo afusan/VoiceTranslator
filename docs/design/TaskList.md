@@ -89,9 +89,9 @@
 | 状態 | タスク | 備考 |
 |---|---|---|
 | ☐ | 出力先を仮想オーディオケーブル経由でDiscord/会議へ | |
-| ☐ | プロセス単位の音声取得(Win: PROCESS_LOOPBACK / Mac: ScreenCaptureKit / Linux: sink-input) | `feature/runtime-flex-and-input` P5(入力 backend 分解)を経て ProcTap 連携で実現 |
+| ☑ | プロセス単位の音声取得(Win: WASAPI Process Loopback) | `feature/proctap-backend`(段階 2: backend 本体)+ `feature/proctap-process-list`(段階 3: 列挙 + 試聴ダイアログ)+ `refactor/process-peak-worker`(永続 COM ワーカ整理)で完了。Mac (ScreenCaptureKit) / Linux (sink-input) は pendList 起票のみ |
 | ☐ | 重い処理のサーバオフロード(リモート推論バックエンド) | |
 | ☐ | AEC オプション(WebRTC) | フィードバック対策の保険 |
 | ☑ | 各ステージのさらなる並列化(案C: ASR/翻訳/TTSを別スレッド) | `refactor/pipeline-5thread` で完了(Phase 1 と同時に達成) |
-| ☐ | 動作中のデバイス切替(自動 restart 方式) | `feature/runtime-flex-and-input` P4 で着手予定 |
-| ☐ | 入力 backend のデバイス単位への分解(ProcTap 連携の土台) | `feature/runtime-flex-and-input` P5 で着手予定 |
+| ☑ | 動作中のデバイス切替(自動 restart 方式) | `feature/dynamic-devices` で完了(`feature/runtime-flex-and-input` P4) |
+| ☑ | 入力 backend のデバイス単位への分解(ProcTap 連携の土台) | `feature/capture-backend-split` で完了(`feature/runtime-flex-and-input` P5) |
