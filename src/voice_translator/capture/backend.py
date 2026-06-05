@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from voice_translator.common.backend_base import BackendBase
 from voice_translator.common.types import (
     BackendCapabilities,
+    CaptureKind,
     CaptureSource,
     PcmChunk,
 )
@@ -21,7 +22,17 @@ class AudioCaptureBackend(BackendBase, ABC):
 
     実装は OS/ライブラリ別に作る(MVPは soundcard ベース)。
     `BackendBase` から状態管理/購読/エラー履歴の機能を継承する。
+
+    取得単位(kind): 各 backend は自身が「デバイス単位」「プロセス単位」のどちらを
+    扱うかを `capture_kind()` クラスメソッドで宣言する。SettingsPanel はこの宣言を
+    見て「取得単位」プルダウンを構築し、ユーザは kind を切り替えて取得方式を変更できる。
+    既定は `DEVICE`(soundcard 系)。`PROCESS` は段階 2 で追加予定の ProcTap 等で使う。
     """
+
+    @classmethod
+    def capture_kind(cls) -> CaptureKind:
+        """この backend が取得する単位を返す。サブクラスでオーバーライド可。既定は DEVICE。"""
+        return CaptureKind.DEVICE
 
     @abstractmethod
     def list_sources(self) -> list[CaptureSource]:

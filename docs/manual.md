@@ -28,7 +28,7 @@
 ## 2. 動作環境
 
 - **OS**: Windows 11(MVP の動作確認対象。Mac/Linuxは将来対応)
-- **Python**: 3.11 以上(`uv` が自動取得します)
+- **Python**: 3.12 以上(`uv` が自動取得します)
 - **ディスク**: 5〜6GB 程度(faster-whisper モデル + NLLB-200 + PyTorch等)
 - **メモリ**: 8GB 以上推奨(NLLB-200 600M を CPU で動かすため)
 - **ネット**: 初回起動時のみ、モデルDLに必要
@@ -149,7 +149,10 @@ py -m uv run python -m voice_translator
 
 ### 5-4. レイヤ別の実装選択
 バックエンドセクションのプルダウンから選択する:
-- 音声取得: `soundcard`
+- 音声取得: `デバイス (soundcard)` / 将来 `プロセス (proctap)` 等
+  - 「**取得単位**(デバイス / プロセス)」+ 「**backend 名**」を併記した表示形式。
+  - 内部値(`config.yaml` の `backends.capture`)は backend 名のまま。
+  - 同じ取得単位に複数 backend がある場合は併記された backend 名で識別する。
 - VAD: `silero` / `webrtcvad` / `pyannote` / `pvcobra`(後 3 つは `--extra vad-extra` で追加)
 - ASR: `faster_whisper` / `openai_whisper` / `openai_whisper_api` / `google_stt` / `deepgram`
 - 翻訳: `nllb200` / `deepl` / `openai_gpt` / `anthropic_claude`

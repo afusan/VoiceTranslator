@@ -15,6 +15,7 @@ from voice_translator.common.types import (
     INTERNAL_CHANNELS,
     INTERNAL_SAMPLE_RATE,
     BackendCapabilities,
+    CaptureKind,
     CaptureSource,
     ModelStatus,
     PcmChunk,
@@ -24,12 +25,20 @@ from .backend import AudioCaptureBackend
 
 
 class SoundcardCaptureBackend(AudioCaptureBackend):
-    """soundcard ベースの AudioCaptureBackend。
+    """soundcard ベースの AudioCaptureBackend(デバイス単位の取得)。
 
     役割: 通常マイクとスピーカLBを列挙し、選択ソースから 16kHz/mono/float32 の
     チャンクを供給する。`read_chunk` の timeout 引数はチャンクサイズに連動するため、
     呼び出しは概ね 100ms 程度で返る(chunk_size=1600 のとき)。
+
+    取得単位は `CaptureKind.DEVICE`(物理デバイス)。プロセス単位は将来の
+    `ProcTapCaptureBackend` 等で対応する。
     """
+
+    @classmethod
+    def capture_kind(cls) -> CaptureKind:
+        """soundcard はデバイス単位の取得 backend。"""
+        return CaptureKind.DEVICE
 
     def __init__(self, *, chunk_size: int = 1600) -> None:
         super().__init__()  # BackendBase: status=INIT
@@ -43,7 +52,7 @@ class SoundcardCaptureBackend(AudioCaptureBackend):
 
     # ----------------------------------------------------------
     def list_sources(self) -> list[CaptureSource]:
-        """通常マイク + スピーカLB(あれば) を列挙する。"""
+        """通常マイク + スピーカLB(あれば) を列挙する。kind は DEVICE。"""
         sources: list[CaptureSource] = []
         seen_ids: set[str] = set()
         for mic in sc.all_microphones(include_loopback=True):
@@ -54,7 +63,12 @@ class SoundcardCaptureBackend(AudioCaptureBackend):
             is_lb = bool(getattr(mic, "isloopback", False))
             display = f"[LB] {mic.name}" if is_lb else mic.name
             sources.append(
-                CaptureSource(source_id=sid, display_name=display, is_loopback=is_lb)
+                CaptureSource(
+                    source_id=sid,
+                    display_name=display,
+                    is_loopback=is_lb,
+                    kind=CaptureKind.DEVICE,
+                )
             )
         return sources
 

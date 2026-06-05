@@ -25,7 +25,7 @@ import customtkinter as ctk
 
 from voice_translator.common.app_controller import AppController
 from voice_translator.common.languages import format_language, parse_language
-from voice_translator.common.types import LayerKind, ModelStatus
+from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
 
 from .collapsible_section import CollapsibleSection
 from .consent_dialog import ConsentDialog
@@ -83,6 +83,28 @@ def _tts_display_to_internal(display: str) -> str:
 def _tts_internal_to_display(internal: str) -> str:
     """TTS の内部値を表示文字列に変換する。"""
     return _TTS_NONE_DISPLAY if internal == _TTS_NONE_INTERNAL else internal
+
+
+# 音声取得 backend の kind 表示ラベル(2026-06-05 / ProcTap 取り込み 段階1)。
+# 「音声取得」プルダウンの表示は `<kind label> (<backend name>)` 形式。
+# 内部値(ConfigStore `backends.capture`)は backend 名のまま維持する。
+_CAPTURE_KIND_LABELS: dict[CaptureKind, str] = {
+    CaptureKind.DEVICE: "デバイス",
+    CaptureKind.PROCESS: "プロセス",
+}
+
+
+def _capture_display_to_internal(display: str) -> str:
+    """「デバイス (soundcard)」のような表示文字列から backend 名を抽出する。
+
+    形式 `<label> (<backend>)` の末尾カッコ内を取り出す。マッチしないものは
+    そのまま返す(防衛: 未登録表示 `(未登録)` や旧式設定の互換)。
+    """
+    if display.endswith(")") and "(" in display:
+        start = display.rindex("(") + 1
+        return display[start:-1]
+    return display
+
 
 
 class SettingsPanel(ctk.CTkFrame):
@@ -166,19 +188,15 @@ class SettingsPanel(ctk.CTkFrame):
         for layer, label in _LAYER_LABELS:
             label_widget = ctk.CTkLabel(body, text=f"{label}:")
             label_widget.grid(row=row, column=0, sticky="w", padx=4, pady=2)
-            names = self._controller.list_backends(layer) or ["(未登録)"]
-            # TTS プルダウンには「(なし)」を末尾に追加する(text_only モードの選択肢)
-            if layer == LayerKind.TTS:
-                names = list(names) + [_TTS_NONE_DISPLAY]
+            internal_names = self._controller.list_backends(layer) or ["(未登録)"]
+            # 表示用候補(layer ごとに display フォーマットを変換)
+            names = self._render_backend_choices(layer, internal_names)
             current_internal = str(
-                self._controller.get_setting("backends", layer.value, default=names[0])
+                self._controller.get_setting(
+                    "backends", layer.value, default=internal_names[0],
+                )
             )
-            # TTS のときは内部値 → 表示値変換
-            current_display = (
-                _tts_internal_to_display(current_internal)
-                if layer == LayerKind.TTS
-                else current_internal
-            )
+            current_display = self._backend_internal_to_display(layer, current_internal)
             var = ctk.StringVar(value=current_display)
             option = ctk.CTkOptionMenu(
                 body,
@@ -209,6 +227,61 @@ class SettingsPanel(ctk.CTkFrame):
         body.columnconfigure(2, weight=0)
         body.columnconfigure(3, weight=0)
         return section
+
+    # ----------------------------------------------------------
+    # backend プルダウンの表示形式 ↔ 内部値変換(各レイヤの特例を吸収)
+    # ----------------------------------------------------------
+    def _render_backend_choices(
+        self, layer: LayerKind, internal_names: list[str],
+    ) -> list[str]:
+        """`list_backends(layer)` の戻り値を layer 別の表示形式に整える。
+
+        - TTS: 末尾に「(なし)」を追加(text_only モード切替)
+        - CAPTURE: `<kind label> (<backend>)` 形式に変換(段階 1 / ProcTap 取り込み準備)
+        - その他: backend 名そのまま
+        """
+        if layer == LayerKind.TTS:
+            return list(internal_names) + [_TTS_NONE_DISPLAY]
+        if layer == LayerKind.CAPTURE:
+            return [self._capture_internal_to_display(n) for n in internal_names]
+        return list(internal_names)
+
+    def _backend_internal_to_display(
+        self, layer: LayerKind, internal: str,
+    ) -> str:
+        """指定レイヤの内部 backend 名を表示文字列に変換する。"""
+        if layer == LayerKind.TTS:
+            return _tts_internal_to_display(internal)
+        if layer == LayerKind.CAPTURE:
+            return self._capture_internal_to_display(internal)
+        return internal
+
+    def _backend_display_to_internal(
+        self, layer: LayerKind, display: str,
+    ) -> str:
+        """表示文字列を内部 backend 名に変換する。"""
+        if layer == LayerKind.TTS:
+            return _tts_display_to_internal(display)
+        if layer == LayerKind.CAPTURE:
+            return _capture_display_to_internal(display)
+        return display
+
+    def _capture_internal_to_display(self, internal: str) -> str:
+        """CAPTURE backend 名を「<kind label> (<backend>)」形式に変換する。
+
+        kind が取れない / 未登録 / `CaptureKind` 以外の値は backend 名そのままを返す
+        (防衛: 古い AppController モックや未登録 backend に対する縮退)。
+        """
+        if not internal or internal == "(未登録)":
+            return internal
+        try:
+            kind = self._controller.get_capture_kind(internal)
+        except Exception:  # noqa: BLE001
+            return internal
+        if not isinstance(kind, CaptureKind):
+            return internal
+        label = _CAPTURE_KIND_LABELS.get(kind, internal)
+        return f"{label} ({internal})"
 
     # ----------------------------------------------------------
     # TTS=(なし) 連動(Output 行のグレーアウト)
@@ -416,13 +489,13 @@ class SettingsPanel(ctk.CTkFrame):
     def _on_backend_change(self, layer: LayerKind, value: str) -> None:
         """backend 選択変更。クラウド backend なら同意ダイアログを先に通す(Phase D)。
 
-        TTS レイヤだけは「(なし)」表示 ↔ "none" 内部値の変換を行う。「(なし)」を
-        選んだ場合は同意ダイアログを通さない(クラウド backend ではない)。
+        各レイヤの「表示 ↔ 内部値」変換は `_backend_display_to_internal` に委譲:
+        - TTS: 「(なし)」 ↔ "none"
+        - CAPTURE: 「デバイス (soundcard)」 ↔ "soundcard"
+        - その他: 変換なし
+        TTS の「(なし)」選択時は同意ダイアログを通さない(ローカル動作 = backend 起動しない)。
         """
-        # TTS の「(なし)」表示を内部値に変換
-        internal_value = (
-            _tts_display_to_internal(value) if layer == LayerKind.TTS else value
-        )
+        internal_value = self._backend_display_to_internal(layer, value)
 
         # 「(なし)」選択は同意ダイアログ不要(ローカル動作 = backend 起動しない)
         if internal_value != _TTS_NONE_INTERNAL:
@@ -431,10 +504,8 @@ class SettingsPanel(ctk.CTkFrame):
                 current_internal = str(
                     self._controller.get_setting("backends", layer.value, default="")
                 )
-                current_display = (
-                    _tts_internal_to_display(current_internal)
-                    if layer == LayerKind.TTS
-                    else current_internal
+                current_display = self._backend_internal_to_display(
+                    layer, current_internal,
                 )
                 var = self._backend_vars.get(layer)
                 if var is not None:
