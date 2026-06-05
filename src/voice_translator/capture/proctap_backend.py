@@ -9,9 +9,9 @@ proc-tap 側の出力フォーマットは **48000 Hz / stereo / float32 固定*
 1. stereo → mono(`np.mean(axis=1)`)
 2. 48 kHz → 16 kHz(`scipy.signal.resample_poly(up=1, down=3)`)
 
-`list_sources()` は段階 3(`pycaw` 連携でプロセス列挙 + エコーバック確認)まで
-空リスト仮実装。段階 2 では「直接 PID を渡せば動く」状態を達成することを目標とし、
-GUI から選択させる前提のソース列挙は段階 3 で実装する。
+`list_sources()` は段階 3 で `process_enumerator` に委譲する本実装に切り替えた。
+WASAPI AudioSession の列挙ロジックは `capture/process_enumerator.py` に独立化して
+おり、本 backend からはそれを呼ぶだけ(役割分離)。
 """
 
 from __future__ import annotations
@@ -112,13 +112,29 @@ class ProcTapCaptureBackend(AudioCaptureBackend):
 
     # ----------------------------------------------------------
     def list_sources(self) -> list[CaptureSource]:
-        """段階 3(`pycaw` 連携)まで空リスト仮実装。
+        """音声出力中のプロセスを列挙して `CaptureSource` のリストを返す(段階 3)。
 
-        段階 3 で「音声出力中のプロセス」を列挙し、kind=PROCESS の `CaptureSource` を
-        返す予定。本段階では GUI 側で表示するものが無いため空。テストや手動運用では
-        `start("<pid>")` を直接呼んで動作確認する。
+        列挙ロジック自体は `capture/process_enumerator.py` に独立化されている
+        (WASAPI セッション列挙は ProcTap 固有でなく Windows 共通機能のため)。
+        本 backend はそれを呼ぶだけ。
+
+        ※ ConfigStore に PID を残しても再起動で無効化される(A-7 確定方針)ので、
+        UI 側は毎回プロセス選択ダイアログから選び直す前提。本メソッドは GUI から
+        「現在使えるプロセス」を見せるためのソース。
         """
-        return []
+        try:
+            from . import process_enumerator as pe
+            return pe.enumerate_active_processes()
+        except ImportError:
+            # pycaw / psutil 未インストール時(extras 未導入で proc-tap だけがある等の
+            # 異常パス)。本クラスの __init__ で proc-tap の有無は確認済みだが、
+            # pycaw / psutil は process_enumerator が遅延 import するため、ここで吸収。
+            logger.exception("process_enumerator の依存(pycaw / psutil)が未インストール")
+            return []
+        except Exception:
+            # WASAPI 列挙時の COM 例外等。UI を壊さないため空リストにフォールバック。
+            logger.exception("list_sources() の列挙中に例外(空リストで縮退)")
+            return []
 
     # ----------------------------------------------------------
     def start(self, source_id: str) -> None:

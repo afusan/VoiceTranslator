@@ -110,9 +110,14 @@ tts-google = [
 # Capture: ProcTap (per-process audio capture)。Windows = WASAPI Process Loopback の
 # C++ native 実装。scipy はリサンプル(48kHz → 16kHz)に必要だが、proc-tap が依存に
 # 持っているので extras としては proc-tap のみで足りる(scipy も自動で入る)。
+# 段階 3 で pycaw / psutil を追加: WASAPI AudioSession の列挙とプロセス名取得に使う。
+# pycaw は WASAPI ラッパ(プロセス選択ダイアログでの「音声出力中プロセス列挙」とレベル試聴)、
+# psutil はプロセス名解決(pycaw 経由は欠落することがあるため補完)。
 # 未インストール環境では `ProcTapCaptureBackend.__init__` が FatalError を投げる。
 capture-proctap = [
     "proc-tap>=0.4",
+    "pycaw>=20240210",
+    "psutil>=5.9",
 ]
 
 [tool.uv]

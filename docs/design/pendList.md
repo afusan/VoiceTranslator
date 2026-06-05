@@ -23,23 +23,48 @@
 
 ---
 
-## [⏳保留 2026-06-05] ProcTap 取り込み 段階 3: プロセス列挙とエコーバック確認
-- **対象**: 段階 2 で `ProcTapCaptureBackend` を作ったあと、「音声出力中のプロセスのみ列挙」+
-  「エコーバック確認機能」を追加する。
-- **背景**: 全プロセス列挙は使いにくい(数百件)。「現在音を出しているプロセス」だけ並べる方が UX が良い。
-  さらに、ユーザが選んだ対象から本当に音が来ているかを確認できる「エコーバック」UI を併設する。
-- **必要な作業**:
-  - Windows: `pycaw`(`AudioUtilities.GetAllSessions()` + `IAudioMeterInformation`)で
-    音声セッション + ピークレベル取得 → 「現在音を出している」プロセスだけ表示
-  - 列挙結果から `ProcTapCaptureBackend.list_sources()` のソースリストを生成
-  - エコーバック確認 UI(別ダイアログ?ControlPanel に簡易メータ?):
-    - 選択中プロセスのキャプチャストリームをタップしてレベルメータ表示
-    - 「鳴っているか」をユーザが視覚的に確認
-- **設計判断ポイント**(着手時に詰める):
-  - プロセス一覧の更新タイミング(都度列挙? 定期 polling? ユーザ操作時のみ?)
-  - 「音声出力中」の判定閾値(peak level でフィルタするか、セッション状態でフィルタするか)
-  - エコーバック UI の置き場所(ControlPanel / 別ダイアログ / SettingsPanel 内)
-- **着手トリガ**: 段階 2 完了後。
+## [✅完了 2026-06-05] ProcTap 取り込み 段階 3: プロセス列挙と試聴メータ
+- **対応ブランチ**: `feature/proctap-process-list`
+- **対応内容**:
+  - `pyproject.toml` の `capture-proctap` extras に `pycaw>=20240210` / `psutil>=5.9` 追加
+  - `src/voice_translator/capture/process_enumerator.py` 新規:
+    - `enumerate_active_processes() -> list[CaptureSource]`(`AudioSessionState.Active` のみ、PID 単位 dedupe、psutil でプロセス名補完、失敗時 `"unknown"`)
+    - `get_session_meter(pid)`(試聴ダイアログ用に `IAudioMeterInformation` を返す)
+    - pycaw / psutil 呼び出しは `_list_active_sessions` / `_resolve_process_name` に隔離、テスト時 monkeypatch 完全置換可
+  - `ProcTapCaptureBackend.list_sources()` を `process_enumerator` 経由の本実装に切替(段階 2 の空リスト仮実装を廃止)
+  - `src/voice_translator/gui/process_select_dialog.py` 新規:
+    - `ProcessSelectDialog`(CTkToplevel) + `ProcessSelectController`(GUI 非依存ロジック)
+    - PID テーブル + ↻ 更新 + ▶ 試聴開始・■ 停止トグル + レベルメータ + OK/Cancel
+    - 試聴は本番パイプラインと完全独立(pycaw `GetPeakValue()` を 30fps poll、WASAPI Process Loopback は開かない)
+  - `SettingsPanel`: `capture_kind == PROCESS` のとき source プルダウンを「プロセス選択…」ボタンに切替、押下で `ProcessSelectDialog` を開く
+  - `ControlPanel._sync_ready_state`: 「PROCESS kind かつ source 未選択」分岐追加(Start を「プロセス未選択」で disable)
+  - `AppController.save_settings()` / `load_settings()`: A-7 確定方針として PROCESS kind の `devices.input` を空文字に正規化(永続化しない+起動時もセーフティで空)
+- **検討経緯と判断記録**: `tmp/report1.md`(着手前論点整理 / 確定版)
+- **未対応の派生項目**(下記別エントリに起票):
+  - 動的列挙更新(プロセス起動/終了の追従)
+  - Linux/Mac の process-kind 列挙
+- **やらないと確定したもの**: プロセス名 / exe path での PID 永続化 → A-7 で「保存しない」方針が確定。再起動で都度選択する UX。
+
+---
+
+## [⏳保留 2026-06-05] ProcessSelectDialog の動的列挙更新
+- **対象**: 段階 3 で実装した `ProcessSelectDialog` のプロセス一覧を、ダイアログを開いたまま
+  プロセスが起動/終了したときに自動追従する。
+- **現状**: 列挙はダイアログを開いた瞬間に 1 回 + 「↻ 更新」ボタンで手動再列挙。
+- **見送り理由**: 段階 3 のスコープを「列挙 + 試聴」に絞ったため。手動更新ボタンで十分実用に
+  なるかをドッグフーディングで観察してから着手するかを判断する。
+- **着手トリガ**: 「↻ 更新の押し忘れで取りこぼした」事案が複数件出たら。
+
+---
+
+## [⏳保留 2026-06-05] Linux/Mac の process-kind 列挙
+- **対象**: 配布方針(CPU を floor / OS 抽象を維持)で「Windows 以外でも per-process キャプチャを
+  選びたい」需要が出たときの対応。
+- **現状**: `process_enumerator` は pycaw / psutil に直接依存し、Windows 専用。
+- **対応案**: Strategy / Adapter で OS 別 enumerator を差し替え可能にする(`LinuxPulseAudioEnumerator`
+  / `MacCoreAudioEnumerator` 等)。
+- **見送り理由**: ProcTap 自体が Windows 専用のため、OS 横断はまだ需要が見えない。
+- **着手トリガ**: Linux/Mac で per-process キャプチャ可能な backend が登場したとき。
 
 ---
 

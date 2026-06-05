@@ -30,6 +30,7 @@ from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
 from .collapsible_section import CollapsibleSection
 from .consent_dialog import ConsentDialog
 from .layer_settings_dialog import LayerSettingsDialog
+from .process_select_dialog import ProcessSelectDialog
 
 # GUIで切替対象とするレイヤと表示ラベル
 _LAYER_LABELS: list[tuple[LayerKind, str]] = [
@@ -338,11 +339,22 @@ class SettingsPanel(ctk.CTkFrame):
         ctk.CTkLabel(body, text="入力デバイス:").grid(
             row=0, column=0, sticky="w", padx=4, pady=2
         )
+        # capture_kind に応じて 2 種類の UI を使い分ける(段階 3 / ProcTap):
+        #   DEVICE  → 従来のプルダウン (`_capture_dropdown`)
+        #   PROCESS → 「プロセス選択…」ボタン (`_capture_select_btn`)
+        # 切替時はもう一方を `grid_remove()` して非表示にし、grid 領域は保持しない。
         self._capture_dropdown = ctk.CTkOptionMenu(
             body, values=["(列挙中)"], variable=self._capture_var,
             command=self._on_capture_changed,
         )
         self._capture_dropdown.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
+
+        self._capture_select_btn = ctk.CTkButton(
+            body, text="プロセス選択…", command=self._on_capture_select_clicked,
+        )
+        # 初期状態では非表示(DEVICE kind backend が選ばれている前提)
+        self._capture_select_btn.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
+        self._capture_select_btn.grid_remove()
 
         ctk.CTkLabel(body, text="出力デバイス:").grid(
             row=1, column=0, sticky="w", padx=4, pady=2
@@ -745,15 +757,43 @@ class SettingsPanel(ctk.CTkFrame):
         self._refresh_output_devices_dropdown()
 
     def _refresh_capture_sources_dropdown(self) -> None:
-        """入力ソースプルダウンを「現在の `backends.capture` backend」に基づき再列挙する。
+        """入力ソースの UI を「現在の `backends.capture` backend」の kind に基づいて再構築する。
 
-        - `AppController.list_capture_sources()` は現在の `backends.capture` 設定を
-          見て当該 backend のソースを返す(`_create` 経由)。
-        - 既存の `devices.input` 値が新ソース一覧に含まれていれば選択を維持。
-          含まれていなければ先頭ソースに fallback し ConfigStore を更新する。
-        - 取得失敗時は「(取得失敗: ...)」を表示し `_capture_id_map` を空にする
-          (UI を壊さない)。
+        段階 3 で 2 モード対応:
+          DEVICE  → 従来のプルダウン(`list_capture_sources()` の戻り値で埋める)
+          PROCESS → 「プロセス選択…」ボタン(押下時にダイアログで PID を選ぶ)
         """
+        kind = self._current_capture_kind()
+        if kind == CaptureKind.PROCESS:
+            self._show_process_select_ui()
+        else:
+            self._show_device_dropdown_ui()
+
+    def _current_capture_kind(self) -> CaptureKind:
+        """現在の capture backend の kind を取得する(取れないときは DEVICE フォールバック)。"""
+        backend_name = str(
+            self._controller.get_setting("backends", LayerKind.CAPTURE.value, default="")
+        )
+        if not backend_name:
+            return CaptureKind.DEVICE
+        try:
+            kind = self._controller.get_capture_kind(backend_name)
+        except Exception:  # noqa: BLE001
+            return CaptureKind.DEVICE
+        return kind if isinstance(kind, CaptureKind) else CaptureKind.DEVICE
+
+    def _show_device_dropdown_ui(self) -> None:
+        """DEVICE kind: 従来のプルダウンを表示し、ソースを列挙して埋める。"""
+        # ボタンを隠してプルダウンを出す
+        try:
+            self._capture_select_btn.grid_remove()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._capture_dropdown.grid()
+        except Exception:  # noqa: BLE001
+            pass
+
         try:
             sources = self._controller.list_capture_sources()
         except Exception as e:  # noqa: BLE001
@@ -776,6 +816,66 @@ class SettingsPanel(ctk.CTkFrame):
         # 既存値が新一覧に無い → 先頭に fallback
         self._capture_var.set(sources[0].display_name)
         self._controller.set_setting("devices", "input", sources[0].source_id)
+
+    def _show_process_select_ui(self) -> None:
+        """PROCESS kind: プルダウンを隠してボタンを表示。ラベルは現在 PID で更新。"""
+        try:
+            self._capture_dropdown.grid_remove()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._capture_select_btn.grid()
+        except Exception:  # noqa: BLE001
+            pass
+        self._capture_id_map = {}
+        self._update_capture_select_btn_label()
+
+    def _update_capture_select_btn_label(self) -> None:
+        """プロセス選択ボタンのラベルを現在の `devices.input` で同期する。
+
+        未選択時: 「プロセス選択…」
+        選択時:   「PID 1234 ▼」(プロセス名解決は重いのでダイアログ側で表示する)
+        """
+        current = self._controller.get_setting("devices", "input", default="")
+        text = "プロセス選択…"
+        if current:
+            try:
+                pid = int(str(current).strip())
+                text = f"PID {pid} ▼"
+            except (TypeError, ValueError):
+                text = "プロセス選択…"
+        try:
+            self._capture_select_btn.configure(text=text)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_capture_select_clicked(self) -> None:
+        """「プロセス選択…」ボタン押下: ProcessSelectDialog を開き、OK で PID を保存。"""
+        current = self._controller.get_setting("devices", "input", default="")
+        initial_pid: int | None = None
+        if current:
+            try:
+                initial_pid = int(str(current).strip())
+            except (TypeError, ValueError):
+                initial_pid = None
+
+        try:
+            dlg = ProcessSelectDialog(self, initial_pid=initial_pid)
+        except Exception as e:  # noqa: BLE001
+            self._show_message(f"プロセス選択ダイアログ起動失敗: {e}")
+            return
+        try:
+            dlg.wait_window()
+        except Exception:  # noqa: BLE001
+            pass
+        if dlg.result_pid is None:
+            # Cancel / 閉じる
+            return
+        self._controller.set_setting("devices", "input", str(dlg.result_pid))
+        self._update_capture_select_btn_label()
+        # 動作中なら自動 restart(DEVICE 切替と同じ挙動)
+        if self._controller_is_running():
+            self._trigger_device_restart("入力")
 
     def _refresh_output_devices_dropdown(self) -> None:
         """出力デバイスプルダウンを再列挙する(挙動は capture 側と対称)。"""

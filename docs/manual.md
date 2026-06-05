@@ -156,7 +156,13 @@ py -m uv run python -m voice_translator
   - 「**取得単位**(デバイス / プロセス)」+ 「**backend 名**」を併記した表示形式。
   - 内部値(`config.yaml` の `backends.capture`)は backend 名のまま。
   - **`プロセス (proctap)`** は WASAPI Process Loopback でプロセス単位に音声を取り込む。
-    本リリース時点では「入力デバイス」プルダウンへのプロセス列挙は **未実装**(段階 3 で `pycaw` 連携予定)。手動運用では `config.yaml` の `devices.input` に PID(文字列)を直接書く。
+    「入力デバイス」行は **「プロセス選択…」ボタン** に切り替わり、押すと **プロセス選択ダイアログ** が開いて以下を行える:
+    - 音声出力中(`AudioSessionState.Active`)のプロセス一覧から選択
+    - 「▶ 試聴開始」でレベルメータに鳴り具合が反映される(本番パイプラインを起動せず、`pycaw` の `GetPeakValue()` だけで確認)
+    - 「↻ 更新」で再列挙
+    - OK で確定 / Cancel で破棄
+  - 選択した PID は **アプリを閉じると保存されない**(再起動時は毎回プロセス選択し直し)。プロセス再起動で PID が変わるため、保存しても次回起動で別アプリの音を取り込む事故を防ぐ仕様。
+  - 未選択のまま「▶ 開始」を押そうとすると、ボタンが「プロセス未選択」になり Start を阻止する。
 - VAD: `silero` / `webrtcvad` / `pyannote` / `pvcobra`(後 3 つは `--extra vad-extra` で追加)
 - ASR: `faster_whisper` / `openai_whisper` / `openai_whisper_api` / `google_stt` / `deepgram`
 - 翻訳: `nllb200` / `deepl` / `openai_gpt` / `anthropic_claude`
