@@ -28,11 +28,12 @@
 | **P1** | `feature/ui-sections-split` | R1(UI 折り畳み 3 分割) | 小 | ✅ 完了・master マージ済(`d2f2b72`) |
 | **P2** | `feature/dynamic-languages` | R2 のうち **言語の動的変更** | 小 | ✅ 実装・テスト完了(`e10e6a7`)。master マージ待ち |
 | **P3** | `feature/text-only-output` → `refactor/text-only-via-tts-none` | R3(出力 backend なしモード)。**最終形は TTS=(なし) 選択値から派生** | 中 | ✅ 実装・テスト完了(`69fea7c`)。master マージ待ち |
-| **P4** | `feature/dynamic-devices` | R2 のうち **入出力デバイスの動的変更**(停止→再開方式) | 中 | ☐ 未着手 |
+| **P4** | `feature/dynamic-devices` | R2 のうち **入出力デバイスの動的変更**(停止→再開方式) | 中 | ✅ 実装完了(`96cf01b`)。AppController.restart_pipeline_async 追加 + SettingsPanel が動作中切替時に発火 |
 | **P5** | `feature/capture-backend-split` | R4(入力 backend のデバイス単位への分解、ProcTap 連携の土台) | 中〜大 | ✅ 実装完了(`9dad6b0`)。master マージ待ち |
 | **P6-1** | `feature/capture-kind` | ProcTap 取り込み 段階 1(`CaptureKind` 概念導入 + Python 3.12 化) | 小 | ✅ 実装完了。pendList 上で段階 2/3 を起票 |
 | **P6-2** | `feature/proctap-backend` | ProcTap 取り込み 段階 2(`ProcTapCaptureBackend` 本体 + リサンプル) | 中 | ✅ 実装完了。small 16 件 + large 1 件 pass |
 | **P6-3** | `feature/proctap-process-list` | ProcTap 取り込み 段階 3(`pycaw` 連携でプロセス列挙 + 試聴メータダイアログ) | 中 | ✅ 実装完了。`process_enumerator` 新規 / `ProcessSelectDialog` 新規 / SettingsPanel に「プロセス選択…」ボタン / ControlPanel 未選択時 disable / A-7 で PID 非永続化。`docs/design/feature-proctap-process-list/` 参照 |
+| **P6-3-fix** | `refactor/process-peak-worker` | P6-3 のスレッド処理整理(GUI スレッドでの COM モード競合解消) | 小〜中 | ✅ 実装完了(`2d0d707`)。永続 COM ワーカースレッド `_PeakWorker` 1 個に集約、5fps 内部 poll で peak を atomic 保持、GUI は atomic 読みだけ。スレッド生成 30/sec → 0、CoInitialize 30/sec → 1/process |
 
 順序の理由:
 - **P1 を先に**: 触る範囲が狭く副作用がない。ドッグフーディング体験が一気に上がる。後続の UI 改修と競合しにくい形に整えてから動的変更系へ。
