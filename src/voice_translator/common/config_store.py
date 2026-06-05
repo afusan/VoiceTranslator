@@ -95,6 +95,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "soundcard": {
             "auto_load": False,
         },
+        "proctap": {
+            "auto_load": False,
+            # proc-tap 側のリサンプル品質("best" / "medium" / "fast")。WASAPI が int16 で
+            # 返す稀なケース等で proc-tap 内部のリサンプルに使われる。48kHz→16kHz の本変換は
+            # backend 側で scipy.signal.resample_poly が担う(本値とは独立)。
+            "resample_quality": "best",
+        },
         "sapi": {
             "auto_load": False,
             "rate": 180,  # 読み上げ速度(WPM相当)。早口にするなら 220 等。

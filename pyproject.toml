@@ -107,6 +107,13 @@ tts-openai-api = [
 tts-google = [
     "google-cloud-texttospeech>=2.16",
 ]
+# Capture: ProcTap (per-process audio capture)。Windows = WASAPI Process Loopback の
+# C++ native 実装。scipy はリサンプル(48kHz → 16kHz)に必要だが、proc-tap が依存に
+# 持っているので extras としては proc-tap のみで足りる(scipy も自動で入る)。
+# 未インストール環境では `ProcTapCaptureBackend.__init__` が FatalError を投げる。
+capture-proctap = [
+    "proc-tap>=0.4",
+]
 
 [tool.uv]
 conflicts = [

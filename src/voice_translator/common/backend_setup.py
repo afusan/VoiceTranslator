@@ -52,6 +52,7 @@ def register_default_backends(
     )
     from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
     from voice_translator.asr.deepgram_backend import DeepgramAsrBackend
+    from voice_translator.capture.proctap_backend import ProcTapCaptureBackend
     from voice_translator.capture.soundcard_backend import SoundcardCaptureBackend
     from voice_translator.output.soundcard_backend import SoundcardOutputBackend
     from voice_translator.translator.nllb200_backend import Nllb200TranslatorBackend
@@ -77,6 +78,26 @@ def register_default_backends(
     from voice_translator.vad.pvcobra_backend import PvcobraVadBackend
 
     registry.register(LayerKind.CAPTURE, "soundcard", SoundcardCaptureBackend)
+
+    # ProcTap(per-process キャプチャ、段階 2 / 2026-06-05)。
+    # extras: `[project.optional-dependencies].capture-proctap`(opt-in)。
+    # 未インストール環境では backend 構築時に FatalError(他の opt-in backend と同じパターン)。
+    # `list_sources()` は段階 3(`pycaw` 連携)まで空リスト仮実装のため、GUI から選択しても
+    # ソース一覧は出ない。直接 source_id(PID 文字列)を渡せば動く。
+    proctap_resample_quality = _read_str(
+        config, ("backends_config", "proctap", "resample_quality"), default="best",
+    )
+    registry.register(
+        LayerKind.CAPTURE,
+        "proctap",
+        lambda: ProcTapCaptureBackend(resample_quality=proctap_resample_quality),
+        backend_cls=ProcTapCaptureBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=False,
+            requires_credentials=False,
+            notes="proc-tap WASAPI Process Loopback。48kHz/2ch を内部で 16kHz/mono に変換。",
+        ),
+    )
 
     # Silero VAD は config から発話区切り関連パラメータを読み込む
     vad_threshold = _read_float(

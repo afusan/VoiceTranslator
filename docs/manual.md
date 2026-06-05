@@ -50,6 +50,9 @@ py -m uv sync --extra cpu
 
 # NVIDIA GPU を持っているなら CUDA 版にする(自動で GPU 使用、+3GB):
 # py -m uv sync --extra cuda
+
+# プロセス単位の音声取得(ProcTap, Windows 推奨)を使いたいなら追加 extras:
+# py -m uv sync --extra cpu --extra capture-proctap
 ```
 
 `uv sync` で `.venv/` フォルダに仮想環境が作られ、Python 3.11 と必要なライブラリが入ります。
@@ -149,10 +152,11 @@ py -m uv run python -m voice_translator
 
 ### 5-4. レイヤ別の実装選択
 バックエンドセクションのプルダウンから選択する:
-- 音声取得: `デバイス (soundcard)` / 将来 `プロセス (proctap)` 等
+- 音声取得: `デバイス (soundcard)` / `プロセス (proctap)`(`--extra capture-proctap` で有効)
   - 「**取得単位**(デバイス / プロセス)」+ 「**backend 名**」を併記した表示形式。
   - 内部値(`config.yaml` の `backends.capture`)は backend 名のまま。
-  - 同じ取得単位に複数 backend がある場合は併記された backend 名で識別する。
+  - **`プロセス (proctap)`** は WASAPI Process Loopback でプロセス単位に音声を取り込む。
+    本リリース時点では「入力デバイス」プルダウンへのプロセス列挙は **未実装**(段階 3 で `pycaw` 連携予定)。手動運用では `config.yaml` の `devices.input` に PID(文字列)を直接書く。
 - VAD: `silero` / `webrtcvad` / `pyannote` / `pvcobra`(後 3 つは `--extra vad-extra` で追加)
 - ASR: `faster_whisper` / `openai_whisper` / `openai_whisper_api` / `google_stt` / `deepgram`
 - 翻訳: `nllb200` / `deepl` / `openai_gpt` / `anthropic_claude`
