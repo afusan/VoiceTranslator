@@ -1124,6 +1124,57 @@ class AppController:
                 self._logger.exception("StageDumpWriter.stop_run に失敗")
             self._stage_dump = None
 
+    def restart_pipeline_async(
+        self,
+        *,
+        on_restarted: Callable[[], None] | None = None,
+        on_failed: Callable[[str], None] | None = None,
+    ) -> None:
+        """動作中の Coordinator を停止 → 同じ ConfigStore 値で再開する(P4: デバイス変更用)。
+
+        - 動作中でない(`is_running == False`)場合は no-op で `on_restarted` を即時呼ぶ。
+          ConfigStore には既に新値が書き戻されている前提で、次回手動 Start で反映される。
+        - 動作中の場合は `vt_restart` スレッドを立て、その中で `stop_pipeline()` →
+          `start_pipeline()`(同期版)を直列に実行する。Loader スレッドのネストを避けるため、
+          `start_pipeline_async` ではなく同期版を使う。
+        - 多重起動防御: 既に restart が走っている場合は `on_failed("既に再開中です")` を呼ぶ。
+        - callback は **呼び出しスレッド(=`vt_restart`)上で呼ばれる**。tkinter 等の UI に
+          反映する場合は呼び出し側で `widget.after(0, ...)` でメインスレッドへ marshalling すること。
+        """
+        on_restarted = on_restarted or (lambda: None)
+        on_failed = on_failed or (lambda _msg: None)
+
+        if not self.is_running:
+            on_restarted()
+            return
+
+        # 多重起動防御: 同名スレッドが alive ならスキップ
+        existing = getattr(self, "_restart_thread", None)
+        if existing is not None and existing.is_alive():
+            on_failed("既に再開中です")
+            return
+
+        def _target() -> None:
+            try:
+                self.stop_pipeline()
+            except Exception as e:  # noqa: BLE001
+                self._logger.exception("restart_pipeline_async: 停止で失敗")
+                on_failed(f"停止に失敗: {e}")
+                return
+            try:
+                # 同期版 start を呼ぶ(Loader スレッドのネストを避ける)
+                self.start_pipeline()
+            except Exception as e:  # noqa: BLE001
+                self._logger.exception("restart_pipeline_async: 再開で失敗")
+                on_failed(f"再開に失敗: {e}")
+                return
+            on_restarted()
+
+        self._restart_thread = threading.Thread(
+            target=_target, name="vt_restart", daemon=True,
+        )
+        self._restart_thread.start()
+
     def _build_stage_dump(self) -> StageDumpWriter | NullStageDumpWriter:
         """ConfigStore の `pipeline.dump.*` に基づき writer を生成する。
 

@@ -702,11 +702,73 @@ class SettingsPanel(ctk.CTkFrame):
         device_id = self._capture_id_map.get(display_name)
         if device_id:
             self._controller.set_setting("devices", "input", device_id)
+            # P4: 動作中に変えたら自動 restart(停止→再開)
+            if self._controller_is_running():
+                self._trigger_device_restart("入力")
 
     def _on_output_changed(self, display_name: str) -> None:
         device_id = self._output_id_map.get(display_name)
         if device_id:
             self._controller.set_setting("devices", "output", device_id)
+            if self._controller_is_running():
+                self._trigger_device_restart("出力")
+
+    # ============================================================
+    # P4: 動作中デバイス変更の自動 restart
+    # ============================================================
+    def _controller_is_running(self) -> bool:
+        """AppController.is_running を安全に問い合わせる(モック/古い実装対策)。"""
+        try:
+            return bool(self._controller.is_running)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _trigger_device_restart(self, kind: str) -> None:
+        """動作中のパイプラインを停止→再開する(デバイス切替の自動反映)。
+
+        バナーに「(入力/出力)デバイスを切り替えました(再開中…)」を永続表示し、
+        restart 完了で dismiss、失敗時は show_error で上書きする。
+        """
+        msg = f"{kind}デバイスを切り替えました(再開中…)"
+        if self._banner is not None:
+            try:
+                self._banner.show_info(msg, duration_ms=0)
+            except Exception:  # noqa: BLE001
+                pass
+        self._controller.restart_pipeline_async(
+            on_restarted=lambda: self._on_restart_completed(kind),
+            on_failed=lambda m: self._on_restart_failed(kind, m),
+        )
+
+    def _on_restart_completed(self, kind: str) -> None:
+        """restart 完了通知(`vt_restart` スレッド上)。tk への反映は after で marshalling。"""
+        try:
+            self.after(0, self._apply_restart_completed)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_restart_completed(self) -> None:
+        if self._banner is not None:
+            try:
+                self._banner.dismiss()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _on_restart_failed(self, kind: str, message: str) -> None:
+        """restart 失敗通知(`vt_restart` スレッド上)。"""
+        try:
+            self.after(0, lambda: self._apply_restart_failed(kind, message))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_restart_failed(self, kind: str, message: str) -> None:
+        if self._banner is not None:
+            try:
+                self._banner.show_error(
+                    f"{kind}デバイス変更後の再開に失敗しました: {message}"
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     def _on_save(self) -> None:
         try:
