@@ -4,11 +4,18 @@
 各ステージは次段に必要な最小ペイロード(`PipelineMessage` + 各 `*Payload`)だけを渡し、
 横断メタ(timeline / 各種テキスト / 言語等)は `UtteranceLedger` に seq_id をキーに集約する。
 
-スレッド/キュー構成:
+スレッド/キュー構成(audio モード、既定):
 - Input    --(captured_queue)-->  ASR        (PCM、バイト基準 ByteBoundedQueue)
 - ASR      --(recognized_queue)--> Translator (テキスト、件数基準 queue.Queue)
 - Translator -(translated_queue)-> TTS        (テキスト、件数基準 queue.Queue)
 - TTS      --(synthesized_queue)-> Output    (PCM、バイト基準 ByteBoundedQueue)
+
+text_only モード(P3 / 2026-06-05):
+- Input / ASR / Translator の 3 スレッドのみ起動。TTS / Output は起動しない。
+- Translator 完了の時点で `on_text_ready` を発火し、レジャを `pop` してバッファを解放する。
+- `translated_queue` / `synthesized_queue` には何も push しない(レジャもキューも溜まらない)。
+- `on_utterance_done` は呼ばない(Output の概念が存在しない)。jsonl / processtime 等の
+  最終的なログ書き出しは呼び出し側(AppController)が `on_text_ready` で兼ねる。
 
 キューがあふれた場合は古いものから捨てる(リアルタイム性を優先)。PCM 系はバイト数で
 制限し、設定値を少し超える前提で「push してから超過分を退避」する。
@@ -89,8 +96,8 @@ class PipelineCoordinator:
         vad: VadBackend,
         asr: AsrBackend,
         translator: TranslatorBackend,
-        tts: TtsBackend,
-        output: AudioOutputBackend,
+        tts: TtsBackend | None,
+        output: AudioOutputBackend | None,
         error_handler: ErrorHandler,
         ledger: UtteranceLedger | None = None,
         sequence: SequenceGenerator | None = None,
@@ -110,6 +117,7 @@ class PipelineCoordinator:
         retry_max_sec: float = 8.0,
         logger: logging.Logger | None = None,
         dump: StageDumpWriter | NullStageDumpWriter | None = None,
+        output_mode: str = "audio",
     ) -> None:
         self._capture = capture
         self._vad = vad
@@ -118,6 +126,18 @@ class PipelineCoordinator:
         self._tts = tts
         self._output = output
         self._error_handler = error_handler
+        # 出力モード: "audio"(既定) / "text_only"。text_only のとき:
+        # - TTS / Output スレッドを起動しない
+        # - Translator 完了で on_text_ready 発火 + ledger.pop して即解放
+        # - on_utterance_done は呼ばない(Output の概念なし)
+        # 未知の値は audio として扱う(後方互換 / 防衛)。
+        self._output_mode = output_mode if output_mode == "text_only" else "audio"
+        # text_only モードでは tts / output が None でも OK。audio モードでは必須。
+        if self._output_mode == "audio":
+            if tts is None or output is None:
+                raise ValueError(
+                    "audio output_mode では tts と output backend が必須です"
+                )
         self._ledger = ledger if ledger is not None else UtteranceLedger()
         self._sequence = sequence if sequence is not None else SequenceGenerator()
         self._text_logger = text_logger
@@ -191,18 +211,31 @@ class PipelineCoordinator:
         return self._sequence
 
     def start(self, *, capture_source_id: str, output_device_id: str) -> None:
-        """5スレッドを起動。既に動作中なら RuntimeError。"""
+        """スレッドを起動。既に動作中なら RuntimeError。
+
+        text_only モードでは Input / ASR / Translator の 3 スレッドのみ起動し、
+        TTS / Output スレッドは作らない。`output_device_id` は使わない(`output.start`
+        も呼ばない)。
+        """
         if self.is_running:
             raise RuntimeError("PipelineCoordinator は既に動作中です")
 
         self._stop_event.clear()
-        # キュー + ledger 残骸をクリア
-        for q in (self._captured_queue, self._recognized_queue, self._translated_queue, self._synthesized_queue):
+        # キュー + ledger 残骸をクリア(text_only でも translated/synthesized は触れていないが
+        # 前回 audio 動作の残骸が残るケースを防ぐため、毎回 4 本とも drain する)
+        for q in (
+            self._captured_queue,
+            self._recognized_queue,
+            self._translated_queue,
+            self._synthesized_queue,
+        ):
             self._drain_queue(q)
         self._ledger.clear()
 
         self._capture.start(capture_source_id)
-        self._output.start(output_device_id)
+        if self._output_mode == "audio":
+            assert self._output is not None  # __init__ で保証済み
+            self._output.start(output_device_id)
         self._vad.reset()
 
         self._input_thread = threading.Thread(
@@ -214,50 +247,66 @@ class PipelineCoordinator:
         self._translator_thread = threading.Thread(
             target=self._translator_loop, name="vt_translator", daemon=True
         )
-        self._tts_thread = threading.Thread(
-            target=self._tts_loop, name="vt_tts", daemon=True
-        )
-        self._output_thread = threading.Thread(
-            target=self._output_loop, name="vt_output", daemon=True
-        )
-        for t in (
+        threads = [
             self._input_thread,
             self._asr_thread,
             self._translator_thread,
-            self._tts_thread,
-            self._output_thread,
-        ):
+        ]
+        if self._output_mode == "audio":
+            self._tts_thread = threading.Thread(
+                target=self._tts_loop, name="vt_tts", daemon=True
+            )
+            self._output_thread = threading.Thread(
+                target=self._output_loop, name="vt_output", daemon=True
+            )
+            threads.extend([self._tts_thread, self._output_thread])
+        for t in threads:
             t.start()
 
     def stop(self, *, join_timeout: float = 2.0) -> None:
-        """停止: stop_event を立てる → 各スレッドを上流から順に終了させる。"""
+        """停止: stop_event を立てる → 各スレッドを上流から順に終了させる。
+
+        text_only モードでは TTS / Output スレッドが存在しないため、
+        translated_queue / synthesized_queue へのセンチネル投入と join は skip する
+        (どちらも未使用キューで残骸は無いが、drain 自体は次回 start で実行される)。
+        """
         self._stop_event.set()
 
         # Input を待つ(read_chunk の戻りで終わる)
         self._join_quietly(self._input_thread, join_timeout)
         self._input_thread = None
 
-        # 各処理スレッドにセンチネルを投入して順次 join
+        # 上流共通: captured_queue を介した ASR と recognized_queue を介した Translator は
+        # audio / text_only どちらでも稼働している。
         for q, thread_attr in (
             (self._captured_queue, "_asr_thread"),
             (self._recognized_queue, "_translator_thread"),
-            (self._translated_queue, "_tts_thread"),
-            (self._synthesized_queue, "_output_thread"),
         ):
             self._try_put_sentinel(q)
             thread = getattr(self, thread_attr)
             self._join_quietly(thread, join_timeout)
             setattr(self, thread_attr, None)
 
+        if self._output_mode == "audio":
+            for q, thread_attr in (
+                (self._translated_queue, "_tts_thread"),
+                (self._synthesized_queue, "_output_thread"),
+            ):
+                self._try_put_sentinel(q)
+                thread = getattr(self, thread_attr)
+                self._join_quietly(thread, join_timeout)
+                setattr(self, thread_attr, None)
+
         # バックエンドの片付け(失敗は握りつぶす)
         try:
             self._capture.stop()
         except Exception:  # noqa: BLE001
             pass
-        try:
-            self._output.stop()
-        except Exception:  # noqa: BLE001
-            pass
+        if self._output_mode == "audio" and self._output is not None:
+            try:
+                self._output.stop()
+            except Exception:  # noqa: BLE001
+                pass
 
     def get_drop_counts(self) -> dict[str, int]:
         """ステージ別の累計ドロップ件数のコピーを返す(診断用)。"""
@@ -397,6 +446,21 @@ class PipelineCoordinator:
                 # 空翻訳は次段に流す意味がないのでスキップ(レジャは出力で pop されないので
                 # ここで pop してリークを防ぐ)
                 self._ledger.pop(msg.seq_id)
+                continue
+
+            if self._output_mode == "text_only":
+                # text_only: ここが最終段。on_text_ready で UI に届け、ledger を即 pop して
+                # バッファを解放する(translated_queue / synthesized_queue には流さない)。
+                # スナップショットは pop の戻り値そのまま使う(t_playback_* は含まない)。
+                record = self._ledger.pop(msg.seq_id)
+                record.setdefault("seq_id", msg.seq_id)
+                if self._on_text_ready is not None:
+                    try:
+                        self._on_text_ready(record)
+                    except Exception:  # noqa: BLE001
+                        self._logger.exception(
+                            "on_text_ready callback failed (text_only)"
+                        )
                 continue
 
             next_msg = PipelineMessage(

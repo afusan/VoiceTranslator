@@ -65,6 +65,16 @@ _CFG_COLLAPSED_BACKENDS = ("ui", "collapsed", "backends")
 _CFG_COLLAPSED_DEVICES = ("ui", "collapsed", "devices")
 _CFG_COLLAPSED_LANGUAGES = ("ui", "collapsed", "languages")
 
+# 出力モード(P3)。"text_only" のとき TTS / Output 行はグレーアウトする。
+_OUTPUT_MODE_CHOICES: list[tuple[str, str]] = [
+    ("audio", "音声で出力(既定)"),
+    ("text_only", "テキストのみ(TTS/Output なし)"),
+]
+_OUTPUT_MODE_TO_LABEL = {v: l for v, l in _OUTPUT_MODE_CHOICES}
+_OUTPUT_MODE_FROM_LABEL = {l: v for v, l in _OUTPUT_MODE_CHOICES}
+# text_only モードのときに無効化するレイヤ。
+_OUTPUT_DISABLED_LAYERS: set[LayerKind] = {LayerKind.TTS, LayerKind.OUTPUT}
+
 
 class SettingsPanel(ctk.CTkFrame):
     """設定操作のパネル + レイヤ別モデルステータス表示。"""
@@ -141,11 +151,12 @@ class SettingsPanel(ctk.CTkFrame):
         )
 
         body = section.body
+        # 6 レイヤ行を保持(text_only モード時にグレーアウトするため参照を残す)
+        self._backend_rows: dict[LayerKind, list[ctk.CTkBaseClass]] = {}
         row = 0
         for layer, label in _LAYER_LABELS:
-            ctk.CTkLabel(body, text=f"{label}:").grid(
-                row=row, column=0, sticky="w", padx=4, pady=2
-            )
+            label_widget = ctk.CTkLabel(body, text=f"{label}:")
+            label_widget.grid(row=row, column=0, sticky="w", padx=4, pady=2)
             names = self._controller.list_backends(layer) or ["(未登録)"]
             current = str(self._controller.get_setting("backends", layer.value, default=names[0]))
             var = ctk.StringVar(value=current)
@@ -162,17 +173,78 @@ class SettingsPanel(ctk.CTkFrame):
             status_label.grid(row=row, column=2, sticky="ew", padx=(4, 4), pady=2)
             self._status_labels[layer] = status_label
 
-            ctk.CTkButton(
+            cfg_btn = ctk.CTkButton(
                 body, text="設定", width=60,
                 command=lambda lyr=layer: self._open_layer_settings(lyr),
-            ).grid(row=row, column=3, sticky="e", padx=(0, 4), pady=2)
+            )
+            cfg_btn.grid(row=row, column=3, sticky="e", padx=(0, 4), pady=2)
 
+            self._backend_rows[layer] = [label_widget, option, status_label, cfg_btn]
             row += 1
+
+        # 出力モード切替(P3): 6 レイヤ行の下に置く。"text_only" にすると TTS/Output 行が
+        # グレーアウトし、起動時に当該レイヤをロードしない。
+        ctk.CTkLabel(body, text="出力モード:").grid(
+            row=row, column=0, sticky="w", padx=4, pady=(8, 2)
+        )
+        initial_mode = str(
+            self._controller.get_setting("pipeline", "output_mode", default="audio")
+        )
+        if initial_mode not in _OUTPUT_MODE_TO_LABEL:
+            initial_mode = "audio"
+        self._output_mode_var = ctk.StringVar(
+            value=_OUTPUT_MODE_TO_LABEL[initial_mode]
+        )
+        self._output_mode_dropdown = ctk.CTkOptionMenu(
+            body,
+            values=[label for _v, label in _OUTPUT_MODE_CHOICES],
+            variable=self._output_mode_var,
+            command=self._on_output_mode_changed,
+        )
+        self._output_mode_dropdown.grid(
+            row=row, column=1, columnspan=3, sticky="ew", padx=4, pady=(8, 2)
+        )
+        # 起動時の disable 反映
+        self._apply_output_mode_to_rows(initial_mode)
 
         body.columnconfigure(1, weight=1)
         body.columnconfigure(2, weight=0)
         body.columnconfigure(3, weight=0)
         return section
+
+    # ----------------------------------------------------------
+    # 出力モード切替
+    # ----------------------------------------------------------
+    def _on_output_mode_changed(self, displayed: str) -> None:
+        """出力モードプルダウンの変更ハンドラ。"""
+        mode = _OUTPUT_MODE_FROM_LABEL.get(displayed, "audio")
+        self._controller.set_setting("pipeline", "output_mode", mode)
+        self._apply_output_mode_to_rows(mode)
+
+    def _apply_output_mode_to_rows(self, mode: str) -> None:
+        """text_only モードのとき TTS / Output 行をグレーアウトする。
+
+        StringVar / 状態自体は維持。dropdown / 設定ボタンを disable にして
+        ユーザが触れないようにする。audio モードに戻したら enable に戻る。
+        """
+        disabled_layers = _OUTPUT_DISABLED_LAYERS if mode == "text_only" else set()
+        rows = getattr(self, "_backend_rows", {})
+        for layer, widgets in rows.items():
+            state = "disabled" if layer in disabled_layers else "normal"
+            text_color = "#475569" if layer in disabled_layers else None
+            for w in widgets:
+                try:
+                    if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
+                        w.configure(state=state)
+                    elif isinstance(w, ctk.CTkLabel) and text_color is not None:
+                        # ラベルは色でだけ disabled 感を出す(text_color=None なら触らない)
+                        w.configure(text_color=text_color)
+                    elif isinstance(w, ctk.CTkLabel):
+                        # audio モード復帰時はステータスラベルだけ別経路で色がつくため、
+                        # ラベル(行頭)に対しては既定色に戻すだけにする
+                        w.configure(text_color=None)
+                except Exception:  # noqa: BLE001 - widget 破棄 / プロパティ未対応で UI を止めない
+                    pass
 
     # ----------------------------------------------------------
     # セクション 2: デバイス

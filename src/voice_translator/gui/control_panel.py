@@ -436,12 +436,15 @@ class ControlPanel(ctk.CTkFrame):
           - MISSING_CREDENTIALS: ロードしても意味なし(API key 未設定)
           - DOWNLOADING: 進行中のロードを待つ(押下しても何も起きない)
 
+        text_only モード(P3): TTS / Output レイヤは判定対象から除外する
+        (起動対象外なので、未ロードで残っていても Start を阻害しない)。
+
         idle 以外(running / starting / stopping)のときは触らない(各フローで管理)。
         """
         if self._state != "idle":
             return
 
-        statuses = list(self._layer_statuses.values())
+        statuses = list(self._active_layer_statuses().values())
         if not statuses:
             return
 
@@ -463,7 +466,7 @@ class ControlPanel(ctk.CTkFrame):
             else:
                 self._status_label.configure(text="停止中")
 
-        # 中央ロードボタンの state を再計算
+        # 中央ロードボタンの state を再計算(text_only 時は対象レイヤから絞った statuses を使う)
         self._sync_load_button_state(statuses)
         # アクセラレータ表示は ready_state とは独立に常に更新する
         self._refresh_accel_label()
@@ -491,18 +494,39 @@ class ControlPanel(ctk.CTkFrame):
         else:
             btn.configure(text="↻ ロード", state="normal")
 
+    def _active_layer_statuses(self) -> dict[LayerKind, ModelStatus]:
+        """text_only モードでは TTS / Output を除いたレイヤ状態を返す。"""
+        try:
+            mode = self._controller.output_mode
+        except Exception:  # noqa: BLE001 - 古いモック / 仕様逸脱
+            mode = "audio"
+        if mode == "text_only":
+            return {
+                layer: status
+                for layer, status in self._layer_statuses.items()
+                if layer not in (LayerKind.TTS, LayerKind.OUTPUT)
+            }
+        return dict(self._layer_statuses)
+
     def _refresh_accel_label(self) -> None:
         """各レイヤの device を集約して「演算: GPU(cuda) / CPU のみ / 不明」を表示する。
 
         device 概念を持つレイヤ(ASR / Translator 等)の値を見て、1つでも CUDA/MPS が
         あれば GPU 利用扱い、すべて CPU なら "CPU のみ"、まだロードされていなければ
         "不明" を表示する。
+        text_only モードでは TTS / Output レイヤの device 報告は無視する。
         """
         if self._accel_label is None:
             return
+        try:
+            mode = self._controller.output_mode
+        except Exception:  # noqa: BLE001
+            mode = "audio"
         gpu_devices: set[str] = set()
         has_cpu = False
         for layer in LayerKind:
+            if mode == "text_only" and layer in (LayerKind.TTS, LayerKind.OUTPUT):
+                continue
             device = self._controller.get_layer_device(layer)
             if not device:
                 continue

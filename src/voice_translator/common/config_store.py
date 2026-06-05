@@ -54,6 +54,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "throttle_sec": 5.0,
     },
     "pipeline": {
+        # 出力モード(P3 / 2026-06-05):
+        # - "audio"     : 既定。TTS → Output まで通常通り走る(従来動作)
+        # - "text_only" : 翻訳テキストの確定で完了扱い。TTS / Output スレッドは起動せず、
+        #                  Translator 完了で `on_text_ready` を発火して `ledger.pop()` する。
+        #                  TTS/Output レイヤの backend ロードもスキップされる。
+        "output_mode": "audio",
         # ステージ間バッファ(キュー)の容量。あふれた場合は古いものから自動退避。
         # PCM 系(captured/synthesized)は **合計バイト数で制限**。1発話=PCM長×4byte。
         # 16kHz×float32 換算: 10MB ≒ 約 156 秒分、5MB ≒ 約 78 秒分。
