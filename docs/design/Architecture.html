@@ -220,6 +220,25 @@
   <li>再 start() 時は全キュー drain + ledger.clear() で残骸を引きずらない</li>
 </ol>
 
+<h3>出力モード(audio / text_only)</h3>
+<p>
+出力モードは <code>backends.tts</code> の値から派生する。独立した ConfigStore キーは持たない:
+</p>
+<ul>
+  <li><strong>audio</strong>(既定 / TTS=実 backend): 上記 5 スレッド構成で動く。</li>
+  <li><strong>text_only</strong>(TTS=<code>none</code>、UI 表記「(なし)」):
+    <ul>
+      <li><strong>Input / ASR / Translator の 3 スレッドのみ</strong>起動。TTS / Output スレッドは作らない。</li>
+      <li>Translator 完了直後に <code>on_text_ready(ledger.pop(seq_id))</code> を発火 = 最終通知。
+        <code>on_utterance_done</code> は呼ばれない。</li>
+      <li><code>translated_queue</code> / <code>synthesized_queue</code> には何も流れない(レジャもキューも溜まらない)。</li>
+      <li>TTS / Output レイヤの backend ロード・認証 gate も skip される(クラウド TTS の認証なしで Start 可)。</li>
+      <li>jsonl / processtime / レイヤ別 処理時間バッファへの記録は <code>AppController._handle_text_ready</code> 側で兼ねる。</li>
+      <li>動作中の即時モード切替は対象外。設定変更後の次回 Start で反映。</li>
+    </ul>
+  </li>
+</ul>
+
 <!-- =================================================== -->
 <h2>4. レイヤ間でやり取りする情報</h2>
 

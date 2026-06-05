@@ -36,7 +36,7 @@
 | ☑ | `TranslatorBackend` I/F + `Nllb200TranslatorBackend` | 翻訳 | 別ステージ必須 |
 | ☑ | `TtsBackend` I/F + `SapiTtsBackend` (pyttsx3) | TTS | WAV経由でPCM取得 |
 | ☑ | `AudioOutputBackend` I/F + `SoundcardOutputBackend` | 出力 | 出力デバイス指定 |
-| ☑ | `PipelineCoordinator` 実装 | 制御 | **3スレッド構成(B+案)** に進化 |
+| ☑ | `PipelineCoordinator` 実装 | 制御 | **5スレッド構成**(Input/ASR/Translator/TTS/Output)・4 キュー。`refactor/pipeline-5thread` で完了 |
 | ☑ | `ConfigStore` (YAML 読書き) | 横断 | |
 | ☑ | `Logger` (画面+jsonl、ON/OFF) | 横断 | |
 | ☑ | `ErrorHandler` (4分類振り分け) | 横断 | |
@@ -54,11 +54,13 @@
 
 | 状態 | タスク | 備考 |
 |---|---|---|
-| ☐ | 各レイヤに **第2のバックエンド** を追加(例: ASR を whisper.cpp、TTS を VOICEVOX 等) | 切替の実証 |
-| ☐ | GUI からの動的切替を稼働中でも反映 | 現状は次回開始時反映 |
+| ☑ | 各レイヤに **第2のバックエンド** を追加(VAD: webrtcvad / pyannote / pvcobra、ASR: openai_whisper / openai_whisper_api / google_stt / deepgram、Translator: deepl / openai_gpt / anthropic_claude、TTS: piper / elevenlabs / openai_tts / google_cloud_tts) | feature/vad-picks / asr-picks / translator-picks / tts-picks |
+| ◐ | GUI からの動的切替を稼働中でも反映 | **言語のみ完了**(`feature/dynamic-languages`、次発話から反映)。デバイス・バックエンドは未着手 |
 | ☐ | レイテンシ比較ビュー(直近N発話の平均) | バックエンド評価用 |
 | ☐ | ErrorCatalog の本格整備 | ライブラリ別エラー一覧 |
 | ☐ | モデル DL 進捗の UI 表示(huggingface_hub フック) | 現状は "Loading..." のみ |
+| ☑ | UI 設定パネルの折り畳み | `feature/ui-sections-split` で「バックエンド/デバイス/翻訳」の 3 セクション独立折り畳みに対応 |
+| ☑ | 出力モード(TTS=(なし))対応 | `feature/text-only-output` → `refactor/text-only-via-tts-none` で TTS=(なし) の選択値から派生判定する形に統合 |
 
 ---
 
@@ -87,7 +89,9 @@
 | 状態 | タスク | 備考 |
 |---|---|---|
 | ☐ | 出力先を仮想オーディオケーブル経由でDiscord/会議へ | |
-| ☐ | プロセス単位の音声取得(Win: PROCESS_LOOPBACK / Mac: ScreenCaptureKit / Linux: sink-input) | |
+| ☐ | プロセス単位の音声取得(Win: PROCESS_LOOPBACK / Mac: ScreenCaptureKit / Linux: sink-input) | `feature/runtime-flex-and-input` P5(入力 backend 分解)を経て ProcTap 連携で実現 |
 | ☐ | 重い処理のサーバオフロード(リモート推論バックエンド) | |
 | ☐ | AEC オプション(WebRTC) | フィードバック対策の保険 |
-| ☐ | 各ステージのさらなる並列化(案C: ASR/翻訳/TTSを別スレッド) | スループットが足りなくなった時 |
+| ☑ | 各ステージのさらなる並列化(案C: ASR/翻訳/TTSを別スレッド) | `refactor/pipeline-5thread` で完了(Phase 1 と同時に達成) |
+| ☐ | 動作中のデバイス切替(自動 restart 方式) | `feature/runtime-flex-and-input` P4 で着手予定 |
+| ☐ | 入力 backend のデバイス単位への分解(ProcTap 連携の土台) | `feature/runtime-flex-and-input` P5 で着手予定 |
