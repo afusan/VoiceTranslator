@@ -3,6 +3,16 @@
 役割: バックエンド/デバイス/言語ペア/ログ出力先 のプルダウン+入力欄と、
 設定の保存/読込ボタンを提供する。レイヤ別のモデルステータス(英語表示)も併記する。
 
+UI 構成(2026-06-05 改 / P1):
+- 内部を 3 つの `CollapsibleSection` に分割:
+  - 「バックエンド」: 6 レイヤの選択 + ステータス + 設定ボタン
+  - 「デバイス」: 入力デバイス / 出力デバイス
+  - 「翻訳」: 入力言語 (src) / 出力言語 (tgt)
+- 各セクションの開閉状態は ConfigStore の
+  `ui.collapsed.{backends, devices, languages}` に独立して永続化する。
+- ログ出力先 + 「設定を保存 / 再読込 / デバイス再列挙」ボタンは 3 セクションの
+  どれにも属さないため、セクション外の共通行として下部に置く。
+
 入力言語(src)プルダウンは ASR backend ごとの対応言語に動的に追従する:
 - backend 切替時に `_refresh_input_language_choices` で選択肢を再構築
 - 既存設定値が新 backend で非対応のときは自動 fallback + 通知バナー
@@ -17,6 +27,7 @@ from voice_translator.common.app_controller import AppController
 from voice_translator.common.languages import format_language, parse_language
 from voice_translator.common.types import LayerKind, ModelStatus
 
+from .collapsible_section import CollapsibleSection
 from .consent_dialog import ConsentDialog
 from .layer_settings_dialog import LayerSettingsDialog
 
@@ -48,6 +59,12 @@ _STATUS_COLORS: dict[ModelStatus, str] = {
     ModelStatus.LOADED: "#16a34a",          # green
 }
 
+# 各セクションの開閉永続化キー(default=False は「開」を表す。set_setting には
+# is_open の論理否定を保存することで「閉じた状態だけ True を立てる」運用)。
+_CFG_COLLAPSED_BACKENDS = ("ui", "collapsed", "backends")
+_CFG_COLLAPSED_DEVICES = ("ui", "collapsed", "devices")
+_CFG_COLLAPSED_LANGUAGES = ("ui", "collapsed", "languages")
+
 
 class SettingsPanel(ctk.CTkFrame):
     """設定操作のパネル + レイヤ別モデルステータス表示。"""
@@ -72,6 +89,11 @@ class SettingsPanel(ctk.CTkFrame):
         self._tgt_dropdown: ctk.CTkOptionMenu | None = None  # Translator 連動用
         self._log_dir_var = ctk.StringVar(value=str(controller.get_setting("log", "directory", default="./logs")))
 
+        # 3 セクションの参照(テストや外部からの取得用に property も提供)
+        self._backends_section: CollapsibleSection | None = None
+        self._devices_section: CollapsibleSection | None = None
+        self._languages_section: CollapsibleSection | None = None
+
         self._build_widgets()
         self._populate_devices_into_dropdowns()
         self._sync_all_status_labels()
@@ -90,112 +112,162 @@ class SettingsPanel(ctk.CTkFrame):
 
     # ============================================================
     def _build_widgets(self) -> None:
-        ctk.CTkLabel(self, text="設定", font=("", 16, "bold")).grid(
-            row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 4)
+        # 3 セクションを縦に並べる(pack で並べ、各 section の body 内は grid)。
+        # ヘッダ「設定」は CollapsibleSection 自身が出すので不要。
+        self._backends_section = self._build_backends_section()
+        self._backends_section.pack(fill="x", padx=10, pady=(8, 2))
+
+        self._devices_section = self._build_devices_section()
+        self._devices_section.pack(fill="x", padx=10, pady=2)
+
+        self._languages_section = self._build_languages_section()
+        self._languages_section.pack(fill="x", padx=10, pady=2)
+
+        # 共通行(セクション外): ログ出力先 + 保存/再読込/デバイス再列挙ボタン
+        self._build_common_rows()
+
+    # ----------------------------------------------------------
+    # セクション 1: バックエンド
+    # ----------------------------------------------------------
+    def _build_backends_section(self) -> CollapsibleSection:
+        initially_open = self._initial_open_state(_CFG_COLLAPSED_BACKENDS)
+        section = CollapsibleSection(
+            self,
+            title="バックエンド",
+            initially_open=initially_open,
+            on_toggle=lambda is_open: self._persist_collapsed(
+                _CFG_COLLAPSED_BACKENDS, is_open
+            ),
         )
 
-        row = 1
-        # レイヤ実装の選択 + モデルステータス + 設定ボタン
-        # ("バックエンド" 表記はユーザ向けには冗長なので外し、ラベル単体に統一)
+        body = section.body
+        row = 0
         for layer, label in _LAYER_LABELS:
-            ctk.CTkLabel(self, text=f"{label}:").grid(
-                row=row, column=0, sticky="w", padx=10, pady=2
+            ctk.CTkLabel(body, text=f"{label}:").grid(
+                row=row, column=0, sticky="w", padx=4, pady=2
             )
             names = self._controller.list_backends(layer) or ["(未登録)"]
             current = str(self._controller.get_setting("backends", layer.value, default=names[0]))
             var = ctk.StringVar(value=current)
             option = ctk.CTkOptionMenu(
-                self,
+                body,
                 values=names,
                 variable=var,
                 command=lambda v, lyr=layer: self._on_backend_change(lyr, v),
             )
-            option.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
+            option.grid(row=row, column=1, sticky="ew", padx=4, pady=2)
             self._backend_vars[layer] = var
 
-            status_label = ctk.CTkLabel(self, text="-", text_color="#64748b", anchor="w")
+            status_label = ctk.CTkLabel(body, text="-", text_color="#64748b", anchor="w")
             status_label.grid(row=row, column=2, sticky="ew", padx=(4, 4), pady=2)
             self._status_labels[layer] = status_label
 
-            # レイヤ別「設定」ボタン → LayerSettingsDialog
             ctk.CTkButton(
-                self, text="設定", width=60,
+                body, text="設定", width=60,
                 command=lambda lyr=layer: self._open_layer_settings(lyr),
-            ).grid(row=row, column=3, sticky="e", padx=(0, 10), pady=2)
+            ).grid(row=row, column=3, sticky="e", padx=(0, 4), pady=2)
 
             row += 1
 
-        # レイヤ実装グループとデバイス選択グループの境界線(視覚的な区切り)
-        separator = ctk.CTkFrame(self, height=2, fg_color="#475569")
-        separator.grid(
-            row=row, column=0, columnspan=4, sticky="ew", padx=10, pady=(8, 8)
-        )
-        row += 1
+        body.columnconfigure(1, weight=1)
+        body.columnconfigure(2, weight=0)
+        body.columnconfigure(3, weight=0)
+        return section
 
-        # 入力デバイス
-        ctk.CTkLabel(self, text="入力デバイス:").grid(
-            row=row, column=0, sticky="w", padx=10, pady=2
+    # ----------------------------------------------------------
+    # セクション 2: デバイス
+    # ----------------------------------------------------------
+    def _build_devices_section(self) -> CollapsibleSection:
+        initially_open = self._initial_open_state(_CFG_COLLAPSED_DEVICES)
+        section = CollapsibleSection(
+            self,
+            title="デバイス",
+            initially_open=initially_open,
+            on_toggle=lambda is_open: self._persist_collapsed(
+                _CFG_COLLAPSED_DEVICES, is_open
+            ),
+        )
+        body = section.body
+
+        ctk.CTkLabel(body, text="入力デバイス:").grid(
+            row=0, column=0, sticky="w", padx=4, pady=2
         )
         self._capture_dropdown = ctk.CTkOptionMenu(
-            self, values=["(列挙中)"], variable=self._capture_var, command=self._on_capture_changed
+            body, values=["(列挙中)"], variable=self._capture_var,
+            command=self._on_capture_changed,
         )
-        self._capture_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
-        row += 1
+        self._capture_dropdown.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
 
-        # 出力デバイス
-        ctk.CTkLabel(self, text="出力デバイス:").grid(
-            row=row, column=0, sticky="w", padx=10, pady=2
+        ctk.CTkLabel(body, text="出力デバイス:").grid(
+            row=1, column=0, sticky="w", padx=4, pady=2
         )
         self._output_dropdown = ctk.CTkOptionMenu(
-            self, values=["(列挙中)"], variable=self._output_var, command=self._on_output_changed
+            body, values=["(列挙中)"], variable=self._output_var,
+            command=self._on_output_changed,
         )
-        self._output_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
-        row += 1
+        self._output_dropdown.grid(row=1, column=1, sticky="ew", padx=4, pady=2)
 
-        # src 言語(ASR backend に追従して再構築される)
-        ctk.CTkLabel(self, text="入力言語 (src):").grid(
-            row=row, column=0, sticky="w", padx=10, pady=2
+        body.columnconfigure(1, weight=1)
+        return section
+
+    # ----------------------------------------------------------
+    # セクション 3: 翻訳
+    # ----------------------------------------------------------
+    def _build_languages_section(self) -> CollapsibleSection:
+        initially_open = self._initial_open_state(_CFG_COLLAPSED_LANGUAGES)
+        section = CollapsibleSection(
+            self,
+            title="翻訳",
+            initially_open=initially_open,
+            on_toggle=lambda is_open: self._persist_collapsed(
+                _CFG_COLLAPSED_LANGUAGES, is_open
+            ),
+        )
+        body = section.body
+
+        ctk.CTkLabel(body, text="入力言語 (src):").grid(
+            row=0, column=0, sticky="w", padx=4, pady=2
         )
         self._src_dropdown = ctk.CTkOptionMenu(
-            self,
-            values=[format_language(c) for c in _FALLBACK_INPUT_LANGS],  # 初期は fallback
+            body,
+            values=[format_language(c) for c in _FALLBACK_INPUT_LANGS],
             variable=self._src_var,
             command=self._on_src_lang_changed,
         )
-        self._src_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
-        row += 1
+        self._src_dropdown.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
 
-        # tgt 言語(Translator backend に追従して再構築される)
-        ctk.CTkLabel(self, text="出力言語 (tgt):").grid(
-            row=row, column=0, sticky="w", padx=10, pady=2
+        ctk.CTkLabel(body, text="出力言語 (tgt):").grid(
+            row=1, column=0, sticky="w", padx=4, pady=2
         )
         self._tgt_dropdown = ctk.CTkOptionMenu(
-            self,
-            values=[format_language(c) for c in _TGT_LANG_CHOICES],  # 初期は fallback
+            body,
+            values=[format_language(c) for c in _TGT_LANG_CHOICES],
             variable=self._tgt_var,
             command=self._on_tgt_lang_changed,
         )
-        self._tgt_dropdown.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
-        row += 1
+        self._tgt_dropdown.grid(row=1, column=1, sticky="ew", padx=4, pady=2)
 
+        body.columnconfigure(1, weight=1)
+        return section
+
+    # ----------------------------------------------------------
+    # 共通行(セクション外)
+    # ----------------------------------------------------------
+    def _build_common_rows(self) -> None:
         # ログ出力先
-        ctk.CTkLabel(self, text="ログ出力先:").grid(
-            row=row, column=0, sticky="w", padx=10, pady=2
-        )
-        log_frame = ctk.CTkFrame(self)
-        log_frame.grid(row=row, column=1, columnspan=3, sticky="ew", padx=10, pady=2)
-        log_frame.columnconfigure(0, weight=1)
-        log_entry = ctk.CTkEntry(log_frame, textvariable=self._log_dir_var)
-        log_entry.grid(row=0, column=0, sticky="ew")
+        log_row = ctk.CTkFrame(self, fg_color="transparent")
+        log_row.pack(fill="x", padx=10, pady=(8, 2))
+        ctk.CTkLabel(log_row, text="ログ出力先:").pack(side="left")
+        log_entry = ctk.CTkEntry(log_row, textvariable=self._log_dir_var)
+        log_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
         log_entry.bind(
             "<FocusOut>",
             lambda _e: self._controller.set_setting("log", "directory", self._log_dir_var.get()),
         )
-        row += 1
 
-        # 保存/再読込
-        btn_frame = ctk.CTkFrame(self)
-        btn_frame.grid(row=row, column=0, columnspan=4, sticky="ew", padx=10, pady=(8, 8))
+        # 保存/再読込/デバイス再列挙
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=10, pady=(4, 8))
         ctk.CTkButton(btn_frame, text="設定を保存", command=self._on_save).pack(
             side="left", padx=4
         )
@@ -206,9 +278,29 @@ class SettingsPanel(ctk.CTkFrame):
             side="left", padx=4
         )
 
-        self.columnconfigure(1, weight=1)
-        self.columnconfigure(2, weight=0)
-        self.columnconfigure(3, weight=0)
+    # ----------------------------------------------------------
+    # セクション開閉の永続化
+    # ----------------------------------------------------------
+    def _initial_open_state(self, key: tuple[str, ...]) -> bool:
+        """ConfigStore に保存された "閉じてる" フラグを読み、open 状態を返す。
+
+        保存形式: `is_collapsed: bool`(True=閉じてる)。default=False(=開)。
+        """
+        try:
+            collapsed = bool(self._controller.get_setting(*key, default=False))
+        except Exception:  # noqa: BLE001 - 設定取得失敗時は安全側で「開」
+            collapsed = False
+        return not collapsed
+
+    def _persist_collapsed(self, key: tuple[str, ...], is_open: bool) -> None:
+        """開閉状態を ConfigStore に保存する。`is_open` の論理否定を保存。
+
+        書き込み失敗は無視(UI 操作が失敗で詰まらないことを優先)。
+        """
+        try:
+            self._controller.set_setting(*key, not is_open)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ----------------------------------------------------------
     def _open_layer_settings(self, layer: LayerKind) -> None:
