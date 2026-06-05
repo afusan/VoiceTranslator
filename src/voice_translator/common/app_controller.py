@@ -601,10 +601,18 @@ class AppController:
                 self._coord.set_languages(tgt=value)
 
     def save_settings(self) -> None:
+        # 段階 3 / A-7 確定方針: PROCESS kind の capture backend が選ばれているときは
+        # `devices.input` を永続化しない。PID はアプリ再起動で別プロセスに振られるので、
+        # 残しても次回起動で意味を持たない(誤って別アプリの音を取り込む事故も防ぐ)。
+        self._strip_volatile_inputs_before_save()
         self._config.save()
 
     def load_settings(self) -> None:
         self._config.load()
+        # A-7 確定方針: 古い config に PROCESS kind の `devices.input` が残っていても、
+        # 起動時には空扱いに正規化する(save 側でも除外しているが、手動編集や旧版から
+        # 引き継いだ config を想定したセーフティ)。
+        self._normalize_volatile_inputs_after_load()
         # 設定再読込ではバックエンド名が変わっている可能性があるので、キャッシュを全破棄して
         # INIT に戻す。GUI 側で自動ロードを再度発火する想定。
         with self._load_lock:
@@ -612,6 +620,37 @@ class AppController:
                 self._evict_backend_locked(layer)
         for layer in LayerKind:
             self._emit_status(layer, ModelStatus.INIT)
+
+    def _strip_volatile_inputs_before_save(self) -> None:
+        """save 直前のフック: PROCESS kind の capture backend なら `devices.input` を空にする。
+
+        ConfigStore を直接書き換える(`set_setting` だと UI 通知が発火するため、
+        save コミット用の静かな書き換え)。
+        """
+        self._clear_process_input_if_applicable()
+
+    def _normalize_volatile_inputs_after_load(self) -> None:
+        """load 直後のフック: PROCESS kind なら `devices.input` を空にする(セーフティ)。"""
+        self._clear_process_input_if_applicable()
+
+    def _clear_process_input_if_applicable(self) -> None:
+        """現在の capture backend が PROCESS kind なら `devices.input` を空文字に揃える。"""
+        backend_name = str(
+            self._config.get("backends", LayerKind.CAPTURE.value, default="")
+        )
+        if not backend_name:
+            return
+        try:
+            kind = self.get_capture_kind(backend_name)
+        except Exception:  # noqa: BLE001
+            return
+        from .types import CaptureKind as _CK
+        if kind != _CK.PROCESS:
+            return
+        try:
+            self._config.set("devices", "input", "")
+        except Exception:  # noqa: BLE001 - 失敗しても save / load を止めない
+            pass
 
     # ============================================================
     # ロード / 起動 / 停止

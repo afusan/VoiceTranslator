@@ -1,8 +1,8 @@
-"""ProcTapCaptureBackend(段階 2)のテスト。
+"""ProcTapCaptureBackend(段階 2 + 段階 3)のテスト。
 
 small:
 - capture_kind() == PROCESS
-- list_sources() は空(段階 3 まで)
+- list_sources() が process_enumerator に委譲され、戻り値をそのまま返すこと(段階 3)
 - _convert_pcm の PCM 変換挙動(stereo→mono / 48k→16k / 空入力 / 端数)
 - start で source_id を int() に変換
 - start で int 変換失敗 → FatalError
@@ -15,6 +15,7 @@ small:
 
 large(`@pytest.mark.large`):
 - 実 proc-tap を import して、Python プロセス自身の PID で start → read_chunk → stop
+- 段階 3: 実 pycaw で list_sources() が呼べて、戻り値が `list[CaptureSource]` であること
 - 本テストは手動実行向け(`pytest -m large`)。CI には載せない方針。
 """
 
@@ -48,9 +49,33 @@ class TestCaptureKindAndListSources:
 
         assert ProcTapCaptureBackend.capture_kind() == CaptureKind.PROCESS
 
-    def test_list_sources_is_empty_until_stage3(self) -> None:
+    def test_list_sources_delegates_to_process_enumerator(self, monkeypatch) -> None:
+        """段階 3: list_sources は process_enumerator に委譲し、戻り値をそのまま返す。"""
+        from voice_translator.capture import process_enumerator as pe
+        from voice_translator.capture.proctap_backend import ProcTapCaptureBackend
+        from voice_translator.common.types import CaptureKind, CaptureSource
+
+        expected = [
+            CaptureSource(
+                source_id="1234",
+                display_name="chrome.exe (1234)",
+                kind=CaptureKind.PROCESS,
+            ),
+        ]
+        monkeypatch.setattr(pe, "enumerate_active_processes", lambda: expected)
+
+        backend = ProcTapCaptureBackend()
+        assert backend.list_sources() == expected
+
+    def test_list_sources_returns_empty_on_enumerator_failure(self, monkeypatch) -> None:
+        """列挙が例外を吐いても backend は空リストで縮退(UI を壊さない)。"""
+        from voice_translator.capture import process_enumerator as pe
         from voice_translator.capture.proctap_backend import ProcTapCaptureBackend
 
+        def boom():
+            raise OSError("COM not initialized")
+
+        monkeypatch.setattr(pe, "enumerate_active_processes", boom)
         backend = ProcTapCaptureBackend()
         assert backend.list_sources() == []
 
@@ -290,3 +315,23 @@ class TestProcTapLargeSelfCapture:
             # 無音でも例外無く戻ってくることが本テストの目的(got_any_chunk は best-effort)
         finally:
             backend.stop()
+
+    def test_list_sources_returns_real_sessions(self) -> None:
+        """段階 3: 実 pycaw で `list_sources()` が呼べて、戻り値が `list[CaptureSource]` であること。
+
+        実行マシンの状態に依存するため「特定のセッションが含まれる」までは要求しない。
+        - 戻り値の型: list
+        - 各要素が `CaptureSource` で kind=PROCESS
+        - 件数は 0 件以上(全アプリ閉じている環境でも例外を出さない)
+        """
+        from voice_translator.capture.proctap_backend import ProcTapCaptureBackend
+        from voice_translator.common.types import CaptureKind, CaptureSource
+
+        backend = ProcTapCaptureBackend()
+        sources = backend.list_sources()
+        assert isinstance(sources, list)
+        for s in sources:
+            assert isinstance(s, CaptureSource)
+            assert s.kind == CaptureKind.PROCESS
+            assert s.source_id.isdigit()  # PID 数字文字列
+            assert s.display_name  # 何かしらのラベル

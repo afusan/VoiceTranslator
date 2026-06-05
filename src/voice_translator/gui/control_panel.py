@@ -23,7 +23,7 @@ from collections import deque
 import customtkinter as ctk
 
 from voice_translator.common.app_controller import AppController
-from voice_translator.common.types import LayerKind, ModelStatus
+from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
 
 from .collapsible_section import CollapsibleSection
 
@@ -456,6 +456,14 @@ class ControlPanel(ctk.CTkFrame):
         elif any(s == ModelStatus.DOWNLOADING for s in statuses):
             self._toggle_btn.configure(text="モデル DL 中…", state="disabled")
             self._status_label.configure(text="モデルダウンロード中…")
+        elif self._capture_source_required_but_empty():
+            # 段階 3 / A-7: PROCESS kind の capture backend を選択中で `devices.input`
+            # が未設定(=PID 未選択)のときは Start させない。プロセス選択ダイアログから
+            # PID を選んでもらう必要がある。
+            self._toggle_btn.configure(text="プロセス未選択", state="disabled")
+            self._status_label.configure(
+                text="プロセスを選択してください(設定 → プロセス選択…)"
+            )
         else:
             # 開始ボタンは常時押下可。ロード状況は補助情報としてラベルに出す。
             self._toggle_btn.configure(text="▶ 開始", state="normal")
@@ -493,6 +501,32 @@ class ControlPanel(ctk.CTkFrame):
             btn.configure(text="ロード中…", state="disabled")
         else:
             btn.configure(text="↻ ロード", state="normal")
+
+    def _capture_source_required_but_empty(self) -> bool:
+        """capture_kind == PROCESS かつ `devices.input` が未設定なら True。
+
+        段階 3 / A-7 で導入: PROCESS kind backend(ProcTap 等)は PID を毎回選び直す
+        前提のため、未選択のままで Start を許すと FatalError になる。先回りで disable。
+        """
+        try:
+            backend_name = str(
+                self._controller.get_setting("backends", LayerKind.CAPTURE.value, default="")
+            )
+        except Exception:  # noqa: BLE001
+            return False
+        if not backend_name:
+            return False
+        try:
+            kind = self._controller.get_capture_kind(backend_name)
+        except Exception:  # noqa: BLE001
+            return False
+        if not isinstance(kind, CaptureKind) or kind != CaptureKind.PROCESS:
+            return False
+        try:
+            source = self._controller.get_setting("devices", "input", default="")
+        except Exception:  # noqa: BLE001
+            return True  # 設定取得失敗 → 安全側で未選択扱い
+        return not bool(str(source).strip())
 
     def _active_layer_statuses(self) -> dict[LayerKind, ModelStatus]:
         """text_only モードでは TTS / Output を除いたレイヤ状態を返す。"""
