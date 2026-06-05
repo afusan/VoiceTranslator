@@ -42,6 +42,24 @@
 
 ---
 
+## [⏳保留 2026-06-05] 動作中の capture / VAD / ASR / Translator / TTS backend 変更で自動 restart
+- **対象**: `feature/dynamic-devices` (P4) で「動作中の **デバイス変更** で自動 restart」を実装した。
+  `feature/capture-backend-split` (P5) で CAPTURE backend 切替時のソース一覧 refresh も実装。
+  だが「動作中に **backend 自体を切り替えた** ときの restart」は対象外。
+- **背景**: backend 切替 = 旧 backend を evict + 新 backend をロード(バックグラウンド)。
+  動作中の Coordinator は旧 backend を握ったままなので、新 backend を有効にするには restart が必要。
+  これは CAPTURE に限らず全レイヤ(VAD/ASR/Translator/TTS)に共通する課題。
+- **見送り理由**: backend ロードはレイヤや実装によって数秒〜数十秒かかる(faster-whisper medium 等)。
+  ロード完了を待ってから restart する UX 設計と、ロード失敗時の挙動(旧 backend に戻す? エラー?)を
+  詰める必要がある。実装規模が大きい。
+- **対応案(着手時)**:
+  - AppController で「未ロードレイヤがあれば順次ロード → 完了後に restart_pipeline_async を呼ぶ」
+    ヘルパを追加。バナーは「(レイヤ)backend をロード中… / 再開中…」の段階表示。
+  - 失敗時は旧 backend にロールバックするか、エラー表示で停止のまま留めるかを選択。
+- **着手トリガ**: ProcTap など「動作中に切り替えたい」需要が強い backend が来たとき。
+
+---
+
 ## [⏳保留 2026-06-05] 動作中言語切替時の進行中発話の扱い
 - **対象**: `feature/dynamic-languages` で「言語切替は次発話から反映」の仕様にしたが、
   既にキューに入っている発話は古い言語のまま流れる。

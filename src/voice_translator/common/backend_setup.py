@@ -4,6 +4,27 @@
 NLLB-200/SAPI/soundcard)をレイヤごとに登録する。`config` を渡すと、各バックエンド
 固有のパラメータ(SAPI rate 等)を `config.yaml` から読み込んで反映する。
 後で別実装を追加するときはここを拡張する。
+
+新しい capture backend を追加する(P5 / ProcTap 連携の例):
+
+    from voice_translator.capture.proctap_backend import ProcTapCaptureBackend
+
+    registry.register(
+        LayerKind.CAPTURE,
+        "proctap",
+        lambda: ProcTapCaptureBackend(...),
+        backend_cls=ProcTapCaptureBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=False,
+            requires_credentials=False,
+            notes="ProcTap (WASAPI Process Loopback)。per-process キャプチャ。",
+        ),
+    )
+
+これだけで GUI の「音声取得」プルダウンに `proctap` が並ぶ。ユーザが選択すると
+SettingsPanel の `_refresh_capture_sources_dropdown` が `ProcTapCaptureBackend.list_sources()`
+の結果を「入力デバイス」プルダウンに反映する。`devices.input` には ProcTap が返す
+source_id(プロセス名 / PID 等)が保存される。
 """
 
 from __future__ import annotations
