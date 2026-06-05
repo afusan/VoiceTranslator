@@ -144,6 +144,57 @@ class TestPipelineE2EWithSynthPcm:
             for key in ("t_capture", "t_vad_end", "t_asr", "t_translate", "t_tts", "t_playback"):
                 assert key in r["timeline"], f"{key} がタイムラインに記録されていない"
 
+    def test_set_languages_takes_effect_on_next_utterance(self, tmp_path: Path) -> None:
+        """動作中に set_languages(tgt=...) を呼ぶと、後続発話の tgt_text に反映される(P2)。
+
+        WavReplayCapture は pcm を使い切ると None を返すだけになるため、十分長い
+        pcm(5 秒)を流して「切替前の発話」「切替後の発話」が両方確実に出るように
+        する。VadEveryN(every_n=3) + chunk_size=512 で約 50 発話分。
+        """
+        t = np.linspace(0, 5.0, 80000, endpoint=False)
+        pcm = (0.1 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+        capture = WavReplayCapture(pcm, chunk_size=512)
+        output = RecordingOutput()
+        done_records: list[dict] = []
+
+        coord = PipelineCoordinator(
+            capture=capture,
+            vad=VadEveryN(every_n=3),
+            asr=EchoAsr(),
+            translator=SuffixTranslator(),
+            tts=SilentTts(),
+            output=output,
+            error_handler=ErrorHandler(),
+            src_lang="en",
+            tgt_lang="ja",
+            on_utterance_done=lambda r: done_records.append(r),
+            read_timeout=0.01,
+            captured_queue_max_bytes=10_000_000,
+            recognized_queue_size=100,
+            translated_queue_size=100,
+            synthesized_queue_max_bytes=10_000_000,
+        )
+
+        coord.start(capture_source_id="wav_replay", output_device_id="dummy_out")
+        # 最初の発話が done になるまで待つ
+        assert _wait_until(lambda: len(done_records) >= 1, timeout=3.0)
+        # 動作中に言語切替
+        coord.set_languages(tgt="en")
+        n_before = len(done_records)
+        # 新しい言語で done する発話が現れるまで待つ
+        assert _wait_until(
+            lambda: any(
+                r["tgt_text"].endswith("-> en") for r in done_records[n_before:]
+            ),
+            timeout=5.0,
+        )
+        coord.stop()
+        # 切替前の発話は "-> ja"
+        assert any(r["tgt_text"].endswith("-> ja") for r in done_records[:n_before])
+        # 切替後の発話に "-> en" が現れている
+        assert any(r["tgt_text"].endswith("-> en") for r in done_records[n_before:])
+
     def test_pipeline_loads_real_wav_file(self, tmp_path: Path) -> None:
         """WAV ファイルを書き出して、from_wav() で読み込んで流す。"""
         import wave
