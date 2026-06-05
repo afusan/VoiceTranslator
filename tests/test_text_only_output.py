@@ -473,34 +473,42 @@ class TestCoordinatorAudioRegression:
 # AppController: output_mode / _active_layers
 # ============================================================
 class TestAppControllerOutputMode:
-    def _make_controller(self, mode: str) -> AppController:
+    """出力モードは `backends.tts` の値から派生する(refactor: TTS=(なし) に統合)。"""
+
+    def _make_controller(self, tts_choice: str | None) -> AppController:
         from voice_translator.common.backend_registry import BackendRegistry
 
-        config = ConfigStore(path="dummy", data={"pipeline": {"output_mode": mode}})
+        data: dict = {"backends": {}}
+        if tts_choice is not None:
+            data["backends"]["tts"] = tts_choice
+        config = ConfigStore(path="dummy", data=data)
         registry = BackendRegistry()
         return AppController(registry=registry, config=config)
 
-    def test_output_mode_default_is_audio(self) -> None:
-        from voice_translator.common.backend_registry import BackendRegistry
-
-        config = ConfigStore(path="dummy", data={})
-        ctrl = AppController(registry=BackendRegistry(), config=config)
+    def test_default_with_tts_choice_is_audio(self) -> None:
+        ctrl = self._make_controller("sapi")
         assert ctrl.output_mode == "audio"
 
-    def test_output_mode_text_only(self) -> None:
-        ctrl = self._make_controller("text_only")
+    def test_tts_none_is_text_only(self) -> None:
+        ctrl = self._make_controller(AppController.TTS_NONE)
         assert ctrl.output_mode == "text_only"
 
-    def test_output_mode_unknown_falls_back_to_audio(self) -> None:
-        ctrl = self._make_controller("bogus")
-        assert ctrl.output_mode == "audio"
+    def test_empty_tts_is_text_only(self) -> None:
+        """空文字も text_only として扱う(防衛)。"""
+        ctrl = self._make_controller("")
+        assert ctrl.output_mode == "text_only"
+
+    def test_missing_tts_key_is_text_only(self) -> None:
+        """`backends.tts` 自体が無いときも text_only として扱う(防衛)。"""
+        ctrl = self._make_controller(None)
+        assert ctrl.output_mode == "text_only"
 
     def test_active_layers_audio_has_all(self) -> None:
-        ctrl = self._make_controller("audio")
+        ctrl = self._make_controller("sapi")
         assert set(ctrl._active_layers()) == set(LayerKind)  # noqa: SLF001
 
     def test_active_layers_text_only_excludes_tts_output(self) -> None:
-        ctrl = self._make_controller("text_only")
+        ctrl = self._make_controller(AppController.TTS_NONE)
         active = set(ctrl._active_layers())  # noqa: SLF001
         assert LayerKind.TTS not in active
         assert LayerKind.OUTPUT not in active
@@ -515,9 +523,13 @@ class TestAppControllerOutputMode:
 # ============================================================
 class TestAppControllerHandleTextReady:
     def _make_ctrl_with_logs(self, mode: str):
+        """mode は "audio" / "text_only"。`backends.tts` 経由で派生させる。"""
         from voice_translator.common.backend_registry import BackendRegistry
 
-        config = ConfigStore(path="dummy", data={"pipeline": {"output_mode": mode}})
+        tts_choice = AppController.TTS_NONE if mode == "text_only" else "sapi"
+        config = ConfigStore(
+            path="dummy", data={"backends": {"tts": tts_choice}},
+        )
         ctrl = AppController(registry=BackendRegistry(), config=config)
         ctrl._translation_logger = MagicMock()  # noqa: SLF001
         ctrl._process_time_logger = MagicMock()  # noqa: SLF001
@@ -569,18 +581,25 @@ class TestAppControllerHandleTextReady:
 # ConfigStore のデフォルト
 # ============================================================
 class TestConfigStoreDefault:
-    def test_pipeline_output_mode_default_is_audio(self) -> None:
-        assert DEFAULT_CONFIG["pipeline"]["output_mode"] == "audio"
+    """`pipeline.output_mode` キーは撤去。出力モードは `backends.tts` から派生する。"""
 
-    def test_loaded_config_keeps_user_value(self, tmp_path) -> None:
-        """ユーザが output_mode=text_only を保存していたら、load 後も text_only。"""
+    def test_default_backends_tts_is_sapi(self) -> None:
+        """デフォルトの backends.tts は実 backend(audio モード相当)。"""
+        assert DEFAULT_CONFIG["backends"]["tts"] == "sapi"
+
+    def test_no_output_mode_key_in_pipeline_defaults(self) -> None:
+        """`pipeline.output_mode` キーが既定値から落ちている(後方互換は気にしない)。"""
+        assert "output_mode" not in DEFAULT_CONFIG["pipeline"]
+
+    def test_loaded_config_keeps_tts_none(self, tmp_path) -> None:
+        """ユーザが backends.tts=none を保存していたら、load 後も維持される。"""
         import yaml
 
         path = tmp_path / "config.yaml"
         path.write_text(
-            yaml.safe_dump({"pipeline": {"output_mode": "text_only"}}),
+            yaml.safe_dump({"backends": {"tts": "none"}}),
             encoding="utf-8",
         )
         store = ConfigStore(path=path)
         store.load()
-        assert store.get("pipeline", "output_mode") == "text_only"
+        assert store.get("backends", "tts") == "none"

@@ -547,12 +547,21 @@ class AppController:
                     self._evict_backend_locked(layer_changed)
                 # 該当レイヤは INIT に戻す(まだロード起動前の状態)
                 self._emit_status(layer_changed, ModelStatus.INIT)
-                # バックグラウンドで即座にロードを試みる(GUI 側で進捗が見える)
-                threading.Thread(
-                    target=lambda: self._safe_load_layer(layer_changed),
-                    daemon=True,
-                    name=f"vt_reload_{layer_changed.value}",
-                ).start()
+                # text_only モードでは TTS / Output は対象外。再ロードしない
+                # (BackendRegistry に "none" backend は存在しないので再ロードは
+                #  必ず失敗する。レイヤは INIT のまま残し、Start 時に skip される)。
+                if (
+                    layer_changed in (LayerKind.TTS, LayerKind.OUTPUT)
+                    and self.output_mode == "text_only"
+                ):
+                    pass
+                else:
+                    # バックグラウンドで即座にロードを試みる(GUI 側で進捗が見える)
+                    threading.Thread(
+                        target=lambda: self._safe_load_layer(layer_changed),
+                        daemon=True,
+                        name=f"vt_reload_{layer_changed.value}",
+                    ).start()
 
         # 言語設定が変わったら、動作中の Coordinator にも反映する(P2)。
         # `is_running` でないときは Coordinator が無いか停止中なので、次回 Start 時に
@@ -600,18 +609,27 @@ class AppController:
         return all(layer in self._backends for layer in LayerKind)
 
     # ---- ロード ----
+    # TTS backend に「(なし)」が選ばれていることを表す内部値。
+    # UI では `(なし)` / 内部では `"none"` を使う(BackendRegistry に同名 backend は
+    # 登録されない前提)。
+    TTS_NONE = "none"
+
     @property
     def output_mode(self) -> str:
         """現在の出力モード("audio" / "text_only")。
 
-        ConfigStore の `pipeline.output_mode` を読む。未知の値は "audio" として扱う。
+        判定: `backends.tts` の値が `TTS_NONE`(= "none") / 空文字 / None なら
+        `text_only`、それ以外は `audio`。独立した `pipeline.output_mode` キーは持たない。
+
         text_only モードでは TTS / Output レイヤが「対象外」扱いになる:
         - `load_models` / `load_auto_load_layers_async` の対象から外れる
         - `_check_missing_credentials_gate` のチェック対象から外れる
         - Coordinator は TTS / Output スレッドを起動しない
         """
-        mode = str(self._config.get("pipeline", "output_mode", default="audio"))
-        return "text_only" if mode == "text_only" else "audio"
+        tts_choice = self._config.get("backends", "tts", default=None)
+        if tts_choice in (None, "", self.TTS_NONE):
+            return "text_only"
+        return "audio"
 
     def _active_layers(self) -> list[LayerKind]:
         """現在の出力モードでロード/起動対象となるレイヤ一覧を返す。
