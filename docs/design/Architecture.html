@@ -100,6 +100,7 @@
     <div class="cross"><div class="name">ConfigStore</div><div class="sub">設定の永続化</div></div>
     <div class="cross"><div class="name">Logger / TextLogger</div><div class="sub">各種ログの出力</div></div>
     <div class="cross"><div class="name">ErrorHandler</div><div class="sub">例外の重大度別分類</div></div>
+    <div class="cross"><div class="name">process_enumerator</div><div class="sub">WASAPI セッション列挙 + 試聴 peak(段階 3)</div></div>
     <div class="cross gui"><div class="name">GUI</div><div class="sub">設定・動作操作・状態表示</div></div>
   </div>
 </div>
@@ -115,7 +116,7 @@
   <tr><th>レイヤ</th><th>役割</th></tr>
   <tr>
     <td><strong>AudioCapture</strong></td>
-    <td>選択された入力デバイスから音声を取得し、内部標準フォーマット(16kHz/mono/float32)に正規化してパイプラインに供給する。</td>
+    <td>選択された入力ソースから音声を取得し、内部標準フォーマット(16kHz/mono/float32)に正規化してパイプラインに供給する。取得単位は <code>CaptureKind</code> で宣言: <strong>デバイス単位</strong>(soundcard、マイク / スピーカ LB)/ <strong>プロセス単位</strong>(ProcTap、WASAPI Process Loopback)。GUI は kind に応じて入力ソース UI を切り替える(プルダウン / 「プロセス選択…」ボタン)。</td>
   </tr>
   <tr>
     <td><strong>VAD</strong></td>
@@ -154,6 +155,7 @@
   <tr><td><strong>NotificationThrottle</strong></td><td>UI 通知の集約・抑制。<code>(stage, 例外型)</code> をキーに時間窓で rate limit し、抑制された件数を次の通知に乗せる。ログは抑制しない。</td></tr>
   <tr><td><strong>DeviceValidator</strong></td><td>入力デバイスと出力デバイスが同一でないことを起動時に保証する。フィードバック防止のため。</td></tr>
   <tr><td><strong>cache_check</strong></td><td>各バックエンドのモデルがローカルキャッシュにあるかを軽量に判定する。GUI の初期状態表示に使う。</td></tr>
+  <tr><td><strong>process_enumerator</strong></td><td>Windows WASAPI AudioSession の列挙とプロセス単位 peak メータ供給のヘルパー(段階 3)。ProcTap backend と「プロセス選択ダイアログ」が共有して使う。永続 COM ワーカースレッド <code>_PeakWorker</code> を内部に 1 つだけ持ち、列挙(同期)+ 試聴 peak の 5fps 内部 poll(<code>latest_peak()</code> を atomic 保持)を 1 つのスレッドで処理する。GUI スレッドと COM のスレッドモード競合(STA / MTA)を回避するための隔離層。</td></tr>
   <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態・モデルステータスを可視化する。</td></tr>
 </table>
 
@@ -200,6 +202,11 @@
     <td><strong>Output</strong></td>
     <td>合成音声を再生し、発話の完了を通知する。</td>
     <td>PipelineCoordinator._output_loop</td>
+  </tr>
+  <tr>
+    <td><strong>_PeakWorker</strong>(任意)</td>
+    <td>プロセス選択ダイアログの試聴メータ専用の常駐 COM スレッド(段階 3)。最初の利用時に起動し、プロセス終了まで 1 個常駐。試聴中は内部で <strong>5fps poll</strong> し peak を atomic 保持(GUI スレッドはそれを atomic 読みするだけ)。本番パイプラインと完全独立で WASAPI ストリームは開かない。</td>
+    <td>capture.process_enumerator._PeakWorker</td>
   </tr>
 </table>
 
@@ -313,7 +320,7 @@
 <p>バックエンドは内部標準データ型を知らず、入出力はプリミティブのみで扱う。</p>
 <table>
   <tr><th>レイヤ</th><th>抽象 I/F シグネチャ</th></tr>
-  <tr><td>AudioCapture</td><td><code>list_sources() / start(source_id) / read_chunk(timeout) -> np.ndarray | None / stop()</code></td></tr>
+  <tr><td>AudioCapture</td><td><code>list_sources() / start(source_id) / read_chunk(timeout) -> np.ndarray | None / stop() / capture_kind() -> CaptureKind</code>(classmethod)</td></tr>
   <tr><td>VAD</td><td><code>process(chunk: np.ndarray) -> list[VadSegment] / reset()</code></td></tr>
   <tr><td>ASR</td><td><code>transcribe(pcm: np.ndarray, src_lang_hint: str) -> tuple[str, str]</code></td></tr>
   <tr><td>Translator</td><td><code>translate(src_text: str, src_lang: str, tgt_lang: str) -> str</code></td></tr>
@@ -354,7 +361,7 @@ translations.jsonl:
 <ul>
   <li>新しいバックエンドを追加するときは、対応する抽象I/Fを実装し <code>BackendRegistry</code> に登録するだけでGUIに出現する。</li>
   <li>OS別の音声取得は <code>AudioCapture</code> の差し替えで対応(Windows = soundcard、Linux = GStreamer 等)。</li>
-  <li>per-app 音声取得は OS別バックエンドの一部として将来追加(pendList参照)。</li>
+  <li>per-app 音声取得は <code>ProcTapCaptureBackend</code> として実装済み(Windows / WASAPI Process Loopback)。プロセス列挙と試聴メータの UI も同梱(<code>ProcessSelectDialog</code>)。Linux / Mac の per-app 取得は pendList 起票のみ。</li>
   <li>ローカルLLM翻訳は <code>Translator</code> の追加実装で対応(例: Ollama)。</li>
   <li>バックエンド固有パラメータは <code>backends_config.&lt;name&gt;.*</code> 名前空間で <code>config.yaml</code> から渡す(SAPI rate 等が既に実装済)。</li>
 </ul>

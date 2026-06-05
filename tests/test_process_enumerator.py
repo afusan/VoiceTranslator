@@ -1,12 +1,16 @@
-"""process_enumerator の small テスト。
+"""process_enumerator の small テスト(永続 Peak Worker 版)。
 
-pycaw / psutil は monkeypatch で完全置換し、列挙ロジック単体を検証する。
+pycaw / psutil / comtypes は monkeypatch で完全置換し、列挙ロジック + Worker の
+スレッド動作を検証する。
 """
 
 from __future__ import annotations
 
+import sys
+import threading
+import time
+import types
 from dataclasses import dataclass
-from typing import Any
 
 import pytest
 
@@ -37,15 +41,43 @@ def _make_info(pid: int, name: str | None = "app.exe", meter: _FakeMeter | None 
     return pe._SessionInfo(pid=pid, process_name=name, raw_session=raw)
 
 
+def _install_fake_comtypes(monkeypatch):
+    """comtypes を fake module で差し替え、CoInitialize/CoUninitialize を観測。"""
+    calls: list[str] = []
+
+    def fake_co_initialize():
+        calls.append("init")
+
+    def fake_co_uninitialize():
+        calls.append("uninit")
+
+    fake = types.ModuleType("comtypes")
+    fake.CoInitialize = fake_co_initialize
+    fake.CoUninitialize = fake_co_uninitialize
+    monkeypatch.setitem(sys.modules, "comtypes", fake)
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def _fresh_worker(monkeypatch):
+    """各テストの前にグローバルワーカを破棄し、テスト後も破棄する(状態を持ち越さない)。
+
+    autouse=True で全テスト対象。テスト内で `_get_worker()` が新規ワーカを起動する。
+    """
+    pe.dispose()
+    yield
+    pe.dispose()
+
+
 # ============================================================
-# enumerate_active_processes()
+# _enumerate_in_com_thread(純ロジック)
 # ============================================================
-class TestEnumerateActiveProcesses:
+class TestEnumerateLogic:
     def test_returns_capture_source_list_with_process_kind(self, monkeypatch):
         monkeypatch.setattr(pe, "_list_active_sessions", lambda: [_make_info(1234, "chrome.exe")])
         monkeypatch.setattr(pe, "_resolve_process_name", lambda pid, hint: hint or "unknown")
 
-        result = pe.enumerate_active_processes()
+        result = pe._enumerate_in_com_thread()
 
         assert len(result) == 1
         src = result[0]
@@ -55,14 +87,13 @@ class TestEnumerateActiveProcesses:
         assert src.display_name == "chrome.exe (1234)"
 
     def test_dedupes_same_pid(self, monkeypatch):
-        # 同 PID で session が 2 件 → 1 件に集約
         monkeypatch.setattr(pe, "_list_active_sessions", lambda: [
             _make_info(2000, "discord.exe"),
             _make_info(2000, "discord.exe"),
         ])
         monkeypatch.setattr(pe, "_resolve_process_name", lambda pid, hint: hint or "unknown")
 
-        result = pe.enumerate_active_processes()
+        result = pe._enumerate_in_com_thread()
 
         assert len(result) == 1
         assert result[0].source_id == "2000"
@@ -70,59 +101,48 @@ class TestEnumerateActiveProcesses:
     def test_keeps_distinct_pids(self, monkeypatch):
         monkeypatch.setattr(pe, "_list_active_sessions", lambda: [
             _make_info(100, "chrome.exe"),
-            _make_info(101, "chrome.exe"),  # 別 PID(別タブ等)は別行
+            _make_info(101, "chrome.exe"),
         ])
         monkeypatch.setattr(pe, "_resolve_process_name", lambda pid, hint: hint or "unknown")
 
-        result = pe.enumerate_active_processes()
-
+        result = pe._enumerate_in_com_thread()
         assert [s.source_id for s in result] == ["100", "101"]
 
     def test_empty_when_no_active_sessions(self, monkeypatch):
         monkeypatch.setattr(pe, "_list_active_sessions", lambda: [])
-
-        assert pe.enumerate_active_processes() == []
+        assert pe._enumerate_in_com_thread() == []
 
     def test_uses_resolve_process_name(self, monkeypatch):
-        # _list_active_sessions が None 名前を返しても _resolve_process_name で補完される
         monkeypatch.setattr(pe, "_list_active_sessions", lambda: [_make_info(500, None)])
         monkeypatch.setattr(pe, "_resolve_process_name", lambda pid, hint: "resolved.exe")
 
-        result = pe.enumerate_active_processes()
-
+        result = pe._enumerate_in_com_thread()
         assert result[0].display_name == "resolved.exe (500)"
 
 
 # ============================================================
-# get_session_meter()
+# 公開 API: enumerate_active_processes (永続ワーカ経由)
 # ============================================================
-class TestGetSessionMeter:
-    def test_returns_meter_for_matching_pid(self, monkeypatch):
-        target_meter = _FakeMeter(peak=0.42)
-        info = _make_info(777, "game.exe", meter=target_meter)
-        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [info])
-        monkeypatch.setattr(pe, "_query_meter", lambda raw: raw.meter)
+class TestEnumerateActiveProcesses:
+    def test_runs_through_worker_thread(self, monkeypatch):
+        _install_fake_comtypes(monkeypatch)
+        captured_threads: list[str] = []
 
-        meter = pe.get_session_meter(777)
+        def fake_list_sessions():
+            captured_threads.append(threading.current_thread().name)
+            return [_make_info(42, "x.exe")]
 
-        assert meter is not None
-        assert meter.GetPeakValue() == pytest.approx(0.42)
+        monkeypatch.setattr(pe, "_list_active_sessions", fake_list_sessions)
+        monkeypatch.setattr(pe, "_resolve_process_name", lambda pid, hint: hint or "unknown")
 
-    def test_returns_none_for_unknown_pid(self, monkeypatch):
-        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [_make_info(1, "x.exe")])
-        monkeypatch.setattr(pe, "_query_meter", lambda raw: _FakeMeter())
-
-        assert pe.get_session_meter(99999) is None
-
-    def test_returns_none_when_query_meter_fails(self, monkeypatch):
-        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [_make_info(123, "x.exe")])
-        monkeypatch.setattr(pe, "_query_meter", lambda raw: None)
-
-        assert pe.get_session_meter(123) is None
+        result = pe.enumerate_active_processes()
+        assert len(result) == 1
+        # 別スレッド(=ワーカ)で実行されている
+        assert captured_threads[0] != threading.current_thread().name
 
 
 # ============================================================
-# _resolve_process_name() の動作(psutil をモックして検証)
+# _resolve_process_name(psutil)
 # ============================================================
 class TestResolveProcessName:
     def test_uses_psutil_when_available(self, monkeypatch):
@@ -133,9 +153,6 @@ class TestResolveProcessName:
             def name(self):
                 return f"proc_{self._pid}.exe"
 
-        # process_enumerator が遅延 import している `psutil` モジュールを差し替える
-        import sys
-        import types
         fake_module = types.ModuleType("psutil")
         fake_module.Process = FakeProc
         monkeypatch.setitem(sys.modules, "psutil", fake_module)
@@ -143,9 +160,6 @@ class TestResolveProcessName:
         assert pe._resolve_process_name(42, hint="ignored.exe") == "proc_42.exe"
 
     def test_falls_back_to_hint_on_psutil_failure(self, monkeypatch):
-        import sys
-        import types
-
         class FakeProc:
             def __init__(self, pid):
                 raise PermissionError("denied")
@@ -157,9 +171,6 @@ class TestResolveProcessName:
         assert pe._resolve_process_name(42, hint="from_pycaw.exe") == "from_pycaw.exe"
 
     def test_falls_back_to_unknown_when_both_fail(self, monkeypatch):
-        import sys
-        import types
-
         class FakeProc:
             def __init__(self, pid):
                 raise PermissionError("denied")
@@ -172,25 +183,19 @@ class TestResolveProcessName:
 
 
 # ============================================================
-# _list_active_sessions() の動作(pycaw 全体をモック)
+# _list_active_sessions(pycaw)
 # ============================================================
 class TestListActiveSessions:
     def _install_fake_pycaw(self, monkeypatch, sessions):
-        import sys
-        import types
-
         class FakeAudioUtilities:
             @staticmethod
             def GetAllSessions():  # noqa: N802
                 return sessions
 
-        # process_enumerator は `from pycaw.pycaw import AudioUtilities` で取得するため、
-        # `pycaw.pycaw` モジュールを差し替える。
         fake_pycaw_module = types.ModuleType("pycaw")
         fake_pycaw_inner = types.ModuleType("pycaw.pycaw")
         fake_pycaw_inner.AudioUtilities = FakeAudioUtilities
 
-        # IAudioMeterInformation も後の _query_meter 呼び出しで参照されるため用意。
         class _DummyMeterIface:
             pass
         fake_pycaw_inner.IAudioMeterInformation = _DummyMeterIface
@@ -216,16 +221,10 @@ class TestListActiveSessions:
                 self.Process = FakeProc()
                 self._ctl = FakeCtl(state)
 
-        sessions = [
-            FakeSession(100, 0),  # Inactive
-            FakeSession(200, 1),  # Active
-            FakeSession(300, 2),  # Expired
-        ]
+        sessions = [FakeSession(100, 0), FakeSession(200, 1), FakeSession(300, 2)]
         self._install_fake_pycaw(monkeypatch, sessions)
-
         result = pe._list_active_sessions()
-        pids = [info.pid for info in result]
-        assert pids == [200]
+        assert [info.pid for info in result] == [200]
 
     def test_excludes_system_session_pid_0(self, monkeypatch):
         class FakeCtl:
@@ -240,14 +239,10 @@ class TestListActiveSessions:
 
         sessions = [FakeSession(0), FakeSession(123)]
         self._install_fake_pycaw(monkeypatch, sessions)
-
         result = pe._list_active_sessions()
         assert [info.pid for info in result] == [123]
 
     def test_get_all_sessions_failure_returns_empty(self, monkeypatch):
-        import sys
-        import types
-
         class FakeAudioUtilities:
             @staticmethod
             def GetAllSessions():  # noqa: N802
@@ -259,136 +254,130 @@ class TestListActiveSessions:
         monkeypatch.setitem(sys.modules, "pycaw", types.ModuleType("pycaw"))
         monkeypatch.setitem(sys.modules, "pycaw.pycaw", fake_pycaw_inner)
 
-        # 例外は呑んで空リストにする(列挙失敗で全 UI が落ちないように)
         assert pe._list_active_sessions() == []
 
 
 # ============================================================
-# COM ワーカースレッド経由実行(GUI スレッドの COM 状態と競合させない)
+# _PeakWorker: 永続スレッド + 内部 poll
 # ============================================================
-class TestRunInComThread:
-    def _install_fake_comtypes(self, monkeypatch):
-        """`comtypes` を fake module で差し替え、CoInitialize/CoUninitialize を観測。"""
-        import sys
-        import types
+class TestPeakWorkerLifecycle:
+    def test_co_initialize_called_once_on_start(self, monkeypatch):
+        calls = _install_fake_comtypes(monkeypatch)
+        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [])
+        # ワーカ起動 + 列挙 1 回
+        worker = pe._get_worker()
+        worker.submit(lambda: None)
+        # 少し待って poll loop が回ったことを確実にする
+        time.sleep(0.05)
+        # 起動時に init 1 回(まだ uninit は呼ばれない、dispose まで)
+        assert calls.count("init") == 1
+        assert calls.count("uninit") == 0
 
-        calls: list[str] = []
+    def test_dispose_calls_co_uninitialize(self, monkeypatch):
+        calls = _install_fake_comtypes(monkeypatch)
+        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [])
+        pe._get_worker()
+        pe.dispose()
+        assert calls.count("init") == 1
+        assert calls.count("uninit") == 1
 
-        def fake_co_initialize():
-            calls.append("init")
+    def test_multiple_submits_reuse_thread(self, monkeypatch):
+        _install_fake_comtypes(monkeypatch)
+        captured_threads: list[str] = []
 
-        def fake_co_uninitialize():
-            calls.append("uninit")
+        def task():
+            captured_threads.append(threading.current_thread().name)
+            return 1
 
-        fake = types.ModuleType("comtypes")
-        fake.CoInitialize = fake_co_initialize
-        fake.CoUninitialize = fake_co_uninitialize
-        monkeypatch.setitem(sys.modules, "comtypes", fake)
-        return calls
+        worker = pe._get_worker()
+        worker.submit(task)
+        worker.submit(task)
+        worker.submit(task)
+        # 3 回呼んでもスレッド名は同じ(= 永続)
+        assert len(set(captured_threads)) == 1
 
-    def test_runs_func_in_worker_and_returns_result(self, monkeypatch):
-        import threading
-        self._install_fake_comtypes(monkeypatch)
-        captured_thread: list[str] = []
 
-        def work():
-            captured_thread.append(threading.current_thread().name)
-            return 42
+class TestPeakWorkerAudition:
+    def test_start_audition_when_meter_found(self, monkeypatch):
+        _install_fake_comtypes(monkeypatch)
+        meter = _FakeMeter(peak=0.4)
+        info = _make_info(7777, "game.exe", meter=meter)
+        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [info])
+        monkeypatch.setattr(pe, "_query_meter", lambda raw: raw.meter)
 
-        result = pe._run_in_com_thread(work)
-        assert result == 42
-        # 呼び出し元(=この pytest スレッド)と別スレッドで実行されている
-        assert captured_thread[0] != threading.current_thread().name
+        ok = pe.start_audition(7777)
+        assert ok is True
+        # 内部 poll が回って peak が更新される(<= 5fps なので 0.3s 待てば充分)
+        time.sleep(0.3)
+        assert pe.latest_peak() == pytest.approx(0.4)
+        assert pe.is_auditioning() is True
 
-    def test_calls_co_initialize_and_uninitialize(self, monkeypatch):
-        calls = self._install_fake_comtypes(monkeypatch)
-        pe._run_in_com_thread(lambda: 1)
-        assert calls == ["init", "uninit"]
+    def test_start_audition_when_meter_missing_returns_false(self, monkeypatch):
+        _install_fake_comtypes(monkeypatch)
+        info = _make_info(1, "x.exe")
+        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [info])
+        monkeypatch.setattr(pe, "_query_meter", lambda raw: None)  # メータ取得失敗
 
-    def test_uninitialize_called_even_on_exception(self, monkeypatch):
-        calls = self._install_fake_comtypes(monkeypatch)
+        ok = pe.start_audition(1)
+        assert ok is False
+        assert pe.is_auditioning() is False
 
-        def boom():
-            raise RuntimeError("boom")
+    def test_start_audition_unknown_pid_returns_false(self, monkeypatch):
+        _install_fake_comtypes(monkeypatch)
+        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [_make_info(1, "x.exe")])
+        monkeypatch.setattr(pe, "_query_meter", lambda raw: _FakeMeter())
 
-        with pytest.raises(RuntimeError):
-            pe._run_in_com_thread(boom)
-        assert calls == ["init", "uninit"]
+        assert pe.start_audition(99999) is False
+        assert pe.is_auditioning() is False
 
-    def test_propagates_func_exception(self, monkeypatch):
-        self._install_fake_comtypes(monkeypatch)
+    def test_stop_audition_resets_peak(self, monkeypatch):
+        _install_fake_comtypes(monkeypatch)
+        meter = _FakeMeter(peak=0.8)
+        info = _make_info(3, "x.exe", meter=meter)
+        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [info])
+        monkeypatch.setattr(pe, "_query_meter", lambda raw: raw.meter)
+
+        pe.start_audition(3)
+        time.sleep(0.3)
+        assert pe.latest_peak() > 0
+        pe.stop_audition()
+        assert pe.latest_peak() == 0.0
+        assert pe.is_auditioning() is False
+
+    def test_peak_meter_exception_is_swallowed(self, monkeypatch):
+        _install_fake_comtypes(monkeypatch)
+
+        class FailingMeter:
+            def GetPeakValue(self):  # noqa: N802
+                raise OSError("meter gone")
+
+        info = _make_info(5, "x.exe")
+        monkeypatch.setattr(pe, "_list_active_sessions", lambda: [info])
+        monkeypatch.setattr(pe, "_query_meter", lambda raw: FailingMeter())
+
+        pe.start_audition(5)
+        time.sleep(0.3)
+        # 例外を吸って peak は 0 に維持される(クラッシュしない)
+        assert pe.latest_peak() == 0.0
+        assert pe.is_auditioning() is True
+
+    def test_submit_propagates_exception(self, monkeypatch):
+        _install_fake_comtypes(monkeypatch)
 
         def boom():
             raise ValueError("bad")
 
+        worker = pe._get_worker()
         with pytest.raises(ValueError, match="bad"):
-            pe._run_in_com_thread(boom)
+            worker.submit(boom)
 
-    def test_timeout_raises_timeout_error(self, monkeypatch):
-        import time
-        self._install_fake_comtypes(monkeypatch)
+    def test_submit_timeout_raises_timeout_error(self, monkeypatch):
+        _install_fake_comtypes(monkeypatch)
 
         def slow():
             time.sleep(0.5)
             return "too late"
 
+        worker = pe._get_worker()
         with pytest.raises(TimeoutError):
-            pe._run_in_com_thread(slow, timeout=0.05)
-
-    def test_co_initialize_oserror_is_swallowed(self, monkeypatch):
-        """既に別モードで COM 初期化済みのケース。CoInitialize が OSError でも続行。"""
-        import sys
-        import types
-
-        def fake_co_initialize():
-            raise OSError("already in another mode")
-
-        def fake_co_uninitialize():
-            pass
-
-        fake = types.ModuleType("comtypes")
-        fake.CoInitialize = fake_co_initialize
-        fake.CoUninitialize = fake_co_uninitialize
-        monkeypatch.setitem(sys.modules, "comtypes", fake)
-
-        assert pe._run_in_com_thread(lambda: "ok") == "ok"
-
-
-# ============================================================
-# MeterProxy: peak 取得が COM ワーカ経由になる
-# ============================================================
-class TestMeterProxy:
-    def test_get_peak_value_goes_through_com_thread(self, monkeypatch):
-        import sys
-        import types
-        import threading
-
-        co_calls: list[str] = []
-
-        def co_init():
-            co_calls.append("init")
-
-        def co_uninit():
-            co_calls.append("uninit")
-
-        fake_co = types.ModuleType("comtypes")
-        fake_co.CoInitialize = co_init
-        fake_co.CoUninitialize = co_uninit
-        monkeypatch.setitem(sys.modules, "comtypes", fake_co)
-
-        class FakeRaw:
-            def __init__(self):
-                self.calls: list[str] = []
-
-            def GetPeakValue(self):  # noqa: N802
-                self.calls.append(threading.current_thread().name)
-                return 0.55
-
-        raw = FakeRaw()
-        proxy = pe._MeterProxy(raw)
-        value = proxy.GetPeakValue()
-        assert value == pytest.approx(0.55)
-        # peak 取得は別スレッドで動いた
-        assert raw.calls and raw.calls[0] != threading.current_thread().name
-        # COM 初期化/解放が走った
-        assert co_calls == ["init", "uninit"]
+            worker.submit(slow, timeout=0.05)
