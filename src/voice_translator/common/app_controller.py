@@ -554,6 +554,22 @@ class AppController:
                     name=f"vt_reload_{layer_changed.value}",
                 ).start()
 
+        # 言語設定が変わったら、動作中の Coordinator にも反映する(P2)。
+        # `is_running` でないときは Coordinator が無いか停止中なので、次回 Start 時に
+        # ConfigStore から読まれる(従来通り)。
+        if (
+            len(keys_and_value) == 3
+            and keys_and_value[0] == "languages"
+            and self._coord is not None
+            and self._coord.is_running
+        ):
+            key = keys_and_value[1]
+            value = str(keys_and_value[2])
+            if key == "src":
+                self._coord.set_languages(src=value)
+            elif key == "tgt":
+                self._coord.set_languages(tgt=value)
+
     def save_settings(self) -> None:
         self._config.save()
 

@@ -312,6 +312,26 @@ class PipelineCoordinator:
         """ステージ別の累計ドロップ件数のコピーを返す(診断用)。"""
         return dict(self._drop_counts)
 
+    def set_languages(
+        self, *, src: str | None = None, tgt: str | None = None,
+    ) -> None:
+        """動作中に翻訳の入出力言語を差し替える(次発話から反映)。
+
+        - `src` は Input スレッドが `RawPayload` を作る際に読む `self._src_lang` を差し替える。
+          既にキューに入っている発話は古い hint のまま流れる(各発話の言語 hint は
+          capture 時点で確定する設計)。
+        - `tgt` は Translator スレッドが `translate(..., self._tgt_lang)` を呼ぶ際に読む。
+          recognized_queue に積まれている発話も、Translator が処理する時点の最新値で訳される。
+        - `None` を渡したフィールドは変更しない。
+
+        スレッド安全性: `self._src_lang` / `self._tgt_lang` は単一の str 参照で、
+        書き換えと読み出しは Python 参照型代入の atomic 性で保護される。
+        """
+        if src is not None:
+            self._src_lang = str(src)
+        if tgt is not None:
+            self._tgt_lang = str(tgt)
+
     # ============================================================
     # スレッド本体
     # ============================================================
