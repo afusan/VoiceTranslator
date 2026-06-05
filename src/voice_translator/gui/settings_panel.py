@@ -65,6 +65,25 @@ _CFG_COLLAPSED_BACKENDS = ("ui", "collapsed", "backends")
 _CFG_COLLAPSED_DEVICES = ("ui", "collapsed", "devices")
 _CFG_COLLAPSED_LANGUAGES = ("ui", "collapsed", "languages")
 
+# TTS backend に「(なし)」を選んだとき(= text_only モード)に無効化するレイヤ。
+_OUTPUT_DISABLED_LAYERS: set[LayerKind] = {LayerKind.TTS, LayerKind.OUTPUT}
+
+# TTS プルダウンの「(なし)」表示と内部値(2026-06-05 refactor)。
+# 内部値 `_TTS_NONE_INTERNAL` は AppController.TTS_NONE と一致させること。
+# BackendRegistry にこの名前の backend は登録しない前提。
+_TTS_NONE_DISPLAY = "(なし)"
+_TTS_NONE_INTERNAL = "none"
+
+
+def _tts_display_to_internal(display: str) -> str:
+    """TTS プルダウンの表示文字列を内部値に変換する。"""
+    return _TTS_NONE_INTERNAL if display == _TTS_NONE_DISPLAY else display
+
+
+def _tts_internal_to_display(internal: str) -> str:
+    """TTS の内部値を表示文字列に変換する。"""
+    return _TTS_NONE_DISPLAY if internal == _TTS_NONE_INTERNAL else internal
+
 
 class SettingsPanel(ctk.CTkFrame):
     """設定操作のパネル + レイヤ別モデルステータス表示。"""
@@ -141,14 +160,26 @@ class SettingsPanel(ctk.CTkFrame):
         )
 
         body = section.body
+        # 6 レイヤ行を保持(TTS=(なし) 時にグレーアウトするため参照を残す)
+        self._backend_rows: dict[LayerKind, list[ctk.CTkBaseClass]] = {}
         row = 0
         for layer, label in _LAYER_LABELS:
-            ctk.CTkLabel(body, text=f"{label}:").grid(
-                row=row, column=0, sticky="w", padx=4, pady=2
-            )
+            label_widget = ctk.CTkLabel(body, text=f"{label}:")
+            label_widget.grid(row=row, column=0, sticky="w", padx=4, pady=2)
             names = self._controller.list_backends(layer) or ["(未登録)"]
-            current = str(self._controller.get_setting("backends", layer.value, default=names[0]))
-            var = ctk.StringVar(value=current)
+            # TTS プルダウンには「(なし)」を末尾に追加する(text_only モードの選択肢)
+            if layer == LayerKind.TTS:
+                names = list(names) + [_TTS_NONE_DISPLAY]
+            current_internal = str(
+                self._controller.get_setting("backends", layer.value, default=names[0])
+            )
+            # TTS のときは内部値 → 表示値変換
+            current_display = (
+                _tts_internal_to_display(current_internal)
+                if layer == LayerKind.TTS
+                else current_internal
+            )
+            var = ctk.StringVar(value=current_display)
             option = ctk.CTkOptionMenu(
                 body,
                 values=names,
@@ -162,17 +193,59 @@ class SettingsPanel(ctk.CTkFrame):
             status_label.grid(row=row, column=2, sticky="ew", padx=(4, 4), pady=2)
             self._status_labels[layer] = status_label
 
-            ctk.CTkButton(
+            cfg_btn = ctk.CTkButton(
                 body, text="設定", width=60,
                 command=lambda lyr=layer: self._open_layer_settings(lyr),
-            ).grid(row=row, column=3, sticky="e", padx=(0, 4), pady=2)
+            )
+            cfg_btn.grid(row=row, column=3, sticky="e", padx=(0, 4), pady=2)
 
+            self._backend_rows[layer] = [label_widget, option, status_label, cfg_btn]
             row += 1
+
+        # 起動時に「TTS=(なし)」状態を反映: Output 行をグレーアウトする
+        self._apply_tts_none_visual()
 
         body.columnconfigure(1, weight=1)
         body.columnconfigure(2, weight=0)
         body.columnconfigure(3, weight=0)
         return section
+
+    # ----------------------------------------------------------
+    # TTS=(なし) 連動(Output 行のグレーアウト)
+    # ----------------------------------------------------------
+    def _apply_tts_none_visual(self) -> None:
+        """TTS=(なし) のとき TTS+Output 行をグレーアウトする。
+
+        TTS の StringVar 自体は維持(ユーザが「(なし)」を選んだら表示は「(なし)」のまま)。
+        Output 行は完全に disable して触れないようにする。TTS 自身は「(なし) を解除する」
+        ためにプルダウンだけ enable のままにする。
+        """
+        is_none = self._controller.get_setting(
+            "backends", LayerKind.TTS.value, default="",
+        ) == _TTS_NONE_INTERNAL
+        rows = getattr(self, "_backend_rows", {})
+
+        # Output 行: TTS=(なし) なら全要素 disable / グレーアウト
+        for w in rows.get(LayerKind.OUTPUT, []):
+            try:
+                if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
+                    w.configure(state="disabled" if is_none else "normal")
+                elif isinstance(w, ctk.CTkLabel):
+                    w.configure(text_color="#475569" if is_none else None)
+            except Exception:  # noqa: BLE001 - widget 破棄 / プロパティ未対応で UI を止めない
+                pass
+
+        # TTS 行: ラベル行頭の色だけグレーアウト(プルダウン自体は触れる必要があるので enable)
+        tts_widgets = rows.get(LayerKind.TTS, [])
+        for w in tts_widgets:
+            try:
+                if isinstance(w, ctk.CTkLabel):
+                    w.configure(text_color="#475569" if is_none else None)
+                elif isinstance(w, ctk.CTkButton):
+                    # 設定ボタンは TTS=(なし) のとき意味がない → disable
+                    w.configure(state="disabled" if is_none else "normal")
+            except Exception:  # noqa: BLE001
+                pass
 
     # ----------------------------------------------------------
     # セクション 2: デバイス
@@ -341,15 +414,34 @@ class SettingsPanel(ctk.CTkFrame):
 
     # ============================================================
     def _on_backend_change(self, layer: LayerKind, value: str) -> None:
-        """backend 選択変更。クラウド backend なら同意ダイアログを先に通す(Phase D)。"""
-        if not self._gate_cloud_consent(layer, value):
-            # キャンセル: プルダウン表示を元の値に戻す
-            current = str(self._controller.get_setting("backends", layer.value, default=""))
-            var = self._backend_vars.get(layer)
-            if var is not None:
-                var.set(current)
-            return
-        self._controller.set_setting("backends", layer.value, value)
+        """backend 選択変更。クラウド backend なら同意ダイアログを先に通す(Phase D)。
+
+        TTS レイヤだけは「(なし)」表示 ↔ "none" 内部値の変換を行う。「(なし)」を
+        選んだ場合は同意ダイアログを通さない(クラウド backend ではない)。
+        """
+        # TTS の「(なし)」表示を内部値に変換
+        internal_value = (
+            _tts_display_to_internal(value) if layer == LayerKind.TTS else value
+        )
+
+        # 「(なし)」選択は同意ダイアログ不要(ローカル動作 = backend 起動しない)
+        if internal_value != _TTS_NONE_INTERNAL:
+            if not self._gate_cloud_consent(layer, internal_value):
+                # キャンセル: プルダウン表示を元の値に戻す
+                current_internal = str(
+                    self._controller.get_setting("backends", layer.value, default="")
+                )
+                current_display = (
+                    _tts_internal_to_display(current_internal)
+                    if layer == LayerKind.TTS
+                    else current_internal
+                )
+                var = self._backend_vars.get(layer)
+                if var is not None:
+                    var.set(current_display)
+                return
+
+        self._controller.set_setting("backends", layer.value, internal_value)
         # set_setting 側でステータスは更新されるが、ラベル反映は明示的に行う
         self._sync_all_status_labels()
         # ASR backend 切替時は入力言語プルダウンを新 backend の対応言語に合わせる
@@ -358,9 +450,11 @@ class SettingsPanel(ctk.CTkFrame):
         # Translator backend 切替時は出力言語プルダウンを再構築
         if layer == LayerKind.TRANSLATOR:
             self._refresh_target_language_choices(value, notify_fallback=True)
-        # TTS backend 切替時は現在の出力言語が新 TTS で読めるか警告チェック
+        # TTS backend 切替: Output 行のグレーアウト連動 + 言語互換チェック
         if layer == LayerKind.TTS:
-            self._check_tts_output_lang_compatibility(notify_fallback=True)
+            self._apply_tts_none_visual()
+            if internal_value != _TTS_NONE_INTERNAL:
+                self._check_tts_output_lang_compatibility(notify_fallback=True)
 
     # ============================================================
     # 入力言語プルダウンの連動(ASR backend ごとに対応言語が違う)
@@ -500,7 +594,8 @@ class SettingsPanel(ctk.CTkFrame):
         tts_backend = str(
             self._controller.get_setting("backends", LayerKind.TTS.value, default="")
         )
-        if not tts_backend:
+        if not tts_backend or tts_backend == _TTS_NONE_INTERNAL:
+            # TTS=(なし) のときは text_only モードなので、読み上げ言語の警告は出さない
             return
         supported = self._controller.get_supported_output_languages(tts_backend)
         if not supported:

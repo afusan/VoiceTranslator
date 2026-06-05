@@ -547,12 +547,37 @@ class AppController:
                     self._evict_backend_locked(layer_changed)
                 # 該当レイヤは INIT に戻す(まだロード起動前の状態)
                 self._emit_status(layer_changed, ModelStatus.INIT)
-                # バックグラウンドで即座にロードを試みる(GUI 側で進捗が見える)
-                threading.Thread(
-                    target=lambda: self._safe_load_layer(layer_changed),
-                    daemon=True,
-                    name=f"vt_reload_{layer_changed.value}",
-                ).start()
+                # text_only モードでは TTS / Output は対象外。再ロードしない
+                # (BackendRegistry に "none" backend は存在しないので再ロードは
+                #  必ず失敗する。レイヤは INIT のまま残し、Start 時に skip される)。
+                if (
+                    layer_changed in (LayerKind.TTS, LayerKind.OUTPUT)
+                    and self.output_mode == "text_only"
+                ):
+                    pass
+                else:
+                    # バックグラウンドで即座にロードを試みる(GUI 側で進捗が見える)
+                    threading.Thread(
+                        target=lambda: self._safe_load_layer(layer_changed),
+                        daemon=True,
+                        name=f"vt_reload_{layer_changed.value}",
+                    ).start()
+
+        # 言語設定が変わったら、動作中の Coordinator にも反映する(P2)。
+        # `is_running` でないときは Coordinator が無いか停止中なので、次回 Start 時に
+        # ConfigStore から読まれる(従来通り)。
+        if (
+            len(keys_and_value) == 3
+            and keys_and_value[0] == "languages"
+            and self._coord is not None
+            and self._coord.is_running
+        ):
+            key = keys_and_value[1]
+            value = str(keys_and_value[2])
+            if key == "src":
+                self._coord.set_languages(src=value)
+            elif key == "tgt":
+                self._coord.set_languages(tgt=value)
 
     def save_settings(self) -> None:
         self._config.save()
@@ -584,14 +609,49 @@ class AppController:
         return all(layer in self._backends for layer in LayerKind)
 
     # ---- ロード ----
+    # TTS backend に「(なし)」が選ばれていることを表す内部値。
+    # UI では `(なし)` / 内部では `"none"` を使う(BackendRegistry に同名 backend は
+    # 登録されない前提)。
+    TTS_NONE = "none"
+
+    @property
+    def output_mode(self) -> str:
+        """現在の出力モード("audio" / "text_only")。
+
+        判定: `backends.tts` の値が `TTS_NONE`(= "none") / 空文字 / None なら
+        `text_only`、それ以外は `audio`。独立した `pipeline.output_mode` キーは持たない。
+
+        text_only モードでは TTS / Output レイヤが「対象外」扱いになる:
+        - `load_models` / `load_auto_load_layers_async` の対象から外れる
+        - `_check_missing_credentials_gate` のチェック対象から外れる
+        - Coordinator は TTS / Output スレッドを起動しない
+        """
+        tts_choice = self._config.get("backends", "tts", default=None)
+        if tts_choice in (None, "", self.TTS_NONE):
+            return "text_only"
+        return "audio"
+
+    def _active_layers(self) -> list[LayerKind]:
+        """現在の出力モードでロード/起動対象となるレイヤ一覧を返す。
+
+        text_only モードでは TTS / Output を除外する。
+        """
+        if self.output_mode == "text_only":
+            return [
+                layer for layer in LayerKind
+                if layer not in (LayerKind.TTS, LayerKind.OUTPUT)
+            ]
+        return list(LayerKind)
+
     def load_models(self) -> None:
         """全レイヤのバックエンドを生成しキャッシュする(冪等)。
 
         既にロード済みのレイヤは触らない。各レイヤごとに `_emit_status` で LOADING →
         (backend 由来の最終状態) を通知するので、GUI 側で進捗を観測できる。
+        text_only モードでは TTS / Output レイヤを skip する。
         """
         with self._load_lock:
-            for layer in LayerKind:
+            for layer in self._active_layers():
                 self._load_layer_locked(layer)
 
     def load_model_layer(self, layer: LayerKind) -> None:
@@ -743,9 +803,14 @@ class AppController:
 
         ユーザは詳細ダイアログから per-backend で auto_load を ON にする。
         該当する backend が選ばれているレイヤだけが起動時に自動ロードされる。
+        text_only モードでは TTS / Output レイヤは候補から除外する(出力モードに
+        対象外のレイヤを起動時に読み込まないため)。
         """
+        active = set(self._active_layers())
         layers: list[LayerKind] = []
         for layer in LayerKind:
+            if layer not in active:
+                continue
             backend_name = self._config.get("backends", layer.value)
             if not backend_name:
                 continue
@@ -803,7 +868,12 @@ class AppController:
         gate を通過できる。
         """
         problems: list[str] = []
+        # text_only モードでは TTS / Output レイヤは起動対象外なので、認証 gate でも
+        # 評価しない(クラウド TTS の認証が無くてもテキスト出力モードでは Start できる)。
+        active = set(self._active_layers())
         for layer in LayerKind:
+            if layer not in active:
+                continue
             # 1) backend 側が明示的に MISSING_CREDENTIALS を立てている場合
             status = self.get_model_status(layer)
             if status == ModelStatus.MISSING_CREDENTIALS:
@@ -1003,13 +1073,22 @@ class AppController:
             self._stage_dump = self._build_stage_dump()
             self._stage_dump.start_run(self._build_dump_meta(input_id, output_id))
 
+            # text_only モードでは TTS / Output は使わない(未ロードでも OK)。
+            mode = self.output_mode
+            tts_backend = (
+                self._backends[LayerKind.TTS] if mode == "audio" else None
+            )
+            output_backend = (
+                self._backends[LayerKind.OUTPUT] if mode == "audio" else None
+            )
+
             self._coord = PipelineCoordinator(
                 capture=self._backends[LayerKind.CAPTURE],
                 vad=self._backends[LayerKind.VAD],
                 asr=self._backends[LayerKind.ASR],
                 translator=self._backends[LayerKind.TRANSLATOR],
-                tts=self._backends[LayerKind.TTS],
-                output=self._backends[LayerKind.OUTPUT],
+                tts=tts_backend,
+                output=output_backend,
                 error_handler=error_handler,
                 ledger=self._ledger,
                 sequence=self._sequence,
@@ -1027,6 +1106,7 @@ class AppController:
                 retry_base_sec=retry_base_sec,
                 retry_max_sec=retry_max_sec,
                 dump=self._stage_dump,
+                output_mode=mode,
             )
         self._coord.start(
             capture_source_id=input_id, output_device_id=output_id
@@ -1086,10 +1166,27 @@ class AppController:
     def _handle_text_ready(self, record: dict) -> None:
         """TTS 完了時に Coordinator から呼ばれる(UI 履歴の前倒し通知)。
 
-        ledger スナップショットを UI にそのまま流す。再生待ち / 再生時間ぶんだけ
-        履歴表示を早められる。レイテンシ計算や CSV ロガーへの記録は
-        `_handle_utterance_done`(Output 完了時)で従来通り行う。
+        audio モード: ledger スナップショットを UI に流すだけ。レイテンシ計算や CSV
+        ロガーへの記録は `_handle_utterance_done`(Output 完了時)で行う。
+
+        text_only モード: ここが最終通知(Output が無いため `on_utterance_done` は
+        呼ばれない)。jsonl / processtime / レイヤ別 処理時間バッファへの記録もこの
+        メソッドで兼ねる。record は ledger.pop() の戻り値そのままで、timeline には
+        t_translate までが含まれる(t_tts / t_playback は無い)。
         """
+        if self.output_mode == "text_only":
+            # 最終扱い: 通常の done パスと同じ後処理を回す(UI 通知は最後)
+            self._push_recent_durations(record)
+            try:
+                if self._translation_logger is not None:
+                    self._translation_logger.write_record(record)
+            except Exception:  # noqa: BLE001
+                self._logger.exception("翻訳ログ(jsonl)書き出しに失敗(text_only)")
+            try:
+                if self._process_time_logger is not None:
+                    self._process_time_logger.write_record(record)
+            except Exception:  # noqa: BLE001
+                self._logger.exception("処理時間ログ(csv)書き出しに失敗(text_only)")
         try:
             self._on_text_ready(record)
         except Exception:  # noqa: BLE001

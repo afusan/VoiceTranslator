@@ -54,6 +54,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "throttle_sec": 5.0,
     },
     "pipeline": {
+        # 出力モード(2026-06-05 / refactor/text-only-via-tts-none):
+        # 出力モードは独立キーで持たず、`backends.tts` の値から派生する:
+        # - `backends.tts = "none"` (UI 表記「(なし)」) → text_only モード
+        #   - TTS / Output スレッドを起動せず、Translator 完了で on_text_ready を発火、
+        #     ledger を即 pop してバッファ解放
+        #   - TTS / Output レイヤの backend ロードもスキップ
+        # - それ以外(SAPI / Piper / ElevenLabs ...) → audio モード(従来動作)
         # ステージ間バッファ(キュー)の容量。あふれた場合は古いものから自動退避。
         # PCM 系(captured/synthesized)は **合計バイト数で制限**。1発話=PCM長×4byte。
         # 16kHz×float32 換算: 10MB ≒ 約 156 秒分、5MB ≒ 約 78 秒分。

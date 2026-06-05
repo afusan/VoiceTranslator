@@ -4,6 +4,55 @@
 
 ---
 
+## [✅完了 2026-06-05] 出力モード(TTS=(なし))対応 — text_only モード
+- **対応ブランチ**:
+  - `feature/text-only-output`(初実装。`pipeline.output_mode` キーで切替)
+  - `refactor/text-only-via-tts-none`(出力モードを `backends.tts` から派生する形に統合)
+- **対応内容**:
+  - `PipelineCoordinator` に `output_mode` パラメータを追加。`text_only` のとき
+    Input / ASR / Translator の 3 スレッドのみ起動、Translator 完了で `on_text_ready`
+    発火 + `ledger.pop()` でバッファ即解放
+  - TTS / Output レイヤの backend ロード・認証 gate を `text_only` 時に skip
+  - SettingsPanel の TTS プルダウンに「(なし)」を追加、選択で text_only モード
+    (内部値 `"none"`)。Output 行はグレーアウト
+  - 動作中の即時モード切替は対象外(次回 Start で反映)
+- **派生で出た保留項目**: 提案 A(動作中の音声出力 graceful 切替)/ 提案 C(進行中発話の
+  キャンセル機構)は別途下記に起票。
+
+---
+
+## [⏳保留 2026-06-05] 動作中デバイス変更時の graceful 切替
+- **対象**: `feature/runtime-flex-and-input` P4 の「動作中デバイス変更=停止→再開」方式の発展。
+- **背景**: P4 では停止→再開で再生バッファを捨てる。バッファ再生後に切り替えれば中断が
+  目立たないが、Output スレッドを独立して止める仕組みが必要。
+- **見送り理由**: 停止→再開で十分許容できる体感の見込み。動作を見てから判断。
+- **着手トリガ**: P4 完了後、停止→再開の体感ラグが運用上 NG と判明したら。
+- **関連**: `feature-runtime-flex-and-input/Plan.md` の「提案 A」。
+
+---
+
+## [⏳保留 2026-06-05] ProcTap backend 実装(per-process キャプチャ)
+- **対象**: `C:\work\claudeWork\ProcTap` を使う `ProcTapCaptureBackend`。
+  WASAPI Process Loopback ベース。
+- **見送り理由**: ProcTap モジュール側の API・ビルド成果物の形(DLL/サイドカー)が
+  定まってから連携設計したい。`feature/runtime-flex-and-input` P5 で「複数 capture
+  backend を並べる構造」は整える。
+- **着手トリガ**: ProcTap の連携 I/F が確定したら。
+- **関連**: 下記「入力処理レイヤーの改善案」エントリと統合する。
+
+---
+
+## [⏳保留 2026-06-05] 動作中言語切替時の進行中発話の扱い
+- **対象**: `feature/dynamic-languages` で「言語切替は次発話から反映」の仕様にしたが、
+  既にキューに入っている発話は古い言語のまま流れる。
+- **背景**: 体験悪化の頻度が読めない。実機で見てから判断したい。
+- **見送り理由**: 即時の影響は限定的(1〜2 発話のみ)。実運用で NG となれば対応。
+- **着手トリガ**: 「言語を変えたつもりが古い言語の翻訳が出てくる」苦情が出たら。
+- **対応案**: `captured_queue` / `recognized_queue` を drain して新言語で再 capture、
+  または「切替時刻以降の発話のみ通す」フィルタを Input/ASR スレッドに置く。
+
+---
+
 ## [📌方針 2026-05-30] 追加モデル続行・UI 調整・配布形態の段階対応(複数日)
 本ブランチ(`feature/vad-picks-pyannote-4x`)を master にマージしたあと、下記 3 つを
 別ブランチで順次対応する(各 1 日では収まらない見込み)。
@@ -120,16 +169,17 @@
 
 ---
 
-## [⏳保留 2026-05-29] UI セクションの折り畳み(設定全体 / ステータス)
-- **要望**: MainWindow 上の SettingsPanel(バックエンド・デバイス・翻訳言語)と
+## [✅完了 2026-06-05] UI セクションの折り畳み(設定全体 / ステータス)
+- **対応ブランチ**: `feature/ui-adjustments`(ステータステキスト分) /
+  `feature/ui-sections-split`(設定パネル 3 セクション分割)
+- **対応内容**:
+  - `CollapsibleSection` widget を作成(ヘッダクリックで body を `.grid_remove()` / `.grid()`)
+  - ControlPanel のステータステキストボックスを折り畳み対応(`ui.collapsed.status_text`)
+  - SettingsPanel を「バックエンド / デバイス / 翻訳」の **3 セクション独立折り畳み**に分割
+    (`ui.collapsed.{backends, devices, languages}`)。ログ出力先 / 保存ボタン群は共通行
+    として下部に維持(畳めない)
+- **元の要望**: MainWindow 上の SettingsPanel(バックエンド・デバイス・翻訳言語)と
   ControlPanel のステータステキストボックスを、それぞれ畳めるようにしたい。
-  使い込んだあとは履歴を広く見たいシーンが多いので、必要なときだけ広げる UX にしたい。
-- **対応の見送り理由**: 本ブランチ(feature/backend-mgmt)は backend 管理が主題。
-  customtkinter には標準で collapsible 機能が無く、自作する必要があるため、別ブランチで
-  まとめて対応する(`docs/` の pendList で来歴を残す)。
-- **想定実装**: 各セクションの見出しを「▼ 設定」「▶ 設定」のように切替可能なボタンにし、
-  クリックで子ウィジェットを `.pack_forget()` / `.pack()` で出し入れする。配置の jitter を
-  避けるため `CTkFrame` をラップして `.grid_remove()` する案も検討。
 
 ---
 

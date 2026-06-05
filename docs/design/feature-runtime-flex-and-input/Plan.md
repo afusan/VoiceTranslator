@@ -23,13 +23,13 @@
 依存と難易度を踏まえ、**Phase 1 → 2 → 3 → 4 → 5** の順で進めるのが最短。
 各 Phase は独立ブランチで切る前提(マージ単位を細かく保つ)。
 
-| # | ブランチ案 | スコープ | 難易度 | 想定工数 |
+| # | ブランチ案 | スコープ | 難易度 | 状態(2026-06-05 時点) |
 |---|---|---|---|---|
-| **P1** | `feature/ui-sections-split` | R1(UI 折り畳み 3 分割) | 小 | 0.5d |
-| **P2** | `feature/dynamic-languages` | R2 のうち **言語の動的変更** | 小 | 0.5d |
-| **P3** | `feature/text-only-output` | R3(出力 backend なしモード) | 中 | 1〜1.5d |
-| **P4** | `feature/dynamic-devices` | R2 のうち **入出力デバイスの動的変更**(停止→再開方式) | 中 | 1d |
-| **P5** | `feature/capture-backend-split` | R4(入力 backend のデバイス単位への分解、ProcTap 連携の土台) | 中〜大 | 1.5〜2d |
+| **P1** | `feature/ui-sections-split` | R1(UI 折り畳み 3 分割) | 小 | ✅ 完了・master マージ済(`d2f2b72`) |
+| **P2** | `feature/dynamic-languages` | R2 のうち **言語の動的変更** | 小 | ✅ 実装・テスト完了(`e10e6a7`)。master マージ待ち |
+| **P3** | `feature/text-only-output` → `refactor/text-only-via-tts-none` | R3(出力 backend なしモード)。**最終形は TTS=(なし) 選択値から派生** | 中 | ✅ 実装・テスト完了(`69fea7c`)。master マージ待ち |
+| **P4** | `feature/dynamic-devices` | R2 のうち **入出力デバイスの動的変更**(停止→再開方式) | 中 | ☐ 未着手 |
+| **P5** | `feature/capture-backend-split` | R4(入力 backend のデバイス単位への分解、ProcTap 連携の土台) | 中〜大 | ☐ 未着手 |
 
 順序の理由:
 - **P1 を先に**: 触る範囲が狭く副作用がない。ドッグフーディング体験が一気に上がる。後続の UI 改修と競合しにくい形に整えてから動的変更系へ。
@@ -79,7 +79,12 @@
 
 ---
 
-### P3: 出力バックエンドなしモード(R3)
+### P3: 出力バックエンドなしモード(R3)— ✅ 完了
+
+**最終形(refactor/text-only-via-tts-none 反映後)**:
+- `pipeline.output_mode` の独立 ConfigStore キーは**持たない**。
+- 出力モードは `backends.tts` の値から派生する: `"none"`(UI「(なし)」)→ text_only、それ以外 → audio。
+- SettingsPanel の TTS プルダウン末尾に「(なし)」を追加、選択時に Output 行をグレーアウト。
 
 **目的**: 「翻訳テキストの表示で完了」モードを追加。TTS は実行されず、レジャは Translator 完了時点で解放される。
 
@@ -113,7 +118,9 @@
 
 **実装方針(現実解)**:
 - **「動作中に変更 → 自動 restart(stop → start)」を採用**。capture/output だけを swap する無停止方式は実装複雑度が跳ねるので別件(pendList)。
+→無停止は非サポートでOK.また発話中に切り替えた場合の挙動については、出力の場合、停止orそのバッファの再生後、次のバッファから出力先を切り替えるイメージであってるか？（想定と難易度が変わるか？）
 - `AppController.restart_pipeline_async()` を追加(stop_pipeline → start_pipeline_async)。
+→どういうことをやるイメージ？
 - SettingsPanel の `_on_capture_changed` / `_on_output_changed` で `is_running` 中なら restart を発火。
 - UX: NotificationBanner に「入力(出力)デバイスを切り替えました(再開中…)」を表示。
 - 既存の「`set_setting("backends",...)` で当該レイヤ再ロード」と同じパターン。差は Coordinator も止める/再開する点。
@@ -158,6 +165,7 @@ P4・P5 の発展系として、本ブランチ群では着手しない項目を
 - 内容: P4 では stop→start の自動 restart に倒すが、無停止 swap(Input/Output スレッドはそのまま、capture/output backend だけ差し替え)も検討余地あり。
 - 見送り理由: `SoundcardCaptureBackend` は内部に `sc.recorder` の context manager を握っているため、動作中 swap には Input スレッド側で「次フレーム取得前に再 enter する」flag 駆動が必要。設計負荷に対して体感差(stop→start でも 1〜2 秒)が小さい段階で先送り。
 - 着手トリガ: P4 完了後、stop→start の体感ラグが運用上 NG と判明したら。
+→動作を見てから判断するが、運用上は許容の見込み。
 
 ### 提案 B: ProcTap backend 実装(per-process キャプチャ)
 - 内容: `C:\work\claudeWork\ProcTap` を使う `ProcTapCaptureBackend` の実装。WASAPI Process Loopback ベース。
@@ -169,7 +177,7 @@ P4・P5 の発展系として、本ブランチ群では着手しない項目を
 - 内容: P2 では「次の発話から反映」とし、すでにキューに入っている発話は古い言語のまま流れる仕様。これでユーザ体験が NG ならキャンセル/再投入機構を検討。
 - 見送り理由: 体験悪化の頻度が読めない。実機で見てから判断したい。
 - 着手トリガ: 「言語を変えたつもりが古い言語の翻訳が出てくる」の苦情が出たら。
-
+→設定変更後にバックエンドが処理するデータが変わっていれば、実行中の翻訳やTTSパイプラインはすでにあるものはそのまま処理してかまわない認識だがｍそれでも問題があるか？
 ---
 
 ## 5. 共通方針
@@ -183,6 +191,18 @@ P4・P5 の発展系として、本ブランチ群では着手しない項目を
 
 ## 6. 次のアクション
 
-1. 本 Plan のレビュー(ユーザ確認待ち)。
-2. 承認後、Phase 1 のブランチ `feature/ui-sections-split` を切って着手する。
-3. 各 Phase 開始時に `docs/design/feature-<name>/Plan.md` + `testPlan.md` を起こす(本メタ計画から流用)。
+### 完了済み(2026-06-05)
+- ✅ P1 (`feature/ui-sections-split`): UI 設定パネル 3 セクション分割 → master マージ済
+- ✅ P2 (`feature/dynamic-languages`): 動作中の翻訳言語切替 → master マージ待ち
+- ✅ P3 (`feature/text-only-output` + `refactor/text-only-via-tts-none`):
+  TTS=(なし) で text_only モード → master マージ待ち
+
+### これから
+1. P2 / P3 を master にマージ(ユーザ承認待ち)。
+2. P4 (`feature/dynamic-devices`): 動作中の入出力デバイス変更(停止→再開方式)。
+   実装着手前に、本 Plan に追記されたユーザ質問への回答を整理してから始める:
+   - 出力デバイス切替時の挙動: 「停止→再開」で即切替(再生中バッファは捨てる)
+   - `AppController.restart_pipeline_async()`: `stop_pipeline()` を同期で呼んだあと、
+     Loader スレッドで `start_pipeline_async()` を続ける単純なラッパー
+3. P5 (`feature/capture-backend-split`): 入力 backend のデバイス単位への分解。
+   ProcTap モジュール側の I/F が見えてきてから本格着手。
