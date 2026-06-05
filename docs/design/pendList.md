@@ -4,23 +4,22 @@
 
 ---
 
-## [⏳保留 2026-06-05] ProcTap 取り込み 段階 2: ProcTapCaptureBackend 本体実装
-- **対象**: `proctap` パッケージ(`C:\work\claudeWork\ProcTap`、PyPI `proc-tap`)を
-  `AudioCaptureBackend` の実装として組み込む。
-- **背景**: 段階 1(`feature/capture-kind`)で `CaptureKind` 概念を導入し、`PROCESS` kind を
-  宣言する backend を並べる土台ができた。本フェーズで実装本体を入れる。
-- **必要な作業**:
-  - `pyproject.toml` の extras に `capture-proctap = ["proc-tap>=..."]` を追加(opt-in)
-  - `src/voice_translator/capture/proctap_backend.py` 新規:
-    - `capture_kind() -> CaptureKind.PROCESS` 宣言
-    - `list_sources()` は別途プロセス列挙(段階 3 の `pycaw` 連携前は仮実装)
-    - `start(pid_str)` / `read_chunk()` で `ProcessAudioCapture` を呼ぶ
-    - **48kHz/2ch/float32 → 16kHz/1ch/float32 のリサンプル + ダウンミックス**
-      (`scipy.signal.resample_poly` + チャンネル平均化)
-  - `backend_setup.py` に register
-  - small + large テスト(`test_proctap_backend_large.py`、実 wheel + 実プロセス)
-- **未確認**: PyPI に Python 3.12 wheel があるか(本リポジトリ同梱は cp312 だが PyPI 配布も同じか要確認)。
-- **着手トリガ**: 段階 1 マージ後すぐ。
+## [✅完了 2026-06-05] ProcTap 取り込み 段階 2: ProcTapCaptureBackend 本体実装
+- **対応ブランチ**: `feature/proctap-backend`
+- **対応内容**:
+  - `pyproject.toml` extras に `capture-proctap = ["proc-tap>=0.4"]`(scipy は proc-tap が連れてくる)
+  - `src/voice_translator/capture/proctap_backend.py`:
+    - `capture_kind() = PROCESS`、`list_sources()` は段階 3 まで空リスト仮実装
+    - `start(pid_str)` で `int(source_id)` → `ProcessAudioCapture` 構築
+    - `read_chunk()` で bytes → np.frombuffer → reshape(-1,2).mean(axis=1) →
+      `scipy.signal.resample_poly(up=1, down=3)` で 48kHz/2ch → 16kHz/mono へ変換
+    - 各失敗ケース(extras 未インストール / 不正 PID / WASAPI 起動失敗 / read 失敗)を FatalError で包む
+  - `backend_setup.py` に opt-in register、`ConfigStore` に `backends_config.proctap.{auto_load,resample_quality}` 既定
+  - small 16 件 + large 1 件(実 ProcTap で自プロセス録音、Python 自身 PID 指定)— pass 済み
+  - PyPI 配布の `proc-tap==1.0.3` が Python 3.12 wheel として動作することを確認
+- **未対応(段階 3 へ)**: `list_sources()` のプロセス列挙(`pycaw`)+ エコーバック確認 UI。
+  現状は GUI プルダウンから選べないため、`config.yaml` の `devices.input` に PID 文字列を
+  直接書く運用が必要。
 
 ---
 

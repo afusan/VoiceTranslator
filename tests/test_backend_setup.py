@@ -23,6 +23,7 @@ def patched_backend_setup(monkeypatch):
     fake_classes = {}
     for path in [
         ("voice_translator.capture.soundcard_backend", "SoundcardCaptureBackend"),
+        ("voice_translator.capture.proctap_backend", "ProcTapCaptureBackend"),
         ("voice_translator.vad.silero_backend", "SileroVadBackend"),
         ("voice_translator.vad.webrtc_backend", "WebRtcVadBackend"),
         ("voice_translator.vad.pyannote_backend", "PyannoteVadBackend"),
@@ -63,7 +64,7 @@ class TestRegisterDefaultBackends:
         registry = BackendRegistry()
         register_default_backends(registry)
 
-        assert registry.list_names(LayerKind.CAPTURE) == ["soundcard"]
+        assert registry.list_names(LayerKind.CAPTURE) == ["soundcard", "proctap"]
         # Phase F1 で VAD に webrtcvad / pyannote / pvcobra を追加。silero が先頭(MVP)。
         assert registry.list_names(LayerKind.VAD) == [
             "silero", "webrtcvad", "pyannote", "pvcobra",
