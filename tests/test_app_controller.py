@@ -183,6 +183,114 @@ class TestStartPipeline:
             ctrl.stop_pipeline()
 
 
+class TestTestOutputPlayback:
+    """`AppController.test_output_playback` のガード条件と再生フロー検証。"""
+
+    def _make_ctrl_with_devices(self, populated_registry, config, tmp_path):
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("backends", "tts", "sapi")
+        ctrl.set_setting("backends", "output", "soundcard")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("languages", "tgt", "ja")
+        return ctrl
+
+    def test_plays_via_tts_and_output(
+        self, populated_registry, config, tmp_path,
+    ) -> None:
+        """正常系: TTS で合成 → Output.start/play/stop が順に呼ばれる。"""
+        ctrl = self._make_ctrl_with_devices(populated_registry, config, tmp_path)
+        # numpy 互換の `size` を持つ非空配列を返すようにモック調整
+        import numpy as np
+        ctrl.load_model_layer(LayerKind.TTS)
+        ctrl.load_model_layer(LayerKind.OUTPUT)
+        tts = ctrl._backends[LayerKind.TTS]
+        output = ctrl._backends[LayerKind.OUTPUT]
+        pcm = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+        tts.synthesize = MagicMock(return_value=(pcm, 22050))
+
+        ctrl.test_output_playback("テスト音声")
+
+        tts.synthesize.assert_called_once_with("テスト音声", "ja")
+        output.start.assert_called_once_with("hp")
+        # play の引数を ndarray 含めて確認
+        assert output.play.call_count == 1
+        called_pcm, called_sr = output.play.call_args.args
+        assert called_sr == 22050
+        # stop は finally で必ず呼ばれる
+        output.stop.assert_called_once()
+
+    def test_rejects_when_pipeline_running(
+        self, populated_registry, config, tmp_path,
+    ) -> None:
+        """動作中は RuntimeError(Output backend を本体が掴んでいるため)。"""
+        ctrl = self._make_ctrl_with_devices(populated_registry, config, tmp_path)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        ctrl.start_pipeline()
+        try:
+            with pytest.raises(RuntimeError, match="動作中"):
+                ctrl.test_output_playback()
+        finally:
+            ctrl.stop_pipeline()
+
+    def test_rejects_in_text_only_mode(
+        self, populated_registry, config, tmp_path,
+    ) -> None:
+        """text_only(TTS=「(なし)」)では合成手段がないので拒否。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("backends", "tts", AppController.TTS_NONE)
+        ctrl.set_setting("backends", "output", "soundcard")
+        ctrl.set_setting("devices", "output", "hp")
+        with pytest.raises(RuntimeError, match="TTS"):
+            ctrl.test_output_playback()
+
+    def test_rejects_when_output_device_empty(
+        self, populated_registry, config, tmp_path,
+    ) -> None:
+        """`devices.output` が未設定なら再生先が決まらないので拒否。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("backends", "tts", "sapi")
+        ctrl.set_setting("backends", "output", "soundcard")
+        # devices.output は未設定
+        with pytest.raises(RuntimeError, match="出力デバイス"):
+            ctrl.test_output_playback()
+
+    def test_rejects_when_tts_returns_empty_pcm(
+        self, populated_registry, config, tmp_path,
+    ) -> None:
+        """TTS が空 PCM を返したら start/play を呼ばずに失敗扱い。"""
+        import numpy as np
+        ctrl = self._make_ctrl_with_devices(populated_registry, config, tmp_path)
+        ctrl.load_model_layer(LayerKind.TTS)
+        ctrl.load_model_layer(LayerKind.OUTPUT)
+        tts = ctrl._backends[LayerKind.TTS]
+        output = ctrl._backends[LayerKind.OUTPUT]
+        tts.synthesize = MagicMock(return_value=(np.zeros(0, dtype=np.float32), 22050))
+
+        with pytest.raises(RuntimeError, match="空"):
+            ctrl.test_output_playback()
+        # 合成のあとは Output に触らない(start も呼ばない)
+        output.start.assert_not_called()
+
+    def test_output_stop_called_even_if_play_raises(
+        self, populated_registry, config, tmp_path,
+    ) -> None:
+        """play が例外でも stop は finally で呼ばれる(リソース解放保証)。"""
+        import numpy as np
+        ctrl = self._make_ctrl_with_devices(populated_registry, config, tmp_path)
+        ctrl.load_model_layer(LayerKind.TTS)
+        ctrl.load_model_layer(LayerKind.OUTPUT)
+        tts = ctrl._backends[LayerKind.TTS]
+        output = ctrl._backends[LayerKind.OUTPUT]
+        pcm = np.array([0.1, 0.2], dtype=np.float32)
+        tts.synthesize = MagicMock(return_value=(pcm, 22050))
+        output.play = MagicMock(side_effect=RuntimeError("simulated"))
+
+        with pytest.raises(RuntimeError, match="simulated"):
+            ctrl.test_output_playback()
+        output.stop.assert_called_once()
+
+
 class TestAsyncStart:
     def test_start_async_invokes_on_started(
         self, populated_registry, config, tmp_path
