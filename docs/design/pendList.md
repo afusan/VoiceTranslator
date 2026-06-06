@@ -116,14 +116,16 @@
 
 ---
 
-## [⏳保留 2026-06-05] ProcTap backend 実装(per-process キャプチャ)
-- **対象**: `C:\work\claudeWork\ProcTap` を使う `ProcTapCaptureBackend`。
-  WASAPI Process Loopback ベース。
-- **見送り理由**: ProcTap モジュール側の API・ビルド成果物の形(DLL/サイドカー)が
-  定まってから連携設計したい。`feature/runtime-flex-and-input` P5 で「複数 capture
-  backend を並べる構造」は整える。
-- **着手トリガ**: ProcTap の連携 I/F が確定したら。
-- **関連**: 下記「入力処理レイヤーの改善案」エントリと統合する。
+## [✅完了 2026-06-05] ProcTap backend 実装(per-process キャプチャ)
+- **対応ブランチ**: `feature/proctap-backend`(段階 2 / 本体実装)+
+  `feature/proctap-process-list`(段階 3 / プロセス列挙 + 試聴メータ)+
+  `refactor/process-peak-worker`(永続 COM ワーカ整理)
+- **対応内容**: 上記 ProcTap 取り込み 段階 2 / 段階 3 / Peak Worker 整理の
+  3 エントリにそれぞれ詳細記載。`uv sync --extra capture-proctap` で PyPI から
+  `proc-tap==1.0.3` / `pycaw` / `psutil` が入り、SettingsPanel の「プロセス選択…」
+  ダイアログから PID を選んで per-process キャプチャができる状態。
+- **関連**: 下記「入力処理レイヤーの改善案」エントリも Windows 部分は本対応で完了。
+  Linux / Mac の per-process 取得は別エントリ「Linux/Mac の process-kind 列挙」参照。
 
 ---
 
@@ -156,41 +158,14 @@
 
 ---
 
-## [📌方針 2026-05-30] 追加モデル続行・UI 調整・配布形態の段階対応(複数日)
-本ブランチ(`feature/vad-picks-pyannote-4x`)を master にマージしたあと、下記 3 つを
-別ブランチで順次対応する(各 1 日では収まらない見込み)。
+## [📌方針 2026-05-30 / 改 2026-06-05] 追加モデル続行・UI 調整・配布形態の段階対応(複数日)
 
-### a) backendCandidates の残り picks 実装
-- `docs/design/feature-backend-mgmt/backendCandidates.html` で ✓ を付けた
-  ASR 3 件 / Translator 3 件をまだ実装していない:
-  - ASR: OpenAI Whisper API / Deepgram / Google Cloud STT
-  - Translator: DeepL API / OpenAI GPT-4o-mini / Anthropic Claude Haiku
-- token が用意できた backend は `tests/test_<backend>_large.py` を必ず追加(新方針)。
-- 進めるペースはユーザ要望ベース。Phase F2 として 1〜2 件ずつ別ブランチで。
-
-### b) UI 調整
-- 既に保留されている UI 折り畳み(設定セクション / ステータス)
-- start 失敗時の表示動線(`ffa68e5` で status_label に出すようにしたが、もう一段
-  目立つ通知バナー等の検討余地)
-- 詳細ダイアログから抜けたときの再描画タイミング
-- 認証ダイアログ閉じた直後の状態反映の挙動
-
-### c) 配布形態(実行環境のポーティング / インストーラ)
-- 現状は `git clone + uv sync --extra cpu` または `--extra cuda --extra vad-extra` 前提。
-  非開発者には敷居が高い。
-- 検討案:
-  - **PyInstaller / Nuitka で one-folder** にして zip 配布
-  - **uv tool** での配布(まだ実験的)
-  - **Windows MSI**(WiX 等)
-- 配布方針「CPU を floor、GPU は opt-in」と整合する形を選ぶ。
-- 副題: モデル DL は配布物に含めず、初回起動時 DL とする(配布物サイズ削減)。
-
-### d) ライセンス規約のあるモデルを README に明記
-- pyannote.audio(`pyannote/segmentation-3.0`)— 利用同意必須(gated)
-- Picovoice Cobra — 個人非商用無料 tier / 商用は要ライセンス
-- 各 cloud backend(OpenAI / DeepL / Anthropic / GCP / AWS)の API 利用規約
-- README に「対応 backend と必要な利用同意 / アカウント」のセクションを追加。
-- 配布時に同意忘れで動かないケースが多いので、起動時のテストや warning も併設検討。
+| 項目 | 状態 | 備考 |
+|---|---|---|
+| **a) backendCandidates の残り picks 実装** | ✅完了 | ASR(openai_whisper_api / deepgram / google_stt) と Translator(deepl / openai_gpt / anthropic_claude) を `feature/asr-picks` / `feature/translator-picks` で実装。後続で TTS picks(piper / elevenlabs / openai_tts / google_cloud_tts) も `feature/tts-picks` で実装済 |
+| **d) ライセンス規約のあるモデルを README に明記** | ✅完了 | 2026-06-05 に README 全体を整理(VAD / Capture / ASR / Translator / TTS の各セクションに必要な利用同意 URL を併記。Windows 専用機能セクションも追加) |
+| **b) UI 調整** | ⏳一部完了 / 一部未着手 | 折り畳みは `feature/ui-sections-split` + `feature/ui-adjustments` で完了。NotificationBanner も追加済。残: 詳細ダイアログから抜けたときの再描画タイミング / 認証ダイアログ閉じた直後の状態反映の挙動(個別エントリ化するか、ドッグフーディングで再検討) |
+| **c) 配布形態(実行環境のポーティング / インストーラ)** | ⏳保留(未着手) | 現状は `git clone + uv sync --extra cpu` 前提。非開発者向け配布(PyInstaller / Nuitka one-folder / Windows MSI 等)は未着手。モデル DL は配布物に含めず初回起動時 DL とする方針は維持 |
 
 ---
 
@@ -340,7 +315,17 @@
   - パラメータを調整して対応した。
 ---
 
-## [2026-05-26 / 改 2026-05-29] 入力処理レイヤーの改善案
+## [✅完了 2026-06-05 (Windows のみ) / ⏳残り保留] 入力処理レイヤーの改善案
+- **Windows 部分は完了**: `feature/proctap-backend` + `feature/proctap-process-list` +
+  `refactor/process-peak-worker` で `ProcTapCaptureBackend`(WASAPI Process Loopback)+
+  プロセス選択ダイアログ + 試聴メータを実装。per-app / per-process キャプチャ要件は
+  Windows で達成。
+- **残: Linux / Mac** の per-process キャプチャは別エントリ「Linux/Mac の process-kind 列挙」
+  で起票済み(着手トリガ待ち)。
+- **当時の議論(参考)**: 案 B(入力処理を別 module 化、ネイティブ API 直叩き)を採用し、
+  Windows = WASAPI Process Loopback の C++/Rust 実装(`proc-tap` PyPI パッケージ経由)に
+  落とし込んだ。下記は当時の検討メモ。
+
 - **背景**: 現状 `soundcard` ライブラリで **post-mix loopback のみ**(再生デバイス単位の最終出力をキャプチャ)。下記の要件は MVP では満たせないが、いずれ要望が出ると想定される:
   - **per-app / per-process キャプチャ**(対象アプリだけ取りたい、他は無音)
   - 複数ソースの mix / 仮想ルーティング / 録画混在
@@ -364,12 +349,15 @@
 
 ---
 
-## [2026-05-26] 音声入力状態の可視化UI(サブダイアログ)
-- **内容**: 入力デバイスからの音量レベルを時系列グラフで可視化するサブダイアログを追加する(メモリ使用状況のような帯グラフのイメージ)。
-- **背景**: 「入力デバイスは選んだが本当に音が入っているか分からない」状況が発生しうる。フィードバックや無音の切り分けを目視できると初期セットアップ時のトラブルシュートが楽になる。
-- **対応の見送り理由**: MVPの達成ライン(英語YouTubeを日本語音声で聞ける)には必須ではないため。実装には音量メータ(peak/RMS)算出、定期 UI 更新スレッド、サブダイアログの作成が必要で、それなりの工数になる。
-- **再検討トリガ**: ユーザがセットアップで詰まる頻度が増えた時 / マルチデバイス環境でのデバッグ要望が出た時。
-- **備考**: ピーク/RMS は `np.abs(pcm).max()` / `np.sqrt((pcm**2).mean())` 程度で安価に計算可能。Input スレッドからキャプチャ済みチャンクをタップして UI に渡す形にすれば既存設計と整合する。
+## [✅完了 2026-06-05] 音声入力状態の可視化UI(サブダイアログ)
+- **対応ブランチ**: `feature/proctap-process-list` + `refactor/process-peak-worker`
+- **対応内容**: `ProcessSelectDialog` 内のレベルメータ(`CTkProgressBar`)で実現。
+  pycaw `IAudioMeterInformation.GetPeakValue()` を永続 COM ワーカ(`_PeakWorker`)が
+  5fps で内部 poll し、GUI スレッドは `latest_peak()` を atomic 読みするだけ。
+  「鳴っているか / 入力できているか」の視覚確認はプロセス選択 UI 内で完結する。
+- **元の要望との差分**: 元案は「常駐サブダイアログで時系列グラフ」だったが、実利用上は
+  プロセス選択時の試聴メータで十分実用と判断。本番動作中の常駐メータが必要になったら
+  別エントリで再起票する。
 
 ---
 
