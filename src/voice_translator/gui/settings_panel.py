@@ -120,7 +120,8 @@ class SettingsPanel(ctk.CTkFrame):
         # ControlPanel への逆参照(MainWindow が後から `set_control_panel` で注入)。
         # PROCESS kind 入力ソースの PID 選択完了など、`devices.input` が変わったときに
         # ControlPanel.refresh_ready_state() を呼んで「プロセス未選択 → ▶ 開始」へ
-        # 即時遷移させるための窓。未注入(None)でも 3 秒の周期 refresh で復帰する。
+        # 即時遷移させるための窓。未注入(None)時はベストエフォートで sync を見送る
+        # (テスト時の差し込みや、SettingsPanel 単体動作の場合に対する保険)。
         self._control_panel = None
 
         self._backend_vars: dict[LayerKind, ctk.StringVar] = {}
@@ -881,7 +882,6 @@ class SettingsPanel(ctk.CTkFrame):
         # ControlPanel に「ready 状態を見直して」と通知。
         # PROCESS kind で PID 未選択 → 選択完了 になった瞬間に、Start ボタンの表記が
         # 「プロセス未選択(disable)→ ▶ 開始(normal)」へ遷移する。
-        # 通知が落ちても周期 refresh(3 秒)で復帰するが、即応性のため明示通知する。
         if self._control_panel is not None:
             try:
                 self._control_panel.refresh_ready_state()
@@ -937,8 +937,8 @@ class SettingsPanel(ctk.CTkFrame):
         """ControlPanel への逆参照を注入する(MainWindow が生成後に呼ぶ)。
 
         参照を持つことで、`devices.input` を `set_setting` で書いた直後に
-        ControlPanel.refresh_ready_state() を直接呼べる。注入されていない場合、
-        Start ボタンの再評価は ControlPanel の 3 秒周期 refresh まで遅延する。
+        ControlPanel.refresh_ready_state() を直接呼べる。注入されていない場合は
+        この経路では通知されない(レイヤ状態変化など別の経路でしか sync しない)。
         """
         self._control_panel = panel
 
