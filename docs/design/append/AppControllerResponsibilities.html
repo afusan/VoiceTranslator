@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>AppController 責務マップと分割案</title>
+<style>
+  body { font-family: "Yu Gothic UI", "Meiryo", sans-serif; max-width: 1280px; margin: 1.5em auto; padding: 0 1.2em; color: #1f2937; line-height: 1.6; }
+  h1 { border-bottom: 3px solid #2563eb; padding-bottom: 0.3em; }
+  h2 { border-bottom: 2px solid #94a3b8; padding-bottom: 0.2em; margin-top: 2em; color: #1e3a8a; }
+  h3 { margin-top: 1.4em; color: #1e40af; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-family: "Cascadia Code", Consolas, monospace; font-size: 0.92em; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.93em; }
+  th, td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: #e0e7ff; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .small { font-size: 0.88em; color: #475569; }
+
+  /* responsibility map */
+  .map {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr 1fr;
+    grid-gap: 14px;
+    align-items: stretch;
+    margin: 1.5em 0;
+  }
+  .col { display: flex; flex-direction: column; gap: 10px; }
+  .group {
+    border: 2px solid #6366f1;
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, #eef2ff, #e0e7ff);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  .group .title { font-weight: 700; color: #312e81; font-size: 0.98em; margin-bottom: 4px; }
+  .group .desc { font-size: 0.82em; color: #4338ca; margin-bottom: 6px; }
+  .group ul { margin: 0; padding-left: 1.1em; font-size: 0.86em; color: #1e293b; }
+  .group ul li { margin: 1px 0; }
+  .group.center { background: linear-gradient(180deg,#fef3c7,#fde68a); border-color: #d97706; }
+  .group.center .title { color: #78350f; }
+  .group.center .desc { color: #92400e; }
+  .group.ext {
+    background: linear-gradient(180deg,#dcfce7,#bbf7d0);
+    border-color: #15803d;
+  }
+  .group.ext .title { color: #14532d; }
+  .group.ext .desc { color: #166534; }
+  .group.gui {
+    background: linear-gradient(180deg,#fae8ff,#f5d0fe);
+    border-color: #a21caf;
+  }
+  .group.gui .title { color: #6b21a8; }
+  .group.gui .desc { color: #86198f; }
+
+  .legend { font-size: 0.85em; color: #475569; margin-top: 0.5em; }
+  .legend span { display: inline-block; padding: 2px 8px; border-radius: 4px; margin-right: 8px; font-weight: 600; }
+  .legend .indigo { background: #e0e7ff; color: #312e81; }
+  .legend .amber  { background: #fde68a; color: #78350f; }
+  .legend .green  { background: #bbf7d0; color: #14532d; }
+  .legend .purple { background: #f5d0fe; color: #6b21a8; }
+
+  /* split table */
+  .pill { display: inline-block; background:#e0e7ff; color:#312e81; padding:1px 6px; border-radius: 4px; font-size: 0.82em; margin: 1px 2px; }
+  .pill.warn { background:#fde68a; color:#78350f; }
+  .pill.ok   { background:#bbf7d0; color:#14532d; }
+
+  blockquote.note {
+    border-left: 4px solid #2563eb;
+    background: #eff6ff;
+    padding: 0.6em 0.9em;
+    color: #1e3a8a;
+    margin: 1em 0;
+    font-size: 0.92em;
+  }
+</style>
+</head>
+<body>
+
+<h1>AppController 責務マップと分割案</h1>
+<p class="small">
+作成: 2026-06-05。<code>src/voice_translator/common/app_controller.py</code>(約 1,361 行)を読み出して責務をグルーピングしたもの。
+将来のリファクタ判断材料として整理する(pendList <em>「AppController の責務分離(リファクタ予約)」</em> 参照)。
+</p>
+
+<!-- =============================================== -->
+<h2>1. 現状の責務マップ</h2>
+
+<p>
+AppController は GUI と内部モジュールを橋渡しする「中心ハブ」だが、現状は <strong>9 つの異なる責務</strong> を 1 クラスに抱え込んでいる。
+中央が AppController 本体、左右が GUI 側と内部側、上下がデータの流れ。
+</p>
+
+<div class="map">
+  <!-- 左カラム: GUI 側に向くもの -->
+  <div class="col">
+    <div class="group gui">
+      <div class="title">A. UI ブリッジ</div>
+      <div class="desc">GUI からのコールバック窓口と発信</div>
+      <ul>
+        <li><code>set_callbacks(...)</code></li>
+        <li><code>add_status_listener()</code> / Subscription</li>
+        <li><code>_emit_status()</code>(複数 listener 並行通知)</li>
+        <li><code>_on_utterance_done</code> / <code>_on_text_ready</code> / <code>_on_fatal</code> / <code>_on_warn</code></li>
+      </ul>
+    </div>
+
+    <div class="group gui">
+      <div class="title">B. 設定ファサード</div>
+      <div class="desc">ConfigStore のラッパ + 派生プロパティ</div>
+      <ul>
+        <li><code>get_setting()</code> / <code>set_setting()</code></li>
+        <li><code>save_settings()</code> / <code>load_settings()</code></li>
+        <li><code>output_mode</code> プロパティ(<code>backends.tts</code> から派生)</li>
+        <li><code>_strip_volatile_inputs_before_save</code>(PROCESS source 非永続化)</li>
+        <li><code>_active_layers()</code>(text_only モードで TTS/Output 除外)</li>
+        <li><code>set_setting</code> 内の言語切替即時反映 + backend 切替時の evict</li>
+      </ul>
+    </div>
+
+    <div class="group gui">
+      <div class="title">C. ステータス集約・閲覧</div>
+      <div class="desc">UI が「今どうなっている?」を見る窓口</div>
+      <ul>
+        <li><code>get_model_status()</code> / <code>get_all_model_statuses()</code></li>
+        <li><code>get_recent_durations(layer)</code>(直近 5 件 リングバッファ)</li>
+        <li><code>get_status_summary()</code>(全レイヤ状態 + エラー集約をテキスト化)</li>
+        <li><code>_collect_recent_errors()</code></li>
+        <li><code>get_layer_device(layer)</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 中央: コア -->
+  <div class="col">
+    <div class="group center" style="min-height: 100%;">
+      <div class="title">⭐ AppController(現状)</div>
+      <div class="desc">9 つの責務を抱える「ファサード兼実装」</div>
+      <ul>
+        <li>UI ブリッジ(A)</li>
+        <li>設定ファサード(B)</li>
+        <li>ステータス集約(C)</li>
+        <li>Credentials 連携(D)</li>
+        <li>Backend メタ問い合わせ(E)</li>
+        <li>Backend ロード/eviction(F)</li>
+        <li>Pipeline ライフサイクル(G)</li>
+        <li>発話完了処理(H)</li>
+        <li>観測装置(I)</li>
+      </ul>
+      <div class="desc" style="margin-top:8px;">
+        所有: <code>_registry</code> / <code>_config</code> / <code>_backends</code>(layer→backend) / <code>_coord</code> /
+        <code>_credentials</code> / <code>_stage_dump</code> / <code>_ledger</code> / <code>_sequence</code> / 3 つの logger /
+        <code>_load_lock</code> / <code>_loader_thread</code> / <code>_restart_thread</code>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右カラム: 内部側 -->
+  <div class="col">
+    <div class="group">
+      <div class="title">D. Credentials 連携</div>
+      <div class="desc">API key の保管 + 認証検証フロー</div>
+      <ul>
+        <li><code>get/set/delete_credential()</code></li>
+        <li><code>get_credential_spec(layer, name)</code></li>
+        <li><code>verify_and_save_credentials(...)</code>(verify → 保存 → ステータス更新)</li>
+        <li><code>is_backend_verified()</code> / <code>invalidate_verification()</code></li>
+        <li>所有: <code>CredentialsStore</code>(遅延初期化)</li>
+      </ul>
+    </div>
+
+    <div class="group">
+      <div class="title">E. Backend メタ問い合わせ</div>
+      <div class="desc">backend をインスタンス化せず classmethod でメタ取得</div>
+      <ul>
+        <li><code>get_capture_kind(name)</code></li>
+        <li><code>get_supported_input_languages(name)</code></li>
+        <li><code>supports_auto_detect(name)</code></li>
+        <li><code>get_supported_target_languages(name)</code></li>
+        <li><code>get_supported_output_languages(name)</code></li>
+        <li><code>get_backend_capability_hint(layer, name)</code></li>
+      </ul>
+    </div>
+
+    <div class="group">
+      <div class="title">F. Backend ロード/eviction</div>
+      <div class="desc">backend インスタンスのライフサイクル管理</div>
+      <ul>
+        <li><code>load_models()</code> / <code>load_model_layer(layer)</code></li>
+        <li><code>reload_model_layer()</code> / <code>evict_model_layer()</code></li>
+        <li><code>_load_layer_locked()</code> / <code>_evict_backend_locked()</code></li>
+        <li><code>_subscribe_backend()</code>(BackendBase の状態購読)</li>
+        <li><code>load_models_async()</code> / <code>load_auto_load_layers_async()</code></li>
+        <li><code>get_auto_load_layers()</code> / <code>_check_missing_credentials_gate()</code></li>
+        <li>所有: <code>_backends</code> dict / <code>_backend_subscriptions</code> / <code>_load_lock</code></li>
+      </ul>
+    </div>
+
+    <div class="group">
+      <div class="title">G. Pipeline ライフサイクル</div>
+      <div class="desc">Coordinator の生成/起動/停止/再起動</div>
+      <ul>
+        <li><code>is_running</code> / <code>is_loading</code> / <code>is_loaded</code>(プロパティ)</li>
+        <li><code>start_pipeline()</code> / <code>start_pipeline_async()</code></li>
+        <li><code>stop_pipeline()</code></li>
+        <li><code>restart_pipeline_async()</code>(P4)</li>
+        <li><code>_start_coord()</code>(Coordinator + Logger 群を組み立てて起動)</li>
+        <li><code>DeviceValidator.validate()</code> 呼び出し</li>
+      </ul>
+    </div>
+
+    <div class="group">
+      <div class="title">H. 発話完了処理</div>
+      <div class="desc">ledger.pop() を受けて logger 群に書き、UI へ通知</div>
+      <ul>
+        <li><code>_handle_text_ready(record)</code></li>
+        <li><code>_handle_utterance_done(record)</code></li>
+        <li><code>_push_recent_durations(record)</code>(リングバッファ更新)</li>
+        <li><code>_handle_dropped(seq_ids, stage)</code></li>
+      </ul>
+    </div>
+
+    <div class="group">
+      <div class="title">I. 観測装置の組み立て</div>
+      <div class="desc">Logger / StageDump / ProcessTimeLogger を毎回生成</div>
+      <ul>
+        <li><code>_build_stage_dump()</code></li>
+        <li><code>_build_dump_meta(input_id, output_id)</code></li>
+        <li><code>_start_coord()</code> 内で <code>TranslationLogger</code> / <code>TextLogger</code> /
+          <code>ProcessTimeLogger</code> を生成して Coordinator に注入</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<p class="legend">
+  <span class="purple">紫: GUI 側に向く責務</span>
+  <span class="amber">琥: AppController 中央(現状)</span>
+  <span class="green">緑: 内部モジュール側に向く責務</span>
+</p>
+
+<blockquote class="note">
+  <strong>所有しているスレッド・ロック</strong>:
+  <code>_load_lock</code>(load/evict/start_coord の競合防止) / <code>_listeners_lock</code>(multi-listener) /
+  <code>_loader_thread</code>(Phase B 非同期ロード) / <code>_restart_thread</code>(P4 動作中 restart)。
+  <br>
+  <strong>外部依存</strong>:
+  <code>BackendRegistry</code> / <code>ConfigStore</code> / <code>CredentialsStore</code> /
+  <code>PipelineCoordinator</code> / <code>UtteranceLedger</code> / <code>SequenceGenerator</code> /
+  <code>DeviceValidator</code> / 3 つの Logger / <code>StageDumpWriter</code>。
+</blockquote>
+
+<!-- =============================================== -->
+<h2>2. 責務の関連性(データ・呼び出しの流れ)</h2>
+
+<table>
+  <tr><th>方向</th><th>From → To</th><th>内容</th></tr>
+  <tr>
+    <td>UI → 設定</td>
+    <td>GUI → B</td>
+    <td>backend 選択 / 言語切替 / デバイス切替 / log 出力先設定</td>
+  </tr>
+  <tr>
+    <td>設定 → backend 入替</td>
+    <td>B → F</td>
+    <td><code>set_setting("backends", layer, name)</code> が該当レイヤ evict + 自動 reload を発火</td>
+  </tr>
+  <tr>
+    <td>設定 → Pipeline</td>
+    <td>B → G</td>
+    <td>言語切替は動作中 Coordinator に即時転送(<code>set_languages</code>)</td>
+  </tr>
+  <tr>
+    <td>UI → ロード</td>
+    <td>GUI → F</td>
+    <td>「↻ ロード」ボタン → <code>load_models_async</code> でまとめてロード</td>
+  </tr>
+  <tr>
+    <td>UI → 起動/停止</td>
+    <td>GUI → G</td>
+    <td>「▶ 開始」/「■ 停止」<br><code>start_pipeline_async</code> は F を経由してから _start_coord</td>
+  </tr>
+  <tr>
+    <td>Backend → ステータス</td>
+    <td>F → A → GUI</td>
+    <td>BackendBase の状態変化を <code>_subscribe_backend</code> で拾い、<code>_emit_status</code> で全 listener に流す</td>
+  </tr>
+  <tr>
+    <td>Pipeline → ハンドラ</td>
+    <td>G → H → A → GUI</td>
+    <td>Coordinator の <code>on_text_ready</code> / <code>on_utterance_done</code> を H で受け、logger と UI に分配</td>
+  </tr>
+  <tr>
+    <td>UI → Credentials</td>
+    <td>GUI(CredentialDialog) → D → F</td>
+    <td><code>verify_and_save_credentials</code> 成功で対象レイヤの状態を MISSING → LOADED に更新</td>
+  </tr>
+  <tr>
+    <td>UI → メタ問い合わせ</td>
+    <td>GUI(SettingsPanel) → E</td>
+    <td>backend 切替時の対応言語動的構築、Capture kind 別 UI 切替</td>
+  </tr>
+  <tr>
+    <td>UI → ステータス閲覧</td>
+    <td>GUI(ControlPanel) → C</td>
+    <td>3 秒ごとに <code>get_status_summary</code> をテキストボックスに反映</td>
+  </tr>
+</table>
+
+<!-- =============================================== -->
+<h2>3. 分割提案</h2>
+
+<p>
+現状 9 責務を 1 クラスに詰めているのを、<strong>5 つのコラボレータ + Facade としての AppController</strong> に再構成する案。
+依存方向は「GUI 側 ← Facade ← 内部コラボレータ」を守る。
+</p>
+
+<h3>3-1. 5 つのコラボレータ案</h3>
+
+<table>
+  <tr><th>新クラス案</th><th>含める責務</th><th>主要 API(抜粋)</th><th>所有する状態</th></tr>
+  <tr>
+    <td><strong>BackendLoaderService</strong></td>
+    <td>F(Backend ロード/eviction)<br>+ E の一部(メタ問い合わせ。registry に近いので一緒に置く)</td>
+    <td>
+      <code>load_layer(layer)</code><br>
+      <code>load_all_async(on_done, on_failed)</code><br>
+      <code>evict_layer(layer)</code><br>
+      <code>get_backend(layer)</code><br>
+      <code>get_capture_kind(name)</code> 等の classmethod 問い合わせ
+    </td>
+    <td><code>_backends</code> / <code>_backend_subscriptions</code> / <code>_load_lock</code> / <code>_loader_thread</code></td>
+  </tr>
+  <tr>
+    <td><strong>StatusBroadcaster</strong></td>
+    <td>A + C(UI listener 管理 + ステータス集約・閲覧)</td>
+    <td>
+      <code>add_listener(cb) -> Subscription</code><br>
+      <code>emit(layer, status)</code><br>
+      <code>get_status(layer)</code><br>
+      <code>get_summary()</code><br>
+      <code>get_recent_durations(layer)</code>
+    </td>
+    <td><code>_ui_status_listeners</code> / <code>_recent_durations</code> / 旧 single callback の互換層</td>
+  </tr>
+  <tr>
+    <td><strong>SettingsFacade</strong></td>
+    <td>B(設定ファサード + 派生)</td>
+    <td>
+      <code>get/set/save/load</code><br>
+      <code>output_mode</code> プロパティ<br>
+      <code>active_layers()</code><br>
+      <code>strip_volatile_inputs()</code>
+    </td>
+    <td><code>_config</code>(ConfigStore)+ 言語即時転送のための Coordinator 参照(弱結合)</td>
+  </tr>
+  <tr>
+    <td><strong>CredentialsCoordinator</strong></td>
+    <td>D(Credentials)</td>
+    <td>
+      <code>get/set/delete/has_credential</code><br>
+      <code>get_credential_spec(layer, name)</code><br>
+      <code>verify_and_save(...)</code><br>
+      <code>is_verified(name)</code> / <code>invalidate(name)</code>
+    </td>
+    <td><code>_credentials</code>(<code>CredentialsStore</code>)</td>
+  </tr>
+  <tr>
+    <td><strong>PipelineRunner</strong></td>
+    <td>G + H + I<br>(Pipeline ライフサイクル + 発話完了処理 + 観測装置組立)</td>
+    <td>
+      <code>start_async(on_started, on_failed)</code><br>
+      <code>stop()</code><br>
+      <code>restart_async(on_restarted, on_failed)</code><br>
+      <code>is_running</code> プロパティ<br>
+      内部で <code>_handle_text_ready</code> / <code>_handle_utterance_done</code>
+    </td>
+    <td><code>_coord</code> / <code>_ledger</code> / <code>_sequence</code> / 3 つの logger / <code>_stage_dump</code> / <code>_restart_thread</code></td>
+  </tr>
+</table>
+
+<h3>3-2. AppController の縮小後の役割</h3>
+
+<table>
+  <tr><th>残す責務</th><th>内容</th></tr>
+  <tr>
+    <td>Facade(GUI からの単一窓口)</td>
+    <td>GUI からのメソッド呼び出しを上記 5 コラボレータに委譲する。互換性のため既存 API シグネチャは保つ</td>
+  </tr>
+  <tr>
+    <td>コラボレータの組み立て</td>
+    <td><code>__init__</code> で 5 つを生成し、依存関係を配線</td>
+  </tr>
+  <tr>
+    <td>横断的なフロー</td>
+    <td>例: <code>verify_and_save_credentials</code> 成功 → <code>BackendLoaderService.evict_layer</code> → <code>StatusBroadcaster.emit</code> の連携</td>
+  </tr>
+</table>
+
+<h3>3-3. 期待される効果</h3>
+
+<table>
+  <tr><th>項目</th><th>現状</th><th>分割後</th></tr>
+  <tr><td>ファイル行数</td><td>1,361 行</td><td>各 200〜400 行 ×5 + Facade 200 行程度</td></tr>
+  <tr><td>テスト</td><td>AppController 一塊で fixture が肥大化</td><td>各コラボレータを単体テスト可、Facade は組合せだけ確認</td></tr>
+  <tr><td>並行性の責任境界</td><td>1 クラスに 3 種類のロック</td><td>各コラボレータが自分のロックを所有(明確)</td></tr>
+  <tr><td>新機能追加時の影響</td><td>巨大クラスのどこに置くか毎回判断</td><td>責務テーブルから所属を一意に決定</td></tr>
+  <tr><td>マルチ listener 等の発展</td><td>StatusBroadcaster が独立したら listener 種別の拡張がしやすい</td><td>—</td></tr>
+</table>
+
+<h3>3-4. 想定リスクと対策</h3>
+
+<table>
+  <tr><th>リスク</th><th>対策</th></tr>
+  <tr>
+    <td>GUI が AppController の現 API に多数依存しているため、I/F を変えると破壊的</td>
+    <td>AppController を Facade として残し、API を 100% 維持。中身だけ委譲に書き換える</td>
+  </tr>
+  <tr>
+    <td>コラボレータ間の循環参照(SettingsFacade が backend 切替で BackendLoaderService.evict を呼びたい等)</td>
+    <td>「設定変更を通知する Hook」を <code>SettingsFacade</code> から発火し、<code>BackendLoaderService</code> がそれを購読する形(Observer)</td>
+  </tr>
+  <tr>
+    <td>テスト fixture が一気に書き直しになる</td>
+    <td>段階的に進める: まず <code>StatusBroadcaster</code> だけ抽出 → テスト追加 → 次に <code>CredentialsCoordinator</code> 抽出 …</td>
+  </tr>
+  <tr>
+    <td>分割しすぎて Facade が薄い委譲だけになる(<em>「Pass-through hell」</em>)</td>
+    <td>横断的フロー(<code>verify_and_save</code> → 状態更新 など)は Facade に集約。小さい I/F は直接コラボレータを露出する選択肢も検討</td>
+  </tr>
+</table>
+
+<!-- =============================================== -->
+<h2>4. 段階分割の推奨順</h2>
+
+<table>
+  <tr><th>#</th><th>抽出する責務</th><th>難易度</th><th>恩恵</th></tr>
+  <tr>
+    <td>1</td>
+    <td><strong>StatusBroadcaster</strong>(A+C)</td>
+    <td>小</td>
+    <td>multi-listener / status_summary がまとまる。test fixture 軽量化の恩恵大</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><strong>CredentialsCoordinator</strong>(D)</td>
+    <td>小</td>
+    <td>外部依存(<code>CredentialsStore</code>)が閉じる。Phase E-2 の責務を 1 箇所に</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><strong>BackendLoaderService</strong>(F + E)</td>
+    <td>中</td>
+    <td>1, 2 ができていれば evict 時の状態通知が綺麗に書ける</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><strong>SettingsFacade</strong>(B)</td>
+    <td>中</td>
+    <td>3 の BackendLoaderService と Observer で繋ぐ</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><strong>PipelineRunner</strong>(G+H+I)</td>
+    <td>中〜大</td>
+    <td>最後にやる(Coordinator + Logger 群 + ハンドラを一気に動かすので影響範囲が広い)</td>
+  </tr>
+</table>
+
+<p class="small">
+※ 各段階で <code>AppController</code> の公開 API は維持(GUI 側を触らず済む)。
+コミット単位は 1 段階 = 1 ブランチ。
+</p>
+
+</body>
+</html>
