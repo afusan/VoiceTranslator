@@ -513,7 +513,22 @@ class ControlPanel(ctk.CTkFrame):
 
     def _tick_status_refresh(self) -> None:
         self._refresh_status_text()
+        # ボタン状態(▶ 開始 / プロセス未選択 / ロード状況等)も周期で同期する。
+        # `_capture_source_required_but_empty` 等は ConfigStore を直接読むので、外部から
+        # `devices.input` が変わっただけでは _sync_ready_state が呼ばれない経路がある。
+        # 周期 refresh でフォールバックとして整合性を確保する(通常は SettingsPanel から
+        # `refresh_ready_state` で即時更新されるが、その通知が落ちても 3 秒で復帰)。
+        self._sync_ready_state()
         self._schedule_status_refresh()
+
+    def refresh_ready_state(self) -> None:
+        """外部(SettingsPanel 等)から「ボタン状態を見直して」と依頼するための公開窓。
+
+        `_sync_ready_state` は内部実装名で呼び出し側にとっては紛らわしい。動作中
+        / 起動中などの遷移中は内部で何もしないので、呼び出し側はタイミングを気に
+        しなくてよい。SettingsPanel のプロセス選択ダイアログから PID 確定後に呼ぶ。
+        """
+        self._sync_ready_state()
 
     def _sync_ready_state(self) -> None:
         """各レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。
