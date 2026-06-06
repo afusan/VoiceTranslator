@@ -22,6 +22,9 @@ py -m uv sync --extra cpu
 #    あるいは NVIDIA GPU を持っている人向け(自動で CUDA が使われる、ダウンロード約3GB増)
 # py -m uv sync --extra cuda
 
+#    Windows で per-process キャプチャ(特定アプリの音だけ翻訳)を使いたい場合は追加:
+# py -m uv sync --extra cpu --extra capture-proctap
+
 # 3) 起動(GUI が立ち上がる) — sync 時と **同じ extras を付ける** こと
 py -m uv run --extra cpu python -m voice_translator
 # あるいは GPU 版なら:
@@ -61,7 +64,7 @@ py -m uv run --extra cpu python -m voice_translator
 
 | レイヤ | MVP実装 | 役割 |
 |--------|---------|------|
-| 音声取得 | soundcard | デバイス/LBから 16kHz/mono/float32 で取得 |
+| 音声取得 | soundcard / **proc-tap (Win)** | デバイス/LB or per-process キャプチャから 16kHz/mono/float32 で取得 |
 | VAD | silero-vad | 発話区切り検出 |
 | ASR | faster-whisper | 書き起こし(transcribe固定) |
 | 翻訳 | NLLB-200 distilled 600M | 200言語対応のローカル翻訳 |
@@ -77,6 +80,18 @@ py -m uv run --extra cpu python -m voice_translator
 `--extra vad-extra` 等で追加できる backend は、**それぞれが要求する利用同意 /
 ライセンスへの同意が前提**になります。導入前に対応する規約を確認・受諾してください。
 本アプリは規約 URL を起動時に表示するだけで、自動で同意は行いません。
+
+### 音声取得 (Capture)
+
+| backend | 形態 | 必要な利用同意 / ライセンス |
+|---|---|---|
+| `soundcard` (MVP) | ローカル(クロス OS) | BSD ライセンス — 同意手続き不要 |
+| `proc-tap` (Windows / per-process) | ローカル(Windows 専用) | MIT ライセンス — 同意手続き不要。`uv sync --extra capture-proctap` で `proc-tap` / `pycaw` / `psutil` を追加 |
+
+`proc-tap` は WASAPI Process Loopback を使う Windows 専用の per-process キャプチャ。
+特定アプリ(ブラウザのタブ / Discord 通話 等)の音だけを翻訳したい場合に使う。
+SettingsPanel の「プロセス選択…」ダイアログから音声出力中のプロセスを選択する。
+PID はアプリ再起動で変わるため永続化しない仕様(毎回選択し直し)。
 
 ### VAD
 
