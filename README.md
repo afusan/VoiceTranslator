@@ -71,7 +71,9 @@ py -m uv run --extra cpu python -m voice_translator
 | TTS | SAPI (pyttsx3) | 音声合成(WAV経由でPCM取得) |
 | 音声出力 | soundcard | 指定デバイスで再生 |
 
-各レイヤは差し替え可能な抽象I/Fで設計(Phase 2 以降で別実装追加予定)。
+各レイヤは差し替え可能な抽象 I/F で設計。MVP 実装に加え、ASR / 翻訳 / TTS には
+**ローカル / クラウドの追加 backend が登録済み**(下記「追加 backend と利用同意・
+ライセンス」参照)。設定パネルのプルダウンから動作中に切り替え可能。
 
 ---
 
@@ -102,15 +104,44 @@ PID はアプリ再起動で変わるため永続化しない仕様(毎回選択
 | `pyannote.audio` (`pyannote/segmentation-3.0`) | ローカル(gated) | HuggingFace でモデル利用同意必須: <https://huggingface.co/pyannote/segmentation-3.0> 。HF Token も必要 |
 | `pvcobra` (Picovoice Cobra) | ローカル | Apache 2.0(個人非商用) / 商用利用は別途 Picovoice 商用ライセンス: <https://picovoice.ai/pricing/> 。Access Key 必須 |
 
-### ASR / Translator / TTS(現状は MVP のみ。追加検討中の backend は下記)
+### ASR(書き起こし)
 
-| backend | 種別 | 規約 |
+`--extra asr-whisper-official` / `--extra asr-openai-api` / `--extra asr-google-stt` /
+`--extra asr-deepgram` で個別に追加できる。
+
+| backend | 形態 | 必要な利用同意 / ライセンス |
 |---|---|---|
-| OpenAI Whisper API (検討中) | クラウド | OpenAI API 利用規約: <https://openai.com/policies/terms-of-use> |
-| Deepgram (検討中) | クラウド | Deepgram Terms: <https://deepgram.com/terms-of-service> |
-| Google Cloud STT / Translation (検討中) | クラウド | GCP 利用規約 / 各サービス規約 |
-| DeepL API (検討中) | クラウド | DeepL API 利用規約: <https://www.deepl.com/pro-license> |
-| Anthropic Claude (検討中) | クラウド | Anthropic Usage Policies: <https://www.anthropic.com/legal/usage-policy> |
+| `faster_whisper` (MVP) | ローカル | MIT(同梱) — 同意手続き不要 |
+| `openai_whisper` | ローカル | MIT — モデルは初回起動で HF からダウンロード |
+| `openai_whisper_api` | クラウド | OpenAI API 利用規約: <https://openai.com/policies/terms-of-use> 。API key 必要 |
+| `google_stt` | クラウド | GCP / Google Cloud STT 利用規約: <https://cloud.google.com/terms> 。サービスアカウント JSON 必要 |
+| `deepgram` | クラウド | Deepgram Terms: <https://deepgram.com/terms-of-service> 。API key 必要 |
+
+### Translator(翻訳)
+
+`--extra translator-deepl` / `--extra translator-openai-api` / `--extra translator-anthropic`
+で個別に追加できる。
+
+| backend | 形態 | 必要な利用同意 / ライセンス |
+|---|---|---|
+| `nllb200` (MVP) | ローカル | NLLB-200 distilled 600M(MIT、同梱) — 同意手続き不要。3.3B モデルも選択可 |
+| `deepl` | クラウド | DeepL API 利用規約: <https://www.deepl.com/pro-license> 。API key 必要 |
+| `openai_gpt` | クラウド | OpenAI API 利用規約: <https://openai.com/policies/terms-of-use> 。API key 必要 |
+| `anthropic_claude` | クラウド | Anthropic Usage Policies: <https://www.anthropic.com/legal/usage-policy> 。API key 必要 |
+
+### TTS(音声合成)
+
+`--extra tts-piper` / `--extra tts-elevenlabs` / `--extra tts-openai-api` /
+`--extra tts-google` で個別に追加できる。TTS=「(なし)」を選ぶとテキスト字幕モードになる
+(音声合成しない構成)。
+
+| backend | 形態 | 必要な利用同意 / ライセンス |
+|---|---|---|
+| `sapi` (MVP) | ローカル(Windows 同梱) | OS 同梱 — 同意手続き不要 |
+| `piper` | ローカル(クロス OS) | MIT。voice モデルは HuggingFace から DL(モデルごとに MIT 系) |
+| `elevenlabs` | クラウド | ElevenLabs Terms: <https://elevenlabs.io/terms-of-use> 。API key 必要 |
+| `openai_tts` | クラウド | OpenAI API 利用規約: <https://openai.com/policies/terms-of-use> 。API key 必要 |
+| `google_cloud_tts` | クラウド | GCP / Google Cloud TTS 利用規約: <https://cloud.google.com/terms> 。サービスアカウント JSON 必要 |
 
 ### 認証情報の保管
 
