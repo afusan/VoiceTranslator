@@ -78,9 +78,18 @@ class ControlPanel(ctk.CTkFrame):
 
     # ============================================================
     def _build_widgets(self) -> None:
-        ctk.CTkLabel(self, text="動作", font=("", 16, "bold")).grid(
-            row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4)
+        # ヘッダ frame: 「動作」ラベル + 状態メッセージ(status_label)を横並びにする。
+        # status_label をボタン列(下段 col=1)に置くとボタン幅次第で右端まで押し出され、
+        # 「動作」のすぐ隣に並ばない。frame で囲って pack(side="left")で並べることで
+        # ボタン列のサイズに影響されず「動作 [プロセスを選択してください…]」と
+        # 隣接表示できる。
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4),
         )
+        ctk.CTkLabel(header_frame, text="動作", font=("", 16, "bold")).pack(side="left")
+        self._status_label = ctk.CTkLabel(header_frame, text="停止中")
+        self._status_label.pack(side="left", padx=(12, 0))
 
         # 開始/停止ボタン と 中央ロードボタン を 1 つの frame にまとめて col 0 に配置
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -103,9 +112,6 @@ class ControlPanel(ctk.CTkFrame):
             command=self._on_test_output_clicked,
         )
         self._test_btn.pack(side="left", padx=(8, 0))
-
-        self._status_label = ctk.CTkLabel(self, text="停止中")
-        self._status_label.grid(row=1, column=1, padx=10, pady=8, sticky="w")
 
         self._latency_label = ctk.CTkLabel(self, text="平均レイテンシ: -")
         self._latency_label.grid(row=1, column=2, padx=10, pady=8, sticky="e")
