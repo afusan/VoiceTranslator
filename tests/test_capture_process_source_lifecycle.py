@@ -214,3 +214,24 @@ class TestControlPanelStartDisabled:
         btn_text = panel._toggle_btn.cget("text")  # noqa: SLF001
         # DEVICE は未選択でも開始可(soundcard が default 入力で動くため)
         assert btn_text == "▶ 開始"
+
+    def test_refresh_ready_state_reflects_pid_selection(self, root):
+        """PID 選択後に `refresh_ready_state` を呼ぶと「プロセス未選択」→「▶ 開始」へ。
+
+        2026-06-06 修正のレグレッション防止: 旧実装では `devices.input` を
+        `set_setting` で書いただけでは ControlPanel が再判定せず、Start ボタンが
+        「プロセス未選択」のまま残るバグがあった。
+        """
+        ctrl = _StubController(capture_backend="proctap", input_value="",
+                               capture_kind=CaptureKind.PROCESS)
+        panel = self._make_panel(root, ctrl)
+        # 初期状態: 「プロセス未選択」disable
+        assert panel._toggle_btn.cget("text") == "プロセス未選択"  # noqa: SLF001
+        assert str(panel._toggle_btn.cget("state")) == "disabled"  # noqa: SLF001
+
+        # PID を選択(SettingsPanel が set_setting で書く挙動を模擬)
+        ctrl.set_setting("devices", "input", "1234")
+        # SettingsPanel から呼ばれる公開メソッドで再評価
+        panel.refresh_ready_state()
+        assert panel._toggle_btn.cget("text") == "▶ 開始"  # noqa: SLF001
+        assert str(panel._toggle_btn.cget("state")) == "normal"  # noqa: SLF001

@@ -50,6 +50,10 @@ class MainWindow(ctk.CTk):
             banner=self._banner,
         )
         self._control.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+        # SettingsPanel → ControlPanel への逆参照を注入。
+        # SettingsPanel が `devices.input` を変えた瞬間(プロセス選択 OK 等)に
+        # ControlPanel.refresh_ready_state() を直接叩けるようにする。
+        self._settings.set_control_panel(self._control)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 

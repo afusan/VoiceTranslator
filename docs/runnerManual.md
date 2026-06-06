@@ -17,8 +17,10 @@
 | `voice_translator.dev.runner_translator` | 翻訳(NLLB-200) | text / .json / .txt / stdin | JSON `{..., src_text, tgt_text, runner}` |
 | `voice_translator.dev.runner_tts` | 音声合成(SAPI) | text / .json / .txt / stdin | WAV(mono int16) |
 | `voice_translator.dev.runner_pipeline` | 任意の連続レイヤを連結 | レイヤに応じて WAV or text | レイヤごとに WAV/JSON + `index.json` |
+| `voice_translator.dev.runner_output` | 音声再生(soundcard) | tone / WAV / text(TTS 経由) | 指定デバイスへの再生(ファイル出力なし) |
 
-実機マイク/スピーカが必須の Capture / Output ランナーは現時点では未提供(別ブランチ)。
+実機マイク必須の Capture ランナーは未提供(別ブランチ)。Output は実機スピーカへ
+実際に音を出すため、本体アプリで「翻訳まで出ているのに音が鳴らない」ような切り分けに使う。
 
 ---
 
@@ -242,7 +244,7 @@ py -m uv run --extra cuda python -m voice_translator.dev.runner_tts `
 | `--rate` | `180` | 読み上げ速度(WPM 相当) |
 | `--flush-delay-sec` | `0.1` | runAndWait 後の待機(SAPI flush 不整合の暫定対処) |
 
-再生はしない(出力 WAV を別途プレイヤーで再生 / 将来 `runner_output` で扱う)。
+再生はしない(出力 WAV を別途プレイヤーで再生 / `runner_output --wav <path>` で再生可)。
 
 ---
 
@@ -283,6 +285,59 @@ py -m uv run --extra cuda python -m voice_translator.dev.runner_pipeline `
 | TTS 系 | `--rate`, `--flush-delay-sec` |
 
 `out_dir/seq_NNNN_<stage>.{wav,json}` と `out_dir/index.json`(処理時刻・パラメータ・全 unit のサマリ)を生成。
+
+---
+
+### 4.6 `runner_output` — 音声再生(切り分け用)
+
+本体で「翻訳までは出ているのに音が鳴らない」ような症状が出たとき、Output レイヤ
+単体が動くかを確認するためのランナー。`AppController` / `PipelineCoordinator` を
+介さず `AudioOutputBackend` を直接呼ぶので、原因を Output / デバイス / soundcard
+側に絞れる。
+
+```powershell
+# 1) 現在の環境で見える出力デバイス一覧(* がデフォルト想定)
+py -m uv run --extra cpu python -m voice_translator.dev.runner_output --list-devices
+
+# 2) デフォルト出力デバイスに 440Hz サイン波 1 秒(最も単純な疎通)
+py -m uv run --extra cpu python -m voice_translator.dev.runner_output --tone
+
+# 3) 任意デバイスに WAV を再生(device-id は手順 1 の左カラムから)
+py -m uv run --extra cpu python -m voice_translator.dev.runner_output `
+    --device-id "{0.0.0.00000000}.{...}" --wav some.wav
+
+# 4) TTS backend で合成 → 再生(SAPI→soundcard の本番経路に近い確認)
+py -m uv run --extra cpu python -m voice_translator.dev.runner_output --text "テスト音声です"
+```
+
+| オプション | 既定 | 説明 |
+|---|---|---|
+| `--backend` | `soundcard` | 使用する Output backend 名(BackendRegistry に登録された名前) |
+| `--list-devices` | OFF | デバイス一覧を表示して終了(他オプションは無視) |
+| `--device-id` | (先頭) | 再生先デバイス。省略時は backend が返す先頭(soundcard ならデフォルトスピーカ) |
+| `--tone` | (既定) | サイン波を再生(`--wav` / `--text` のいずれも未指定なら自動でこれ) |
+| `--tone-hz` | `440.0` | サイン波の周波数 [Hz] |
+| `--tone-sec` | `1.0` | サイン波の長さ [秒] |
+| `--tone-sr` | `44100` | サイン波のサンプルレート [Hz] |
+| `--wav` | — | WAV を再生(サンプルレートは WAV のものを使う) |
+| `--text` | — | TTS backend で合成して再生(`--tts` / `--tgt-lang` と併用) |
+| `--tts` | `sapi` | `--text` 指定時に使う TTS backend 名 |
+| `--tgt-lang` | `ja` | `--text` 指定時に TTS に渡す言語ヒント |
+
+切り分け手順の例:
+
+1. `--list-devices` で本体 GUI の SettingsPanel に出ているデバイスと一致するか確認。
+   一致しなければ ConfigStore の `devices.output` が古い ID を指している可能性。
+2. `--tone` で何も音が鳴らなければ、Output backend / 選んだデバイス / soundcard 側で
+   詰まっている。本体だけの問題ではない。
+3. `--tone` は鳴るが `--text` で鳴らなければ、TTS 経路(SAPI 合成 → PCM)に問題が
+   あるか、TTS が空 PCM を返している(本体側では `SkipError` で個別発話だけ捨てている
+   可能性)。
+4. `--wav` で本体ダンプの `seq_NNNN_tts.wav` を再生して鳴れば、TTS 合成自体は
+   問題なく、最後の再生 hand-off だけが詰まっている。
+
+ファイル出力はしない(再生のみ)。`backend.start` / `backend.play` / `backend.stop`
+の順に呼ばれ、`play` が同期再生なのでコマンドが返ってきたら再生終了。
 
 ---
 
@@ -395,6 +450,8 @@ py -m uv run --extra cuda python -m voice_translator.dev.runner_asr `
 | ASR が CPU(int8)より GPU(float16)で遅い | `--compute-type int8_float16`(`auto` 既定で自動選択される)。`float16` 単独より small モデル+短入力で安定して速い |
 | `runner_vad` のセグメント数が 0 | 入力 WAV が無音 / `--threshold` が高すぎ / サンプルレートが 16kHz でない(警告が出る) |
 | `runner_pipeline` で `--from > --to` エラー | ステージ順は `vad < asr < translate < tts` で固定 |
+| `runner_output` で `指定 device_id が見つかりません` | `--list-devices` で出る ID と完全一致が必要(soundcard は中括弧つき GUID)。コピペで貼り付け |
+| `runner_output --tone` で音が出ない | デフォルトデバイスが期待と違う可能性。`--list-devices` で 1 行目を確認、別デバイスを `--device-id` で明示 |
 
 ---
 

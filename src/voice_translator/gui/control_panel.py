@@ -2,6 +2,11 @@
 
 役割: Start/Stop トグル、モデル状態の集約観測、直近の翻訳テキスト表示、レイテンシ表示。
 
+「🔊 出力テスト」ボタン: 選択中の TTS / Output backend / 出力デバイスで「テスト音声」
+を 1 回鳴らす切り分け用ボタン。本体パイプラインが動作中 / TTS=「(なし)」 / 出力
+デバイス未選択のときは無効化される。実処理は `AppController.test_output_playback`
+に委譲。
+
 Phase B 以降のロード方式変更:
 - 開始ボタンは常時押下可(状態によらず)。
 - 押下時に未ロードの backend があれば、AppController が Loader スレッドでまとめてロード → Coordinator 起動。
@@ -18,6 +23,7 @@ UI 改修(2026-05-30):
 
 from __future__ import annotations
 
+import threading
 from collections import deque
 
 import customtkinter as ctk
@@ -72,9 +78,18 @@ class ControlPanel(ctk.CTkFrame):
 
     # ============================================================
     def _build_widgets(self) -> None:
-        ctk.CTkLabel(self, text="動作", font=("", 16, "bold")).grid(
-            row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4)
+        # ヘッダ frame: 「動作」ラベル + 状態メッセージ(status_label)を横並びにする。
+        # status_label をボタン列(下段 col=1)に置くとボタン幅次第で右端まで押し出され、
+        # 「動作」のすぐ隣に並ばない。frame で囲って pack(side="left")で並べることで
+        # ボタン列のサイズに影響されず「動作 [プロセスを選択してください…]」と
+        # 隣接表示できる。
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4),
         )
+        ctk.CTkLabel(header_frame, text="動作", font=("", 16, "bold")).pack(side="left")
+        self._status_label = ctk.CTkLabel(header_frame, text="停止中")
+        self._status_label.pack(side="left", padx=(12, 0))
 
         # 開始/停止ボタン と 中央ロードボタン を 1 つの frame にまとめて col 0 に配置
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -90,9 +105,13 @@ class ControlPanel(ctk.CTkFrame):
             btn_frame, text="↻ ロード", width=100, command=self._on_load_clicked,
         )
         self._load_btn.pack(side="left", padx=(8, 0))
-
-        self._status_label = ctk.CTkLabel(self, text="停止中")
-        self._status_label.grid(row=1, column=1, padx=10, pady=8, sticky="w")
+        # 「🔊 出力テスト」ボタン: 「翻訳まで出ているのに音が鳴らない」の切り分け用。
+        # 動作中 / text_only / 出力デバイス未選択 のとき disable(_sync_ready_state で管理)。
+        self._test_btn = ctk.CTkButton(
+            btn_frame, text="🔊 出力テスト", width=120,
+            command=self._on_test_output_clicked,
+        )
+        self._test_btn.pack(side="left", padx=(8, 0))
 
         self._latency_label = ctk.CTkLabel(self, text="平均レイテンシ: -")
         self._latency_label.grid(row=1, column=2, padx=10, pady=8, sticky="e")
@@ -192,6 +211,11 @@ class ControlPanel(ctk.CTkFrame):
             return
         # 押下中は一時的に disable + 「ロード中…」表示。完了で _sync_ready_state が戻す。
         self._load_btn.configure(text="ロード中…", state="disabled")
+        # ロード中に出力テストを叩くと TTS / Output の二重 load 競合が起きうるので disable
+        try:
+            self._test_btn.configure(state="disabled")
+        except AttributeError:
+            pass
 
     def _on_load_done(self) -> None:
         # Loader スレッドからの完了通知。tk へは after で marshalling。
@@ -206,6 +230,57 @@ class ControlPanel(ctk.CTkFrame):
     def _apply_load_failed(self, message: str) -> None:
         self._show_failure_banner(f"ロード失敗: {message}")
         self._append_status_event(f"[ロード失敗] {message}")
+        self._sync_ready_state()
+
+    # ============================================================
+    # 出力テストボタン
+    # ============================================================
+    # 出力テストで読み上げるテキスト(切り分け用なので短く固定)。
+    _TEST_PLAYBACK_TEXT = "テスト音声"
+
+    def _on_test_output_clicked(self) -> None:
+        """🔊 出力テストボタン: TTS → Output の経路を 1 回だけ叩いて音を鳴らす。
+
+        - 動作中 / text_only / 出力デバイス未選択 のときは _sync_ready_state でボタンが
+          disable のためここには来ない想定だが、二重防御で sync 確認も入れる。
+        - 押下中はボタンを「再生中…」+ disable にして二重押し防止 + UI フィードバック。
+        - 実処理(TTS 合成 + Output 再生)はブロッキングなので別スレッドで動かす。
+          完了 / 失敗は `after(0, ...)` でメインスレッドへ戻して UI に反映する。
+        """
+        if self._state != "idle":
+            return
+        if self._controller.is_running or self._controller.is_loading:
+            return
+
+        self._test_btn.configure(text="再生中…", state="disabled")
+
+        def _worker() -> None:
+            try:
+                self._controller.test_output_playback(self._TEST_PLAYBACK_TEXT)
+            except Exception as e:  # noqa: BLE001
+                msg = str(e)
+                self.after(0, lambda m=msg: self._on_test_playback_failed(m))
+                return
+            self.after(0, self._on_test_playback_done)
+
+        threading.Thread(
+            target=_worker, name="vt_test_output", daemon=True,
+        ).start()
+
+    def _on_test_playback_done(self) -> None:
+        """テスト再生の正常完了を UI に反映する。"""
+        # ステータスにも軽く出しておく(目に見える結果が「音」だけだとボタンを連打されやすいので)
+        self._append_status_event(f"[出力テスト] 再生完了: {self._TEST_PLAYBACK_TEXT!r}")
+        self._sync_ready_state()
+
+    def _on_test_playback_failed(self, message: str) -> None:
+        """テスト再生失敗(例外)を UI に反映する。"""
+        import logging
+        logging.getLogger("voice_translator").warning(
+            "test_output_playback 失敗: %s", message,
+        )
+        self._show_failure_banner(f"出力テスト失敗: {message}")
+        self._append_status_event(f"[出力テスト失敗] {message}")
         self._sync_ready_state()
 
     def _do_start_async(self) -> None:
@@ -245,6 +320,10 @@ class ControlPanel(ctk.CTkFrame):
             self._load_btn.configure(text="(起動中)", state="disabled")
         except AttributeError:
             pass
+        try:
+            self._test_btn.configure(text="🔊 出力テスト", state="disabled")
+        except AttributeError:
+            pass
         self._status_label.configure(text="開始中…")
 
     def _do_stop(self) -> None:
@@ -252,6 +331,10 @@ class ControlPanel(ctk.CTkFrame):
         self._toggle_btn.configure(text="停止中…", state="disabled")
         try:
             self._load_btn.configure(text="(停止中)", state="disabled")
+        except AttributeError:
+            pass
+        try:
+            self._test_btn.configure(text="🔊 出力テスト", state="disabled")
         except AttributeError:
             pass
         self._status_label.configure(text="停止中…")
@@ -279,6 +362,11 @@ class ControlPanel(ctk.CTkFrame):
         # 動作中はモデル差し替え禁止 → 中央ロードボタンも disable
         try:
             self._load_btn.configure(text="(動作中)", state="disabled")
+        except AttributeError:
+            pass
+        # 動作中は Output backend を本体が掴んでいるため出力テストは衝突する → disable
+        try:
+            self._test_btn.configure(text="🔊 (動作中)", state="disabled")
         except AttributeError:
             pass
 
@@ -427,6 +515,15 @@ class ControlPanel(ctk.CTkFrame):
         self._refresh_status_text()
         self._schedule_status_refresh()
 
+    def refresh_ready_state(self) -> None:
+        """外部(SettingsPanel 等)から「ボタン状態を見直して」と依頼するための公開窓。
+
+        `_sync_ready_state` は内部実装名で呼び出し側にとっては紛らわしい。動作中
+        / 起動中などの遷移中は内部で何もしないので、呼び出し側はタイミングを気に
+        しなくてよい。SettingsPanel のプロセス選択ダイアログから PID 確定後に呼ぶ。
+        """
+        self._sync_ready_state()
+
     def _sync_ready_state(self) -> None:
         """各レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。
 
@@ -476,6 +573,8 @@ class ControlPanel(ctk.CTkFrame):
 
         # 中央ロードボタンの state を再計算(text_only 時は対象レイヤから絞った statuses を使う)
         self._sync_load_button_state(statuses)
+        # 出力テストボタンの state も再計算(動作中 / text_only / output 未選択 で disable)
+        self._sync_test_button_state()
         # アクセラレータ表示は ready_state とは独立に常に更新する
         self._refresh_accel_label()
 
@@ -501,6 +600,36 @@ class ControlPanel(ctk.CTkFrame):
             btn.configure(text="ロード中…", state="disabled")
         else:
             btn.configure(text="↻ ロード", state="normal")
+
+    def _sync_test_button_state(self) -> None:
+        """🔊 出力テストボタンの enable/disable と text を再設定する。
+
+        無効化条件(いずれか):
+        - text_only モード(TTS=「(なし)」、合成手段がない)
+        - 出力デバイス未選択(devices.output が空)
+        - すでに何かのトランジション中(running / starting / stopping)
+        """
+        try:
+            btn = self._test_btn
+        except AttributeError:
+            return  # 初期化前に呼ばれた場合
+        try:
+            mode = self._controller.output_mode
+        except Exception:  # noqa: BLE001
+            mode = "audio"
+        if mode == "text_only":
+            btn.configure(text="🔊 (TTS なし)", state="disabled")
+            return
+        try:
+            output_id = str(
+                self._controller.get_setting("devices", "output", default="") or ""
+            ).strip()
+        except Exception:  # noqa: BLE001
+            output_id = ""
+        if not output_id:
+            btn.configure(text="🔊 出力未選択", state="disabled")
+            return
+        btn.configure(text="🔊 出力テスト", state="normal")
 
     def _capture_source_required_but_empty(self) -> bool:
         """capture_kind == PROCESS かつ `devices.input` が未設定なら True。

@@ -1184,6 +1184,60 @@ class AppController:
                 self._logger.exception("StageDumpWriter.stop_run に失敗")
             self._stage_dump = None
 
+    def test_output_playback(self, text: str = "テスト音声") -> None:
+        """選択中の TTS / Output backend / 出力デバイスで `text` を 1 回だけ再生する。
+
+        ControlPanel の「🔊 出力テスト」ボタンから呼ばれる。「翻訳まで出ているのに
+        音が鳴らない」の切り分けを GUI 上で完結させるのが目的:
+        - 鳴れば: TTS → Output → スピーカ の経路は健全(本体側の hand-off 等を疑う)
+        - 鳴らなければ: 出力デバイス選択 / Output backend / TTS いずれかが原因
+
+        制約:
+        - パイプライン動作中は呼べない(本体が Output を掴んでいて競合する)
+        - text_only モード(TTS=「(なし)」)では呼べない(合成する手段がない)
+        - `devices.output` が空でも呼べない(再生先不明)
+
+        副作用: TTS / Output backend が未ロードなら、その場でロードしてキャッシュに乗せる
+        (本体の Start 時に再ロードしなくて済む。テスト再生のためだけにロード状態を変えない
+        方が望ましいが、未ロードでテストできない方が UX 上の損が大きい)。
+        """
+        if self.is_running:
+            raise RuntimeError(
+                "パイプライン動作中はテスト再生できません(本体を停止してから実行してください)"
+            )
+        if self.output_mode == "text_only":
+            raise RuntimeError(
+                "TTS=「(なし)」のためテスト再生できません(TTS を選択してください)"
+            )
+
+        output_id = str(self._config.get("devices", "output", default="") or "")
+        if not output_id.strip():
+            raise RuntimeError("出力デバイスが未選択です(設定パネルから選択してください)")
+
+        # TTS / Output backend を必要に応じてロード(冪等)
+        self.load_model_layer(LayerKind.TTS)
+        self.load_model_layer(LayerKind.OUTPUT)
+
+        tts = self._backends[LayerKind.TTS]
+        output = self._backends[LayerKind.OUTPUT]
+
+        tgt_lang = str(self._config.get("languages", "tgt", default="ja") or "ja")
+        # 1) 合成
+        pcm, samplerate = tts.synthesize(text, tgt_lang)
+        if pcm is None or getattr(pcm, "size", 0) == 0:
+            raise RuntimeError(
+                f"TTS が空の PCM を返しました(text={text!r}, lang={tgt_lang})"
+            )
+        # 2) 再生(start → play → stop)。stop はエラー時も呼ぶ。
+        output.start(output_id)
+        try:
+            output.play(pcm, samplerate)
+        finally:
+            try:
+                output.stop()
+            except Exception:  # noqa: BLE001
+                self._logger.exception("test_output_playback: output.stop で例外(無視)")
+
     def restart_pipeline_async(
         self,
         *,

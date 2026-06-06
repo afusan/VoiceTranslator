@@ -117,6 +117,12 @@ class SettingsPanel(ctk.CTkFrame):
         # 通知バナー(入力言語の自動 fallback などをユーザに伝える)。
         # None でも動作する(その場合は print に落とす)。
         self._banner = banner
+        # ControlPanel への逆参照(MainWindow が後から `set_control_panel` で注入)。
+        # PROCESS kind 入力ソースの PID 選択完了など、`devices.input` が変わったときに
+        # ControlPanel.refresh_ready_state() を呼んで「プロセス未選択 → ▶ 開始」へ
+        # 即時遷移させるための窓。未注入(None)時はベストエフォートで sync を見送る
+        # (テスト時の差し込みや、SettingsPanel 単体動作の場合に対する保険)。
+        self._control_panel = None
 
         self._backend_vars: dict[LayerKind, ctk.StringVar] = {}
         self._status_labels: dict[LayerKind, ctk.CTkLabel] = {}
@@ -873,6 +879,14 @@ class SettingsPanel(ctk.CTkFrame):
             return
         self._controller.set_setting("devices", "input", str(dlg.result_pid))
         self._update_capture_select_btn_label()
+        # ControlPanel に「ready 状態を見直して」と通知。
+        # PROCESS kind で PID 未選択 → 選択完了 になった瞬間に、Start ボタンの表記が
+        # 「プロセス未選択(disable)→ ▶ 開始(normal)」へ遷移する。
+        if self._control_panel is not None:
+            try:
+                self._control_panel.refresh_ready_state()
+            except Exception:  # noqa: BLE001 - UI 通知失敗で本処理は止めない
+                pass
         # 動作中なら自動 restart(DEVICE 切替と同じ挙動)
         if self._controller_is_running():
             self._trigger_device_restart("入力")
@@ -919,6 +933,15 @@ class SettingsPanel(ctk.CTkFrame):
     # ============================================================
     # P4: 動作中デバイス変更の自動 restart
     # ============================================================
+    def set_control_panel(self, panel) -> None:
+        """ControlPanel への逆参照を注入する(MainWindow が生成後に呼ぶ)。
+
+        参照を持つことで、`devices.input` を `set_setting` で書いた直後に
+        ControlPanel.refresh_ready_state() を直接呼べる。注入されていない場合は
+        この経路では通知されない(レイヤ状態変化など別の経路でしか sync しない)。
+        """
+        self._control_panel = panel
+
     def _controller_is_running(self) -> bool:
         """AppController.is_running を安全に問い合わせる(モック/古い実装対策)。"""
         try:
