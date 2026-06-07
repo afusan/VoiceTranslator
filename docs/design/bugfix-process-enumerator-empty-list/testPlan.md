@@ -15,6 +15,8 @@
   - 同 PID が複数エンドポイントに居る場合は最初の 1 件のみ採用
 - [x] `test_device_enumerator_failure_returns_empty`
   - GetDeviceEnumerator が例外を投げたら空リストで返す(防御)
+- [x] `test_excludes_self_pid`
+  - 自プロセス PID は除外(フィードバックループ防止)
 
 ## middle / large(手動)
 

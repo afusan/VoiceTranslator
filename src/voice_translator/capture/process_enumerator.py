@@ -43,6 +43,7 @@ COM 初期化は **1 回だけ**。GUI スレッドと COM が完全分離。
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
 from dataclasses import dataclass
@@ -293,6 +294,7 @@ def enumerate_active_processes() -> list[CaptureSource]:
     - WASAPI AudioSession のうち state が **Active(1) または Inactive(0)** の
       ものを対象とする(Expired のみ除外)。Sndvol(音量ミキサー)と一致する集合。
     - 同 PID 内に複数 session があれば 1 件に dedupe(最初に見つかった名前を採用)。
+    - **自プロセス(`os.getpid()`)は除外**(フィードバックループ防止)。
     - プロセス名は psutil で補完。欠落・権限不足時は "unknown"。
     - 戻り値の各要素は `kind=CaptureKind.PROCESS` / `source_id=str(pid)` /
       `display_name=f"{name} ({pid})"`。
@@ -416,6 +418,13 @@ def _list_active_sessions() -> list[_SessionInfo]:
 
     result: list[_SessionInfo] = []
     seen_pids: set[int] = set()
+    # 自プロセス PID は除外する。理由:
+    # - 本アプリ自身が翻訳音声を Output デバイスに出すため、自分のセッションが
+    #   見える可能性がある(SAPI / soundcard が WASAPI セッションを開く)。
+    # - ユーザが誤って自プロセスを選択すると「翻訳音声 → 再キャプチャ → 再翻訳」の
+    #   フィードバックループになり、CPU が無限に回る。
+    # - DeviceValidator(入力 ≠ 出力)と同じ思想の防衛策。
+    self_pid = os.getpid()
     for i in range(device_count):
         try:
             dev = collection.Item(i)
@@ -440,6 +449,9 @@ def _list_active_sessions() -> list[_SessionInfo]:
                 continue
             if pid <= 0:
                 # PID 0 はシステムセッション。ProcTap でフックできないので除外。
+                continue
+            if pid == self_pid:
+                # 自プロセスは除外(フィードバックループ防止)
                 continue
             if pid in seen_pids:
                 # 別エンドポイントに同じ PID のセッションがある場合は最初の 1 件のみ

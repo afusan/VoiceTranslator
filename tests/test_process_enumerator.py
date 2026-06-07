@@ -354,6 +354,25 @@ class TestListActiveSessions:
         result = pe._list_active_sessions()
         assert [info.pid for info in result] == [500]
 
+    def test_excludes_self_pid(self, monkeypatch):
+        """自プロセス PID は除外する(フィードバックループ防止)。
+
+        本アプリは TTS 音声を Output デバイスに出すため、自プロセスも WASAPI
+        セッションを持つことがある。これをユーザに選ばせると「翻訳音声 → 自分の
+        音を再キャプチャ → 再翻訳」の無限ループに陥るため、列挙時点で除外する。
+        """
+        import os
+        my_pid = os.getpid()
+        self._install_fake_pycaw(
+            monkeypatch,
+            devices=[
+                [(my_pid, 0), (1234, 0)],
+            ],
+        )
+        result = pe._list_active_sessions()
+        # 自プロセスは除外、他プロセスのみ採用
+        assert [info.pid for info in result] == [1234]
+
     def test_device_enumerator_failure_returns_empty(self, monkeypatch):
         """GetDeviceEnumerator が例外を投げたら空リストで返す。"""
         class FakeAudioUtilities:
