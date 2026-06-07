@@ -183,83 +183,198 @@ class TestResolveProcessName:
 
 
 # ============================================================
-# _list_active_sessions(pycaw)
+# _list_active_sessions(全 Render エンドポイント走査、2026-06-08 改)
 # ============================================================
 class TestListActiveSessions:
-    def _install_fake_pycaw(self, monkeypatch, sessions):
-        class FakeAudioUtilities:
-            @staticmethod
-            def GetAllSessions():  # noqa: N802
-                return sessions
+    """全エンドポイント走査の検証。
 
-        fake_pycaw_module = types.ModuleType("pycaw")
-        fake_pycaw_inner = types.ModuleType("pycaw.pycaw")
-        fake_pycaw_inner.AudioUtilities = FakeAudioUtilities
+    fake スタック:
+      AudioUtilities.GetDeviceEnumerator() -> FakeDeviceEnumerator
+        .EnumAudioEndpoints(eRender=0, ACTIVE=0x1) -> FakeCollection(devices)
+          .GetCount() / .Item(i) -> FakeDevice(sessions)
+            .Activate(IAudioSessionManager2._iid_, ctx, None) -> FakeMgr (cast no-op)
+              .GetSessionEnumerator() -> FakeSessionEnumerator
+                .GetCount() / .GetSession(j) -> FakeCtl
+                  .QueryInterface(IAudioSessionControl2) -> FakeCtl2 (GetProcessId)
+                  .GetState() -> 0/1/2
+    """
 
-        class _DummyMeterIface:
-            pass
-        fake_pycaw_inner.IAudioMeterInformation = _DummyMeterIface
-
-        monkeypatch.setitem(sys.modules, "pycaw", fake_pycaw_module)
-        monkeypatch.setitem(sys.modules, "pycaw.pycaw", fake_pycaw_inner)
-
-    def test_excludes_expired_only_accepts_inactive_and_active(self, monkeypatch):
-        """2026-06-08 仕様変更: Active(1) + Inactive(0) を採用、Expired(2) のみ除外。
-
-        旧仕様(Active のみ)では Win11 の audio engine sleep や「無音時 Stop」実装の
-        アプリで列挙がほぼ空になっていた(別環境で実観測)。Sndvol の表示集合に合わせる
-        ことで、proc-tap で実用的にプロセスを選べるようにする。
+    def _install_fake_pycaw(
+        self, monkeypatch, devices: list[list[tuple[int, int]]],
+    ):
+        """`devices` は [[(pid, state), ...], [(pid, state), ...]]。
+        外側 list = エンドポイント、内側 tuple = (pid, state)。
         """
-        class FakeProc:
-            def name(self):
-                return "x.exe"
+        class FakeCtl2:
+            def __init__(self, pid):
+                self._pid = pid
+
+            def GetProcessId(self):  # noqa: N802
+                return self._pid
 
         class FakeCtl:
-            def __init__(self, state):
+            def __init__(self, pid, state):
+                self._pid = pid
                 self._state = state
 
             def GetState(self):  # noqa: N802
                 return self._state
 
-        class FakeSession:
-            def __init__(self, pid, state):
-                self.ProcessId = pid
-                self.Process = FakeProc()
-                self._ctl = FakeCtl(state)
+            def QueryInterface(self, iface):  # noqa: N802
+                return FakeCtl2(self._pid)
 
-        # state=0 Inactive(採用), 1 Active(採用), 2 Expired(除外)
-        sessions = [FakeSession(100, 0), FakeSession(200, 1), FakeSession(300, 2)]
-        self._install_fake_pycaw(monkeypatch, sessions)
+        class FakeSessionEnumerator:
+            def __init__(self, ctls):
+                self._ctls = ctls
+
+            def GetCount(self):  # noqa: N802
+                return len(self._ctls)
+
+            def GetSession(self, j):  # noqa: N802
+                return self._ctls[j]
+
+        class FakeMgr:
+            def __init__(self, ctls):
+                self._enum = FakeSessionEnumerator(ctls)
+
+            def GetSessionEnumerator(self):  # noqa: N802
+                return self._enum
+
+        class FakeDevice:
+            def __init__(self, sessions):
+                self._ctls = [FakeCtl(pid, state) for pid, state in sessions]
+
+            def Activate(self, _iid, _ctx, _params):  # noqa: N802
+                return FakeMgr(self._ctls)
+
+        class FakeCollection:
+            def __init__(self, devs):
+                self._devs = devs
+
+            def GetCount(self):  # noqa: N802
+                return len(self._devs)
+
+            def Item(self, i):  # noqa: N802
+                return self._devs[i]
+
+        class FakeDeviceEnumerator:
+            def __init__(self, devs):
+                self._devs = devs
+
+            def EnumAudioEndpoints(self, dataflow, state):  # noqa: N802
+                return FakeCollection(self._devs)
+
+        class FakeAudioUtilities:
+            @staticmethod
+            def GetDeviceEnumerator():  # noqa: N802
+                return FakeDeviceEnumerator(
+                    [FakeDevice(eps) for eps in devices]
+                )
+
+        # pycaw モジュール本体
+        fake_pycaw_module = types.ModuleType("pycaw")
+        fake_pycaw_inner = types.ModuleType("pycaw.pycaw")
+        fake_pycaw_inner.AudioUtilities = FakeAudioUtilities
+        fake_pycaw_inner.IAudioMeterInformation = type("_M", (), {})
+
+        # comtypes との連携用ダミー interface。`._iid_` 属性を持つだけでよい。
+        class _FakeIface:
+            _iid_ = "fake-iid"
+        fake_pycaw_inner.IAudioSessionControl2 = _FakeIface
+        fake_pycaw_inner.IAudioSessionManager2 = _FakeIface
+
+        monkeypatch.setitem(sys.modules, "pycaw", fake_pycaw_module)
+        monkeypatch.setitem(sys.modules, "pycaw.pycaw", fake_pycaw_inner)
+
+        # comtypes を **完全に fake で差し替える**(sys.modules 経由)。
+        # 実物の comtypes は import / 属性アクセス時に CoInitializeEx を裏で
+        # 呼ぶことがあり、これがメインスレッドで MTA に初期化済の状態だと
+        # `RPC_E_CHANGED_MODE`(WinError -2147417850)で失敗してテストが落ちる。
+        # 本番コードは `_PeakWorker` 内で呼ばれるので問題にならないが、テストは
+        # メインスレッドで `_list_active_sessions` を直接呼ぶため、ここで comtypes
+        # を触らないようにダミーモジュールに差し替える。
+        fake_comtypes = types.ModuleType("comtypes")
+        fake_comtypes.cast = lambda x, _t: x
+        fake_comtypes.POINTER = lambda _t: object
+        fake_comtypes.CLSCTX_INPROC_SERVER = 1
+        monkeypatch.setitem(sys.modules, "comtypes", fake_comtypes)
+
+    def test_excludes_expired_only_accepts_inactive_and_active(self, monkeypatch):
+        """Active(1) + Inactive(0) を採用、Expired(2) のみ除外。"""
+        # 1 エンドポイントに 3 セッション(Inactive / Active / Expired)
+        self._install_fake_pycaw(
+            monkeypatch,
+            devices=[
+                [(100, 0), (200, 1), (300, 2)],
+            ],
+        )
         result = pe._list_active_sessions()
         assert [info.pid for info in result] == [100, 200]
 
     def test_excludes_system_session_pid_0(self, monkeypatch):
-        class FakeCtl:
-            def GetState(self):  # noqa: N802
-                return 1
-
-        class FakeSession:
-            def __init__(self, pid):
-                self.ProcessId = pid
-                self.Process = None
-                self._ctl = FakeCtl()
-
-        sessions = [FakeSession(0), FakeSession(123)]
-        self._install_fake_pycaw(monkeypatch, sessions)
+        """PID 0(システムセッション)は除外。"""
+        self._install_fake_pycaw(
+            monkeypatch,
+            devices=[
+                [(0, 1), (123, 1)],
+            ],
+        )
         result = pe._list_active_sessions()
         assert [info.pid for info in result] == [123]
 
-    def test_get_all_sessions_failure_returns_empty(self, monkeypatch):
+    def test_collects_sessions_from_all_endpoints(self, monkeypatch):
+        """全 Render エンドポイントから集める(2026-06-08 改).
+
+        旧仕様(GetAllSessions のみ)では Device 0 のセッションしか取れず、
+        実環境で Device 1 に居る Chrome/Firefox が取りこぼされていた。
+        """
+        self._install_fake_pycaw(
+            monkeypatch,
+            devices=[
+                # Device 0(デフォルト): システムセッションのみ
+                [(0, 0)],
+                # Device 1: 実際にアプリが鳴っているデバイス
+                [(16820, 0), (20136, 0)],
+                # Device 2: 別の出力デバイス(空)
+                [],
+            ],
+        )
+        result = pe._list_active_sessions()
+        assert sorted(info.pid for info in result) == [16820, 20136]
+
+    def test_dedupes_same_pid_across_endpoints(self, monkeypatch):
+        """同じ PID が複数エンドポイントに居る場合は最初の 1 件のみ採用。"""
+        self._install_fake_pycaw(
+            monkeypatch,
+            devices=[
+                [(500, 0)],
+                [(500, 1)],   # 同じ PID、別エンドポイント
+            ],
+        )
+        result = pe._list_active_sessions()
+        assert [info.pid for info in result] == [500]
+
+    def test_device_enumerator_failure_returns_empty(self, monkeypatch):
+        """GetDeviceEnumerator が例外を投げたら空リストで返す。"""
         class FakeAudioUtilities:
             @staticmethod
-            def GetAllSessions():  # noqa: N802
+            def GetDeviceEnumerator():  # noqa: N802
                 raise OSError("COM init failed")
 
         fake_pycaw_inner = types.ModuleType("pycaw.pycaw")
         fake_pycaw_inner.AudioUtilities = FakeAudioUtilities
         fake_pycaw_inner.IAudioMeterInformation = type("_M", (), {})
+        fake_pycaw_inner.IAudioSessionControl2 = type("_C", (), {"_iid_": "x"})
+        fake_pycaw_inner.IAudioSessionManager2 = type("_M2", (), {"_iid_": "y"})
         monkeypatch.setitem(sys.modules, "pycaw", types.ModuleType("pycaw"))
         monkeypatch.setitem(sys.modules, "pycaw.pycaw", fake_pycaw_inner)
+        # comtypes も fake で差し替え(`_install_fake_pycaw` 同様の理由 — メイン
+        # スレッドで実 comtypes に触ると CoInitializeEx の MTA/STA 競合で落ちる)
+        fake_comtypes = types.ModuleType("comtypes")
+        fake_comtypes.cast = lambda x, _t: x
+        fake_comtypes.POINTER = lambda _t: object
+        fake_comtypes.CLSCTX_INPROC_SERVER = 1
+        monkeypatch.setitem(sys.modules, "comtypes", fake_comtypes)
 
         assert pe._list_active_sessions() == []
 

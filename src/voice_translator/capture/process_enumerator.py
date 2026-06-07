@@ -371,39 +371,91 @@ def _enumerate_in_com_thread() -> list[CaptureSource]:
 # ============================================================
 # pycaw / psutil 呼び出しの隔離(テスト時はここを monkeypatch する)
 # ============================================================
+
+# MMDeviceAPI: DEVICE_STATE_ACTIVE(現役のデバイスのみ列挙する)
+_DEVICE_STATE_ACTIVE = 0x00000001
+
+# EDataFlow.eRender(出力デバイス)
+_EDATAFLOW_ERENDER = 0
+
+
 def _list_active_sessions() -> list[_SessionInfo]:
-    """pycaw で AudioSession を列挙し、キャプチャ対象のものだけを `_SessionInfo` で返す。
+    """全 Render エンドポイントを走査し、キャプチャ対象のセッションを返す。
 
     採用対象: state が Active(1) または Inactive(0) のセッション(Expired のみ除外)。
     Sndvol(Windows の音量ミキサー)の表示集合と一致する。詳細は `_is_capturable` 参照。
 
+    **なぜ `AudioUtilities.GetAllSessions()` を使わないか**:
+    `GetAllSessions()` はデフォルトエンドポイント(eMultimedia ロール)の
+    `IAudioSessionManager` しか見ない。実環境では Windows 11 の複数オーディオ
+    デバイス(HDMI / Bluetooth / 仮想デバイス等)構成で、Chrome や Firefox 等が
+    別エンドポイントに紐づくと一切見えなくなる(2026-06-08 実機で確認)。
+    `IMMDeviceEnumerator → EnumAudioEndpoints(eRender, ACTIVE)` で全 Render
+    デバイスを走査し、各デバイスから `IAudioSessionManager2` を Activate して
+    `SessionEnumerator` を回す。同 PID が複数エンドポイントに居る場合は最初に
+    見つけた 1 件を採用(後段の dedupe と同じ規約)。
+
     pycaw を呼ぶ唯一の入口。テストではこの関数を monkeypatch で差し替える。
     """
-    from pycaw.pycaw import AudioUtilities  # 遅延 import
+    try:
+        from comtypes import POINTER, CLSCTX_INPROC_SERVER, cast
+        from pycaw.pycaw import AudioUtilities, IAudioSessionControl2, IAudioSessionManager2
+    except Exception:
+        logger.exception("pycaw / comtypes の import に失敗")
+        return []
 
     try:
-        sessions = AudioUtilities.GetAllSessions()
+        device_enum = AudioUtilities.GetDeviceEnumerator()
+        collection = device_enum.EnumAudioEndpoints(
+            _EDATAFLOW_ERENDER, _DEVICE_STATE_ACTIVE,
+        )
+        device_count = collection.GetCount()
     except Exception:
-        logger.exception("AudioUtilities.GetAllSessions() failed")
+        logger.exception("MMDeviceEnumerator から Render デバイス列挙に失敗")
         return []
 
     result: list[_SessionInfo] = []
-    for s in sessions:
+    seen_pids: set[int] = set()
+    for i in range(device_count):
         try:
-            pid = int(s.ProcessId or 0)
+            dev = collection.Item(i)
+            mgr_ptr = dev.Activate(
+                IAudioSessionManager2._iid_, CLSCTX_INPROC_SERVER, None,
+            )
+            mgr = cast(mgr_ptr, POINTER(IAudioSessionManager2))
+            enumerator = mgr.GetSessionEnumerator()
+            session_count = enumerator.GetCount()
         except Exception:
+            logger.exception(
+                "Render デバイス [%d] のセッション列挙に失敗(スキップ)", i,
+            )
             continue
-        if pid <= 0:
-            # PID 0 はシステムセッション。ProcTap でフックできないので除外。
-            continue
-        if not _is_capturable(s):
-            continue
-        name: str | None
-        try:
-            name = s.Process.name() if s.Process is not None else None
-        except Exception:
-            name = None
-        result.append(_SessionInfo(pid=pid, process_name=name, raw_session=s))
+
+        for j in range(session_count):
+            try:
+                ctl = enumerator.GetSession(j)
+                ctl2 = ctl.QueryInterface(IAudioSessionControl2)
+                pid = int(ctl2.GetProcessId() or 0)
+            except Exception:
+                continue
+            if pid <= 0:
+                # PID 0 はシステムセッション。ProcTap でフックできないので除外。
+                continue
+            if pid in seen_pids:
+                # 別エンドポイントに同じ PID のセッションがある場合は最初の 1 件のみ
+                continue
+            try:
+                state = int(ctl.GetState())
+            except Exception:
+                continue
+            if state not in _CAPTURABLE_STATES:
+                continue
+            seen_pids.add(pid)
+            # ctl は IAudioSessionControl のままで `raw_session` に保持
+            # (peak メータ取得は `_query_meter` で QueryInterface する)。
+            # pycaw 経由の Process オブジェクトは Activate ルートでは取れないので、
+            # process_name は None にして `_resolve_process_name` で psutil 解決させる。
+            result.append(_SessionInfo(pid=pid, process_name=None, raw_session=ctl))
     return result
 
 
@@ -413,23 +465,39 @@ def _is_capturable(session: Any) -> bool:
     採用条件は **Active(1) または Inactive(0)**。Expired(2) のみ除外。
     詳細は `_CAPTURABLE_STATES` 宣言のコメント参照。
 
-    pycaw のセッションは内部の `_ctl.GetState()` でステートを返す。
+    2026-06-08 改: 全エンドポイント走査に変更したため、`session` は生の
+    `IAudioSessionControl` を期待する(`GetState()` を直接持つ)。旧仕様の
+    pycaw `AudioSession` ラッパー(`._ctl.GetState()`)経由も互換のため fallback で
+    試す。
     """
     try:
-        state = int(session._ctl.GetState())
+        state = int(session.GetState())
     except Exception:
-        return False
+        try:
+            state = int(session._ctl.GetState())
+        except Exception:
+            return False
     return state in _CAPTURABLE_STATES
 
 
 def _query_meter(session: Any):
-    """pycaw の AudioSession から `IAudioMeterInformation` を `QueryInterface` で取得。
+    """`IAudioSessionControl` から `IAudioMeterInformation` を `QueryInterface` で取得。
 
-    pycaw 標準ルートでは取得関数が公開されていないため、`session._ctl` に対して
-    QueryInterface を投げる。プライベート属性依存だが pycaw 20240210 以降で安定して動く。
+    2026-06-08 改: 全エンドポイント走査の `_list_active_sessions()` が
+    生の `IAudioSessionControl` を `raw_session` に格納するようになったため、
+    `session.QueryInterface(...)` を直接呼ぶ。旧仕様の pycaw `AudioSession`
+    ラッパー(`session._ctl.QueryInterface(...)`)も互換のため fallback で試す。
     """
     try:
         from pycaw.pycaw import IAudioMeterInformation  # 遅延 import
+    except Exception:
+        logger.exception("IAudioMeterInformation の import に失敗")
+        return None
+    try:
+        return session.QueryInterface(IAudioMeterInformation)
+    except Exception:
+        pass
+    try:
         return session._ctl.QueryInterface(IAudioMeterInformation)
     except Exception:
         logger.exception("QueryInterface(IAudioMeterInformation) failed for session")
