@@ -203,7 +203,13 @@ class TestListActiveSessions:
         monkeypatch.setitem(sys.modules, "pycaw", fake_pycaw_module)
         monkeypatch.setitem(sys.modules, "pycaw.pycaw", fake_pycaw_inner)
 
-    def test_filters_inactive_sessions(self, monkeypatch):
+    def test_excludes_expired_only_accepts_inactive_and_active(self, monkeypatch):
+        """2026-06-08 仕様変更: Active(1) + Inactive(0) を採用、Expired(2) のみ除外。
+
+        旧仕様(Active のみ)では Win11 の audio engine sleep や「無音時 Stop」実装の
+        アプリで列挙がほぼ空になっていた(別環境で実観測)。Sndvol の表示集合に合わせる
+        ことで、proc-tap で実用的にプロセスを選べるようにする。
+        """
         class FakeProc:
             def name(self):
                 return "x.exe"
@@ -221,10 +227,11 @@ class TestListActiveSessions:
                 self.Process = FakeProc()
                 self._ctl = FakeCtl(state)
 
+        # state=0 Inactive(採用), 1 Active(採用), 2 Expired(除外)
         sessions = [FakeSession(100, 0), FakeSession(200, 1), FakeSession(300, 2)]
         self._install_fake_pycaw(monkeypatch, sessions)
         result = pe._list_active_sessions()
-        assert [info.pid for info in result] == [200]
+        assert [info.pid for info in result] == [100, 200]
 
     def test_excludes_system_session_pid_0(self, monkeypatch):
         class FakeCtl:

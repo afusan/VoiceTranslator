@@ -53,10 +53,24 @@ from voice_translator.common.types import CaptureKind, CaptureSource
 logger = logging.getLogger(__name__)
 
 
-# WASAPI AudioSessionState の Active を表す定数。pycaw.constants.AudioSessionState.Active
-# と同じ値だが、ここで再宣言しておくことでテスト時に pycaw を完全モックしても
-# 比較ロジックを成立させやすくする。
+# WASAPI AudioSessionState 定数(`pycaw.constants.AudioSessionState.*` と同じ値)。
+# ここで再宣言しておくとテスト時に pycaw を完全モックしても比較が成立する。
+#
+# Microsoft 公式仕様(audiosessiontypes.h):
+#   Inactive(0): ストリームはあるが running 中ではない(Stop 後 / 未 Start)
+#   Active(1):   少なくとも 1 つのストリームが running 中(IAudioClient::Start 直後)
+#   Expired(2):  ストリームが完全消失(セッション終了済み)
+#
+# 採用条件は **Active + Inactive**(Expired のみ除外)。これは Sndvol(Windows の
+# 音量ミキサー)が表示するセッション集合と一致する。
+# 「Active のみ」だと Win11 の audio engine sleep(10 秒で Inactive 化)や、
+# 多くのアプリの「無音区間で Stop を呼ぶ」実装で観測時点にほぼ全部 Inactive に落ちて
+# 列挙が空になる(2026-06-08 別環境で実観測)。proc-tap は PID 指定で動くので
+# Inactive な PID でも、Start 押下時に音が鳴っていれば普通にキャプチャできる。
+_AUDIO_SESSION_STATE_INACTIVE = 0
 _AUDIO_SESSION_STATE_ACTIVE = 1
+_AUDIO_SESSION_STATE_EXPIRED = 2
+_CAPTURABLE_STATES = frozenset({_AUDIO_SESSION_STATE_INACTIVE, _AUDIO_SESSION_STATE_ACTIVE})
 
 # Peak の内部 poll 間隔(秒)。5fps = 200ms。
 # 視認性は十分(decay 効果で人間の目には連続的に見える)、COM 呼び出し負荷は
@@ -273,18 +287,25 @@ def dispose() -> None:
 # 公開 API
 # ============================================================
 def enumerate_active_processes() -> list[CaptureSource]:
-    """音声出力中のプロセスを列挙して `CaptureSource` のリストとして返す。
+    """音声セッションを持つプロセスを列挙して `CaptureSource` のリストとして返す。
 
     挙動:
-    - WASAPI AudioSession のうち `AudioSessionState.Active` のものを対象とする。
+    - WASAPI AudioSession のうち state が **Active(1) または Inactive(0)** の
+      ものを対象とする(Expired のみ除外)。Sndvol(音量ミキサー)と一致する集合。
     - 同 PID 内に複数 session があれば 1 件に dedupe(最初に見つかった名前を採用)。
     - プロセス名は psutil で補完。欠落・権限不足時は "unknown"。
     - 戻り値の各要素は `kind=CaptureKind.PROCESS` / `source_id=str(pid)` /
       `display_name=f"{name} ({pid})"`。
     - pycaw 呼び出しは永続ワーカスレッド経由(GUI スレッドの COM 状態と競合させない)。
 
+    関数名は歴史的経緯で `_active_` を含むが、実際の採用範囲は Active + Inactive。
+    Win11 の audio engine sleep(無音 10 秒で Inactive 化)や多くのアプリの実装
+    (無音区間で `IAudioClient::Stop` を呼ぶ)で「再生中でも Inactive」が観測上
+    支配的なため、Active のみフィルタでは列挙が空になりやすい。proc-tap は PID
+    指定なので、Inactive な PID でも Start 時に音が鳴っていればキャプチャできる。
+
     Returns:
-        list[CaptureSource]: 音声出力中のプロセス一覧。0 件もありうる。
+        list[CaptureSource]: 音声セッションを持つプロセス一覧。0 件もありうる。
     """
     return _get_worker().submit(_enumerate_in_com_thread)
 
@@ -351,7 +372,10 @@ def _enumerate_in_com_thread() -> list[CaptureSource]:
 # pycaw / psutil 呼び出しの隔離(テスト時はここを monkeypatch する)
 # ============================================================
 def _list_active_sessions() -> list[_SessionInfo]:
-    """pycaw で AudioSession を列挙し、Active なものだけを `_SessionInfo` で返す。
+    """pycaw で AudioSession を列挙し、キャプチャ対象のものだけを `_SessionInfo` で返す。
+
+    採用対象: state が Active(1) または Inactive(0) のセッション(Expired のみ除外)。
+    Sndvol(Windows の音量ミキサー)の表示集合と一致する。詳細は `_is_capturable` 参照。
 
     pycaw を呼ぶ唯一の入口。テストではこの関数を monkeypatch で差し替える。
     """
@@ -372,7 +396,7 @@ def _list_active_sessions() -> list[_SessionInfo]:
         if pid <= 0:
             # PID 0 はシステムセッション。ProcTap でフックできないので除外。
             continue
-        if not _is_active(s):
+        if not _is_capturable(s):
             continue
         name: str | None
         try:
@@ -383,16 +407,19 @@ def _list_active_sessions() -> list[_SessionInfo]:
     return result
 
 
-def _is_active(session: Any) -> bool:
-    """セッションが `AudioSessionState.Active` か判定する。
+def _is_capturable(session: Any) -> bool:
+    """セッションが proc-tap でキャプチャ対象としてよいか判定する。
+
+    採用条件は **Active(1) または Inactive(0)**。Expired(2) のみ除外。
+    詳細は `_CAPTURABLE_STATES` 宣言のコメント参照。
 
     pycaw のセッションは内部の `_ctl.GetState()` でステートを返す。
     """
     try:
-        state = session._ctl.GetState()
+        state = int(session._ctl.GetState())
     except Exception:
         return False
-    return int(state) == _AUDIO_SESSION_STATE_ACTIVE
+    return state in _CAPTURABLE_STATES
 
 
 def _query_meter(session: Any):
