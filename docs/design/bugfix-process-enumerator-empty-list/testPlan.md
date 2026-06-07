@@ -2,17 +2,26 @@
 
 ## small(自動)
 
-新しく書き換えた / 追加したテスト:
+新しく書き換えた / 追加したテスト(`TestListActiveSessions`):
 
-- [x] `tests/test_process_enumerator.py::TestListActiveSessions::test_excludes_expired_only_accepts_inactive_and_active`
+- [x] `test_excludes_expired_only_accepts_inactive_and_active`
   - state=Inactive(0)、Active(1) は採用、Expired(2) は除外
-  - PID リストが `[100, 200]` となる(300=Expired は除外)
-- [x] 既存の他のテスト(PID 0 除外、GetAllSessions 失敗時の空返し)が引き続き pass
+- [x] `test_excludes_system_session_pid_0`
+  - PID 0 のシステムセッションは除外
+- [x] `test_collects_sessions_from_all_endpoints`(**第 2 段の中核**)
+  - Device 0(デフォルト)にシステムのみ、Device 1 に Chrome/Firefox 相当の構成で、
+    Device 1 のセッションも採用されること
+- [x] `test_dedupes_same_pid_across_endpoints`
+  - 同 PID が複数エンドポイントに居る場合は最初の 1 件のみ採用
+- [x] `test_device_enumerator_failure_returns_empty`
+  - GetDeviceEnumerator が例外を投げたら空リストで返す(防御)
 
 ## middle / large(手動)
 
-- [ ] `dev/runner_proc_list` を別環境で実行し、`enumerate_active_processes()` の
-      件数が音量ミキサーの表示数と一致することを確認(目安 5〜10 件)
+- [ ] `dev/runner_proc_list` を別環境で実行し、以下を確認:
+  - 上段の `enumerate_active_processes()` 件数が増えている(0 件 → 2 件以上)
+  - 下段の「全エンドポイント走査」で Device 1 に居る Chrome / Firefox 等が
+    enumerate にも反映されている
 - [ ] SettingsPanel → 「プロセス選択…」ダイアログで、想定通りのアプリが並ぶことを
       目視確認(Spotify / Chrome / Firefox / Discord 等)
 - [ ] 選択した PID で `▶ 開始` し、当該プロセスの音だけが翻訳パイプラインを通る
