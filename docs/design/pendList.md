@@ -4,6 +4,26 @@
 
 ---
 
+## [2026-06-08] flaky テスト: `test_set_languages_takes_effect_on_next_utterance`
+- **対象**: `tests/test_pipeline_e2e.py::TestPipelineE2EWithSynthPcm::test_set_languages_takes_effect_on_next_utterance`
+- **症状**: `py -m uv run pytest`(全体実行)で**数十回に 1 回程度**失敗するが、
+  単体実行(`pytest <そのテストだけ>`)では必ず pass。
+- **原因(推定)**: tkinter の `after` 残りコールバック + `soundcard` の COM 後始末の
+  スレッド間相互作用。GUI 系テストで `CTk` ルートを destroy するとき未完了の `after`
+  が次テスト中に発火 → tk interp が一時的におかしくなる。過去にも観察され、fixture の
+  `after_cancel` 強化等で何度か対処済みだが完全には根治していない。
+- **暫定運用**: 全体実行で当該テストが落ちたら、単体実行で pass することを確認して
+  「本件と無関係 / 既知 flaky」と切り分け、コミットを進める。CI には載せていないので
+  ローカル運用上の問題のみ。
+- **対応の見送り理由**:
+  - 影響範囲が大きい(`tests/conftest.py` や全 GUI 系 fixture の後始末強化が要る)
+  - 頻度が低く、運用上は単体実行で切り分け可能
+  - 本筋(機能追加 / バグ修正)の優先度を上げたい
+- **再検討トリガ**: 失敗頻度が顕著に上がる / 別の flaky が連鎖して切り分けが困難になる
+  / CI を導入するタイミング(全体実行で stable が要求される)。
+
+---
+
 ## [✅完了 2026-06-05] ProcTap 取り込み 段階 2: ProcTapCaptureBackend 本体実装
 - **対応ブランチ**: `feature/proctap-backend`
 - **対応内容**:
