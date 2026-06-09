@@ -70,6 +70,20 @@ docs/
 - [docs/design/TaskList.md](docs/design/TaskList.md) — 実装タスクリスト
 - [docs/design/pendList.md](docs/design/pendList.md) — 保留・暫定決定
 
+## 恒常ドキュメントの記述方針
+恒常的に参照するドキュメント(`Architecture.html` / `Class.md` / `manual.md` / 本ファイル)は
+**「現在の構造・設計・考え方」を現在形で**書く:
+
+- **Phase 名・ブランチ名・日付・「〜で追加/変更」の経緯を書かない**。経緯は git log と
+  作業記録(`docs/design/<branch-name>/` / pendList / troubleAndShooting)が持つ。
+  恒常側に書くと二重管理になり、後で読む人に有益でないまま腐る。
+- 「**なぜ**そうなっているか」(設計判断・トレードオフ)は経緯ではないので恒常側に残す。
+  判断の詳細記録への**ポインタ**(ファイル/フォルダ参照)も可。
+- 一方、**作業記録系**(各ブランチの Plan / Roadmap / behavioral-contract、pendList、
+  troubleAndShooting)は「いつ・なぜそう決めたか」が本体なので日付・Phase を書く。
+- コード docstring 内の既存の Phase/リスク ID 表記は、触ったファイルで都度削る(専用の
+  一掃作業はしない)。
+
 ## pendList.md の用途
 以下のような「**その時点では対応しないが忘れたくない項目**」を記録する:
 - 実装後に発覚した規模の大きな変更
@@ -117,7 +131,7 @@ py -m uv run pytest -m "" --override-ini="addopts=" # 全部(addopts を強制 o
 - large: 「外部リソース(モデル DL 済み前提 / 実デバイス)を必要とし、数十秒以上かかる」
 - large は **CI に組み込まない**(リモート CI 不要方針)。手元での明示確認のみ。
 
-### 認証情報が用意された backend は実ロード large テストを追加(2026-05-30 追加方針)
+### 認証情報が用意された backend は実ロード large テストを追加
 small テストはモック前提のため「**依存パッケージのバージョン乖離**」を検出できない。
 pyannote.audio 3.x が torch 2.6 で動かなくなった事例
 (`docs/troubleAndShooting/2026-05-30_pyannote_audio_4x_migration.md`)を機に、
@@ -152,7 +166,7 @@ large テストを必ず追加**する。
 ## コーディング規約
 - 基本は**言語標準に従う**。
 
-## UI 実装の規約(肥大化防止 / refactor-ui-3move で確立、2026-06-10)
+## UI 実装の規約(肥大化防止)
 詳細と背景は `docs/design/Architecture.html` §9。新しい UI 機能は以下に従って置き場を決める:
 
 - **判断は logic、widget は塗るだけ**: 「状態 → 表示すべき値」の計算(ボタン文言・有効無効・
