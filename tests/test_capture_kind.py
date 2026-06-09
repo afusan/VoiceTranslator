@@ -265,9 +265,13 @@ class TestSettingsPanelCaptureDisplay:
         ctrl.set_setting.assert_any_call("backends", "capture", "proctap")
 
     def test_helper_display_to_internal_extracts_backend_name(self) -> None:
-        from voice_translator.gui.settings_panel import _capture_display_to_internal
+        # P1: 変換関数は gui/logic/backend_display.py へ移動(詳細テストは
+        # tests/test_logic_backend_display.py)
+        from voice_translator.gui.logic.backend_display import (
+            capture_display_to_internal,
+        )
 
-        assert _capture_display_to_internal("デバイス (soundcard)") == "soundcard"
-        assert _capture_display_to_internal("プロセス (proctap)") == "proctap"
+        assert capture_display_to_internal("デバイス (soundcard)") == "soundcard"
+        assert capture_display_to_internal("プロセス (proctap)") == "proctap"
         # ネストカッコなど不正形式はそのまま返す(防衛)
-        assert _capture_display_to_internal("plain_backend") == "plain_backend"
+        assert capture_display_to_internal("plain_backend") == "plain_backend"

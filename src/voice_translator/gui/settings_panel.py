@@ -30,6 +30,22 @@ from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
 from .collapsible_section import CollapsibleSection
 from .consent_dialog import ConsentDialog
 from .layer_settings_dialog import LayerSettingsDialog
+from .logic.backend_display import (
+    TTS_NONE_DISPLAY,
+    TTS_NONE_INTERNAL,
+    backend_display_to_internal,
+    backend_internal_to_display,
+    capture_internal_to_display,
+)
+from .logic.language_choices import (
+    compute_src_selection,
+    compute_tgt_selection,
+    format_src_fallback_message,
+    format_tgt_fallback_message,
+    format_tts_warning_message,
+    tts_warning_needed,
+)
+from .logic.palette import DISABLED_TEXT, STATUS_COLOR_DEFAULT, STATUS_COLORS
 from .process_select_dialog import ProcessSelectDialog
 
 # GUIで切替対象とするレイヤと表示ラベル
@@ -52,61 +68,11 @@ _TGT_LANG_CHOICES: list[str] = [
 # ASR backend が未登録 / 対応言語不明 のときの fallback 候補(最低限の MVP セット)。
 _FALLBACK_INPUT_LANGS: list[str] = list(_TGT_LANG_CHOICES)
 
-# ModelStatus → 色マップ(customtkinter は色名そのまま使える)
-_STATUS_COLORS: dict[ModelStatus, str] = {
-    ModelStatus.INIT: "#64748b",            # slate gray (まだロード起動前)
-    ModelStatus.NOT_DOWNLOADED: "#dc2626",  # red
-    ModelStatus.LOADING: "#d97706",         # amber
-    ModelStatus.LOADED: "#16a34a",          # green
-}
-
 # 各セクションの開閉永続化キー(default=False は「開」を表す。set_setting には
 # is_open の論理否定を保存することで「閉じた状態だけ True を立てる」運用)。
 _CFG_COLLAPSED_BACKENDS = ("ui", "collapsed", "backends")
 _CFG_COLLAPSED_DEVICES = ("ui", "collapsed", "devices")
 _CFG_COLLAPSED_LANGUAGES = ("ui", "collapsed", "languages")
-
-# TTS backend に「(なし)」を選んだとき(= text_only モード)に無効化するレイヤ。
-_OUTPUT_DISABLED_LAYERS: set[LayerKind] = {LayerKind.TTS, LayerKind.OUTPUT}
-
-# TTS プルダウンの「(なし)」表示と内部値(2026-06-05 refactor)。
-# 内部値 `_TTS_NONE_INTERNAL` は AppController.TTS_NONE と一致させること。
-# BackendRegistry にこの名前の backend は登録しない前提。
-_TTS_NONE_DISPLAY = "(なし)"
-_TTS_NONE_INTERNAL = "none"
-
-
-def _tts_display_to_internal(display: str) -> str:
-    """TTS プルダウンの表示文字列を内部値に変換する。"""
-    return _TTS_NONE_INTERNAL if display == _TTS_NONE_DISPLAY else display
-
-
-def _tts_internal_to_display(internal: str) -> str:
-    """TTS の内部値を表示文字列に変換する。"""
-    return _TTS_NONE_DISPLAY if internal == _TTS_NONE_INTERNAL else internal
-
-
-# 音声取得 backend の kind 表示ラベル(2026-06-05 / ProcTap 取り込み 段階1)。
-# 「音声取得」プルダウンの表示は `<kind label> (<backend name>)` 形式。
-# 内部値(ConfigStore `backends.capture`)は backend 名のまま維持する。
-_CAPTURE_KIND_LABELS: dict[CaptureKind, str] = {
-    CaptureKind.DEVICE: "デバイス",
-    CaptureKind.PROCESS: "プロセス",
-}
-
-
-def _capture_display_to_internal(display: str) -> str:
-    """「デバイス (soundcard)」のような表示文字列から backend 名を抽出する。
-
-    形式 `<label> (<backend>)` の末尾カッコ内を取り出す。マッチしないものは
-    そのまま返す(防衛: 未登録表示 `(未登録)` や旧式設定の互換)。
-    """
-    if display.endswith(")") and "(" in display:
-        start = display.rindex("(") + 1
-        return display[start:-1]
-    return display
-
-
 
 class SettingsPanel(ctk.CTkFrame):
     """設定操作のパネル + レイヤ別モデルステータス表示。"""
@@ -243,12 +209,13 @@ class SettingsPanel(ctk.CTkFrame):
     ) -> list[str]:
         """`list_backends(layer)` の戻り値を layer 別の表示形式に整える。
 
+        変換規則は `gui/logic/backend_display.py` に委譲:
         - TTS: 末尾に「(なし)」を追加(text_only モード切替)
-        - CAPTURE: `<kind label> (<backend>)` 形式に変換(段階 1 / ProcTap 取り込み準備)
+        - CAPTURE: `<kind label> (<backend>)` 形式に変換
         - その他: backend 名そのまま
         """
         if layer == LayerKind.TTS:
-            return list(internal_names) + [_TTS_NONE_DISPLAY]
+            return list(internal_names) + [TTS_NONE_DISPLAY]
         if layer == LayerKind.CAPTURE:
             return [self._capture_internal_to_display(n) for n in internal_names]
         return list(internal_names)
@@ -257,38 +224,36 @@ class SettingsPanel(ctk.CTkFrame):
         self, layer: LayerKind, internal: str,
     ) -> str:
         """指定レイヤの内部 backend 名を表示文字列に変換する。"""
-        if layer == LayerKind.TTS:
-            return _tts_internal_to_display(internal)
         if layer == LayerKind.CAPTURE:
             return self._capture_internal_to_display(internal)
-        return internal
+        return backend_internal_to_display(layer, internal)
 
     def _backend_display_to_internal(
         self, layer: LayerKind, display: str,
     ) -> str:
         """表示文字列を内部 backend 名に変換する。"""
-        if layer == LayerKind.TTS:
-            return _tts_display_to_internal(display)
-        if layer == LayerKind.CAPTURE:
-            return _capture_display_to_internal(display)
-        return display
+        return backend_display_to_internal(layer, display)
 
     def _capture_internal_to_display(self, internal: str) -> str:
         """CAPTURE backend 名を「<kind label> (<backend>)」形式に変換する。
 
-        kind が取れない / 未登録 / `CaptureKind` 以外の値は backend 名そのままを返す
-        (防衛: 古い AppController モックや未登録 backend に対する縮退)。
+        kind の解決(controller 問い合わせ + 失敗時の縮退)だけここで行い、
+        表示形式は `gui/logic/backend_display.py` に委譲する。
         """
-        if not internal or internal == "(未登録)":
-            return internal
+        return capture_internal_to_display(internal, self._capture_kind_of(internal))
+
+    def _capture_kind_of(self, backend_name: str) -> CaptureKind | None:
+        """backend 名から CaptureKind を解決する。取れないときは None(表示は素通し)。
+
+        防衛: 古い AppController モックや未登録 backend、空 / "(未登録)" 表示に対する縮退。
+        """
+        if not backend_name or backend_name == "(未登録)":
+            return None
         try:
-            kind = self._controller.get_capture_kind(internal)
+            kind = self._controller.get_capture_kind(backend_name)
         except Exception:  # noqa: BLE001
-            return internal
-        if not isinstance(kind, CaptureKind):
-            return internal
-        label = _CAPTURE_KIND_LABELS.get(kind, internal)
-        return f"{label} ({internal})"
+            return None
+        return kind if isinstance(kind, CaptureKind) else None
 
     # ----------------------------------------------------------
     # TTS=(なし) 連動(Output 行のグレーアウト)
@@ -302,7 +267,7 @@ class SettingsPanel(ctk.CTkFrame):
         """
         is_none = self._controller.get_setting(
             "backends", LayerKind.TTS.value, default="",
-        ) == _TTS_NONE_INTERNAL
+        ) == TTS_NONE_INTERNAL
         rows = getattr(self, "_backend_rows", {})
 
         # Output 行: TTS=(なし) なら全要素 disable / グレーアウト
@@ -311,7 +276,7 @@ class SettingsPanel(ctk.CTkFrame):
                 if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
                     w.configure(state="disabled" if is_none else "normal")
                 elif isinstance(w, ctk.CTkLabel):
-                    w.configure(text_color="#475569" if is_none else None)
+                    w.configure(text_color=DISABLED_TEXT if is_none else None)
             except Exception:  # noqa: BLE001 - widget 破棄 / プロパティ未対応で UI を止めない
                 pass
 
@@ -320,7 +285,7 @@ class SettingsPanel(ctk.CTkFrame):
         for w in tts_widgets:
             try:
                 if isinstance(w, ctk.CTkLabel):
-                    w.configure(text_color="#475569" if is_none else None)
+                    w.configure(text_color=DISABLED_TEXT if is_none else None)
                 elif isinstance(w, ctk.CTkButton):
                     # 設定ボタンは TTS=(なし) のとき意味がない → disable
                     w.configure(state="disabled" if is_none else "normal")
@@ -484,7 +449,9 @@ class SettingsPanel(ctk.CTkFrame):
         if label is None:
             return
         text = self._format_status_text(layer, status)
-        label.configure(text=text, text_color=_STATUS_COLORS.get(status, "#64748b"))
+        label.configure(
+            text=text, text_color=STATUS_COLORS.get(status, STATUS_COLOR_DEFAULT)
+        )
 
     def _format_status_text(self, layer: LayerKind, status: ModelStatus) -> str:
         """Loaded のときだけ device 情報を併記する("Loaded (cuda)" 等)。
@@ -516,7 +483,7 @@ class SettingsPanel(ctk.CTkFrame):
         internal_value = self._backend_display_to_internal(layer, value)
 
         # 「(なし)」選択は同意ダイアログ不要(ローカル動作 = backend 起動しない)
-        if internal_value != _TTS_NONE_INTERNAL:
+        if internal_value != TTS_NONE_INTERNAL:
             if not self._gate_cloud_consent(layer, internal_value):
                 # キャンセル: プルダウン表示を元の値に戻す
                 current_internal = str(
@@ -542,7 +509,7 @@ class SettingsPanel(ctk.CTkFrame):
         # TTS backend 切替: Output 行のグレーアウト連動 + 言語互換チェック
         if layer == LayerKind.TTS:
             self._apply_tts_none_visual()
-            if internal_value != _TTS_NONE_INTERNAL:
+            if internal_value != TTS_NONE_INTERNAL:
                 self._check_tts_output_lang_compatibility(notify_fallback=True)
         # CAPTURE backend 切替: 入力デバイスプルダウンを新 backend の `list_sources` で再列挙
         # (P5。ProcTap など複数 capture backend が並ぶ未来に備え、上段=backend / 下段=source の
@@ -569,41 +536,33 @@ class SettingsPanel(ctk.CTkFrame):
     ) -> None:
         """ASR backend に応じて入力言語プルダウンの選択肢を再構築する。
 
-        - backend の `supported_input_languages()` を引いて選択肢を組み立てる
-        - 取得失敗 / 未対応 backend のときは fallback リストを使う
-        - 既存設定値が新 backend で非対応のときは自動 fallback
-          (auto 対応なら "auto"、非対応なら先頭言語)+ 通知バナーで明示
-        - `notify_fallback=False` のときは通知を出さない(起動時の初回構築用)
+        候補・fallback の判断は `gui/logic/language_choices.py` に委譲。ここは
+        controller への問い合わせ、dropdown / StringVar への反映、設定の書き戻し、
+        通知バナーの発火だけを行う。
+        `notify_fallback=False` のときは通知を出さない(起動時の初回構築用)。
         """
         if self._src_dropdown is None:
             return  # 初期化未完了時の防御
 
-        codes = self._controller.get_supported_input_languages(backend_name)
-        if not codes:
-            codes = list(_FALLBACK_INPUT_LANGS)
-        # 重複除去 + ソート(UI 表示の安定性)
-        codes = sorted(set(codes))
-        # auto 対応 backend なら先頭に追加
-        if self._controller.supports_auto_detect(backend_name):
-            codes = ["auto"] + codes
+        sel = compute_src_selection(
+            self._controller.get_supported_input_languages(backend_name),
+            supports_auto=self._controller.supports_auto_detect(backend_name),
+            current=str(
+                self._controller.get_setting("languages", "src", default="auto")
+            ),
+            fallback_pool=_FALLBACK_INPUT_LANGS,
+        )
 
-        # 選択肢を再構築
-        labels = [format_language(c) for c in codes]
-        self._src_dropdown.configure(values=labels)
+        # 選択肢を再構築 + 表示形式を新リストの対応ラベルに合わせる
+        self._src_dropdown.configure(values=[format_language(c) for c in sel.codes])
+        self._src_var.set(format_language(sel.selected))
 
-        # 既存設定値の検証
-        current_code = str(self._controller.get_setting("languages", "src", default="auto"))
-        if current_code in codes:
-            # 表示形式を新リストの対応ラベルに合わせる(format_language の変化に追従)
-            self._src_var.set(format_language(current_code))
+        if sel.fallback_from is None:
             return
-
-        # 非対応 → fallback
-        new_code = "auto" if "auto" in codes else codes[0]
-        self._src_var.set(format_language(new_code))
-        self._controller.set_setting("languages", "src", new_code)
+        # 非対応 → fallback(設定を書き戻し、必要なら通知)
+        self._controller.set_setting("languages", "src", sel.selected)
         if notify_fallback:
-            self._notify_lang_fallback(current_code, new_code, backend_name)
+            self._notify_lang_fallback(sel.fallback_from, sel.selected, backend_name)
 
     def _notify_lang_fallback(self, old_code: str, new_code: str, backend_name: str) -> None:
         """入力言語が自動変更されたことを通知バナーで明示する。
@@ -612,10 +571,12 @@ class SettingsPanel(ctk.CTkFrame):
         確認ダイアログは出さず通知のみ(CLAUDE.md「ユーザ設定を勝手に変更しない」原則の
         例外扱い、ただし「黙って変える」のは避ける)。
         """
-        msg = (
-            f"入力言語を {format_language(old_code)} から {format_language(new_code)} に変更しました"
-            f"({backend_name} が {old_code} に対応していないため)"
+        self._notify_warning(
+            format_src_fallback_message(old_code, new_code, backend_name)
         )
+
+    def _notify_warning(self, msg: str) -> None:
+        """警告バナーに出す(banner が無い / 失敗時は _show_message に縮退)。"""
         if self._banner is not None:
             try:
                 self._banner.show_warning(msg)
@@ -633,41 +594,31 @@ class SettingsPanel(ctk.CTkFrame):
     ) -> None:
         """Translator backend に応じて出力言語プルダウンの選択肢を再構築する。
 
-        - backend の `supported_target_languages()` を引いて選択肢を組み立てる
-        - 取得失敗 / 未対応 backend のときは fallback リストを使う
-        - `"auto"` は含めない(出力言語に「自動」は意味を持たない)
-        - 既存設定値が新 backend で非対応のとき:
-          - 日本語があれば日本語に fallback(本アプリは日本語主用途)
-          - 無ければ英語、両方無ければ先頭言語
-          - `notify_fallback=True` なら通知バナーで明示
+        候補・fallback(ja > en > 先頭)の判断は `gui/logic/language_choices.py` に
+        委譲。ここは controller への問い合わせ、widget への反映、設定の書き戻し、
+        通知バナーの発火、fallback 後の TTS 互換チェック連鎖だけを行う。
         """
         if self._tgt_dropdown is None:
             return
 
-        codes = self._controller.get_supported_target_languages(backend_name)
-        if not codes:
-            codes = list(_TGT_LANG_CHOICES)
-        codes = sorted(set(c for c in codes if c != "auto"))
+        sel = compute_tgt_selection(
+            self._controller.get_supported_target_languages(backend_name),
+            current=str(
+                self._controller.get_setting("languages", "tgt", default="ja")
+            ),
+            fallback_pool=_TGT_LANG_CHOICES,
+        )
 
-        labels = [format_language(c) for c in codes]
-        self._tgt_dropdown.configure(values=labels)
+        self._tgt_dropdown.configure(values=[format_language(c) for c in sel.codes])
+        self._tgt_var.set(format_language(sel.selected))
 
-        current_code = str(self._controller.get_setting("languages", "tgt", default="ja"))
-        if current_code in codes:
-            self._tgt_var.set(format_language(current_code))
+        if sel.fallback_from is None:
             return
 
-        # 非対応 → fallback(日本語 > 英語 > 先頭)
-        if "ja" in codes:
-            new_code = "ja"
-        elif "en" in codes:
-            new_code = "en"
-        else:
-            new_code = codes[0]
-        self._tgt_var.set(format_language(new_code))
-        self._controller.set_setting("languages", "tgt", new_code)
+        # 非対応 → fallback(設定を書き戻し、必要なら通知)
+        self._controller.set_setting("languages", "tgt", sel.selected)
         if notify_fallback:
-            self._notify_tgt_lang_fallback(current_code, new_code, backend_name)
+            self._notify_tgt_lang_fallback(sel.fallback_from, sel.selected, backend_name)
         # tgt が fallback で変わった可能性があるので TTS 互換チェック
         self._check_tts_output_lang_compatibility(notify_fallback=notify_fallback)
 
@@ -678,25 +629,26 @@ class SettingsPanel(ctk.CTkFrame):
         """現在の TTS backend が現在の出力言語(tgt)を読み上げ可能か確認し、
         対応外なら警告バナーを出す。
 
+        警告要否の判断は `gui/logic/language_choices.py:tts_warning_needed` に委譲。
         - ユーザ選択(TTS / tgt_lang)は変更しない: TTS は「結果に対する制約」で
           因果関係が遠いため、勝手に切り替えず警告に留める
         - 呼び出し箇所: TTS backend 切替時 / tgt_lang 切替時 /
           Translator 切替後の fallback で tgt が変わった後
         - `notify_fallback=False` は起動時の初期化用(バナーを出さない)
-        - 取得失敗 / 対応言語不明(空リスト)時は警告を出さない
         """
         tts_backend = str(
             self._controller.get_setting("backends", LayerKind.TTS.value, default="")
         )
-        if not tts_backend or tts_backend == _TTS_NONE_INTERNAL:
+        if not tts_backend or tts_backend == TTS_NONE_INTERNAL:
             # TTS=(なし) のときは text_only モードなので、読み上げ言語の警告は出さない
-            return
-        supported = self._controller.get_supported_output_languages(tts_backend)
-        if not supported:
-            # 「分からない」backend は警告を出さない(誤検知より沈黙)
+            # (supported の問い合わせ自体を省く)
             return
         current_tgt = str(self._controller.get_setting("languages", "tgt", default=""))
-        if current_tgt and current_tgt in supported:
+        if not tts_warning_needed(
+            tts_backend=tts_backend,
+            supported=self._controller.get_supported_output_languages(tts_backend),
+            current_tgt=current_tgt,
+        ):
             return
         if not notify_fallback:
             return
@@ -704,33 +656,14 @@ class SettingsPanel(ctk.CTkFrame):
 
     def _notify_tts_unsupported_lang(self, tgt_code: str, backend_name: str) -> None:
         """TTS が現在の出力言語を読み上げられないことを通知バナーで明示する。"""
-        msg = (
-            f"TTS バックエンド {backend_name} は読み上げ言語 "
-            f"{format_language(tgt_code)} に対応していません"
-            "(Translator 出力言語を変えるか、別の TTS バックエンドに切り替えてください)"
-        )
-        if self._banner is not None:
-            try:
-                self._banner.show_warning(msg)
-                return
-            except Exception:  # noqa: BLE001
-                pass
-        self._show_message(msg)
+        self._notify_warning(format_tts_warning_message(tgt_code, backend_name))
 
     def _notify_tgt_lang_fallback(
         self, old_code: str, new_code: str, backend_name: str,
     ) -> None:
-        msg = (
-            f"出力言語を {format_language(old_code)} から {format_language(new_code)} に変更しました"
-            f"({backend_name} が {old_code} に対応していないため)"
+        self._notify_warning(
+            format_tgt_fallback_message(old_code, new_code, backend_name)
         )
-        if self._banner is not None:
-            try:
-                self._banner.show_warning(msg)
-                return
-            except Exception:  # noqa: BLE001
-                pass
-        self._show_message(msg)
 
     def _gate_cloud_consent(self, layer: LayerKind, backend_name: str) -> bool:
         """クラウド backend なら同意ダイアログで gate する。同意あり/不要なら True。
