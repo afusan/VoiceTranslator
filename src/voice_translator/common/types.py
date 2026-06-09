@@ -140,6 +140,22 @@ class ModelInfo:
 
 
 @dataclass(frozen=True)
+class LayerStatusLine:
+    """レイヤ 1 行分のステータス表示データ(整形前)。
+
+    役割: `AppController.get_status_snapshot()` の戻り値要素。文字列への整形は
+    UI 側(`gui/logic/status_summary.py`)の責務で、ここはデータのみを運ぶ。
+    `dl_size_hint` は表示にそのまま連結する末尾文字列(例: `" (~2.9GB)"`。
+    **先頭スペースを含む**)で、DOWNLOADING 以外のときは空文字。
+    """
+
+    layer: LayerKind
+    backend_name: str
+    status: ModelStatus
+    dl_size_hint: str = ""
+
+
+@dataclass(frozen=True)
 class ErrorRecord:
     """backend で発生したエラーの記録。
 
