@@ -284,3 +284,56 @@ class TestSettingsPanelDeviceRestart:
         panel._apply_restart_event(self._event("started"))  # noqa: SLF001
         panel._apply_restart_event(self._event("completed"))  # noqa: SLF001
         panel._apply_restart_event(self._event("failed", "input", "x"))  # noqa: SLF001
+
+
+class TestReloadGuardWhileRunning:
+    """「設定を再読込」は動作中 / ロード中は拒否する(2026-06-10 ドッグフーディング起票)。
+
+    再読込は全 backend キャッシュを evict するため、動作中に走らせると Coordinator が
+    旧インスタンスを掴んだまま表示だけ INIT に戻り、表示と実行状態が食い違う。
+    shim 方式(GUI 構築なし)で _on_reload のガード分岐だけを検証する。
+    """
+
+    @staticmethod
+    def _shim(*, is_running: bool, is_loading: bool = False, banner=True):
+        from voice_translator.gui.settings_panel import SettingsPanel
+
+        shim = MagicMock(spec=SettingsPanel)
+        shim._on_reload = SettingsPanel._on_reload.__get__(shim)
+        shim._reload_blocked = SettingsPanel._reload_blocked.__get__(shim)
+        shim._notify_warning = SettingsPanel._notify_warning.__get__(shim)
+        shim._controller = MagicMock(name="controller")
+        shim._controller.is_running = is_running
+        shim._controller.is_loading = is_loading
+        shim._banner = MagicMock(name="banner") if banner else None
+        shim._show_message = MagicMock(name="show_message")
+        return shim
+
+    def test_reload_refused_while_running(self) -> None:
+        shim = self._shim(is_running=True)
+        shim._on_reload()  # noqa: SLF001
+        shim._controller.load_settings.assert_not_called()
+        shim._banner.show_warning.assert_called_once()
+        msg = shim._banner.show_warning.call_args[0][0]
+        assert "動作中" in msg
+
+    def test_reload_refused_while_loading(self) -> None:
+        shim = self._shim(is_running=False, is_loading=True)
+        shim._on_reload()  # noqa: SLF001
+        shim._controller.load_settings.assert_not_called()
+        shim._banner.show_warning.assert_called_once()
+
+    def test_reload_allowed_when_idle(self) -> None:
+        shim = self._shim(is_running=False)
+        shim._on_reload()  # noqa: SLF001
+        shim._controller.load_settings.assert_called_once()
+        # 後続の再構築 + 完了メッセージまで配線される(shim 上は auto-mock)
+        shim._populate_devices_into_dropdowns.assert_called_once()
+        shim._sync_all_status_labels.assert_called_once()
+        shim._show_message.assert_called_with("設定を再読込しました")
+
+    def test_banner_none_falls_back_to_show_message(self) -> None:
+        shim = self._shim(is_running=True, banner=False)
+        shim._on_reload()  # noqa: SLF001
+        shim._controller.load_settings.assert_not_called()
+        shim._show_message.assert_called_once()

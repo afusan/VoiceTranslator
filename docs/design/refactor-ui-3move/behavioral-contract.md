@@ -145,7 +145,7 @@
 | # | ふるまい | 関連ファイル | 備考 |
 |---|---|---|---|
 | 10.1 | 設定変更は ConfigStore に即時書き込み、ファイル保存は「設定を保存」ボタンで明示的に行う | `config_store.py:save` | **現状維持**。auto-persist 化(保存ボタン撤去)は pendList 起票(2026-06-10)で保留 |
-| 10.2 | 「設定を再読込」ボタンで外部編集の取り込み(全 backend キャッシュ破棄 + INIT に戻る) | `app_controller.py:load_settings` | 維持 |
+| 10.2 | 「設定を再読込」ボタンで外部編集の取り込み(全 backend キャッシュ破棄 + INIT に戻る)。❌ 追加制約(2026-06-10 ドッグフーディング): **動作中 / ロード中は実行を拒否**し警告バナーを出す | `app_controller.py:load_settings` + `settings_panel.py:_reload_blocked` | 差分 evict 化は pendList 起票 |
 | 10.3 | 「デバイス再列挙」ボタンで入出力プルダウンを再構築 | `settings_panel.py:_populate_devices_into_dropdowns` | 維持 |
 | 10.4 | PROCESS kind capture の `devices.input` は **save しない**(セッション間で持ち越さない) | `app_controller.py:_strip_volatile_inputs_before_save` | 維持 |
 | 10.5 | アプリ起動時、`auto_load=True` 指定の backend だけ先行ロード(その他は INIT のまま) | `main_window.py` + `app_controller.py:load_auto_load_layers_async` | 維持 |
