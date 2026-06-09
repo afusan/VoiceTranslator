@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>AppController 責務マップ — MVVM 再構築版</title>
+<style>
+  body { font-family: "Yu Gothic UI", "Meiryo", sans-serif; max-width: 1320px; margin: 1.5em auto; padding: 0 1.2em; color: #1f2937; line-height: 1.6; }
+  h1 { border-bottom: 3px solid #2563eb; padding-bottom: 0.3em; }
+  h2 { border-bottom: 2px solid #94a3b8; padding-bottom: 0.2em; margin-top: 2em; color: #1e3a8a; }
+  h3 { margin-top: 1.4em; color: #1e40af; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-family: "Cascadia Code", Consolas, monospace; font-size: 0.92em; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.93em; }
+  th, td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: #e0e7ff; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .small { font-size: 0.88em; color: #475569; }
+
+  /* layered architecture diagram */
+  .layers {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+    margin: 1.5em 0;
+  }
+  .layer {
+    border: 2px solid;
+    border-radius: 10px;
+    padding: 12px 16px;
+    background: #fff;
+  }
+  .layer.view  { background: linear-gradient(180deg,#fae8ff,#f5d0fe); border-color: #a21caf; }
+  .layer.view .title { color: #6b21a8; }
+  .layer.vm    { background: linear-gradient(180deg,#fef3c7,#fde68a); border-color: #d97706; }
+  .layer.vm .title { color: #78350f; }
+  .layer.model { background: linear-gradient(180deg,#dcfce7,#bbf7d0); border-color: #15803d; }
+  .layer.model .title { color: #14532d; }
+  .layer.infra { background: linear-gradient(180deg,#e0f2fe,#bae6fd); border-color: #0369a1; }
+  .layer.infra .title { color: #075985; }
+
+  .layer .title { font-weight: 700; font-size: 1.05em; margin-bottom: 6px; }
+  .layer .desc  { font-size: 0.86em; margin-bottom: 8px; }
+
+  .cards { display: flex; flex-wrap: wrap; gap: 10px; }
+  .card {
+    flex: 1 1 220px;
+    background: rgba(255,255,255,0.85);
+    border: 1px solid rgba(0,0,0,0.15);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.86em;
+  }
+  .card .name { font-weight: 700; }
+  .card .role { color: #475569; font-size: 0.82em; margin-top: 2px; }
+
+  .arrow {
+    text-align: center;
+    color: #2563eb;
+    font-weight: bold;
+    font-size: 1.3em;
+    margin: 4px 0;
+  }
+  .arrow.bind {
+    color: #be123c;
+  }
+  .arrow .lbl { font-size: 0.65em; color: #475569; font-weight: normal; margin-left: 4px; }
+
+  blockquote.note {
+    border-left: 4px solid #2563eb;
+    background: #eff6ff;
+    padding: 0.6em 0.9em;
+    color: #1e3a8a;
+    margin: 1em 0;
+    font-size: 0.92em;
+  }
+  blockquote.note.warn {
+    border-left-color: #d97706;
+    background: #fef3c7;
+    color: #78350f;
+  }
+
+  .pill { display: inline-block; background: #e0e7ff; color: #312e81; padding: 1px 8px; border-radius: 12px; font-size: 0.78em; margin: 0 2px; }
+  .pill.ok   { background: #bbf7d0; color: #14532d; }
+  .pill.warn { background: #fde68a; color: #78350f; }
+  .pill.bad  { background: #fecaca; color: #991b1b; }
+
+  pre {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 12px 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  pre code { background: transparent; padding: 0; color: inherit; }
+
+  td.good { background: #dcfce7 !important; color: #14532d; }
+  td.mid  { background: #fef3c7 !important; color: #78350f; }
+  td.bad  { background: #fee2e2 !important; color: #991b1b; }
+</style>
+</head>
+<body>
+
+<h1>AppController 責務マップ — MVVM 再構築版</h1>
+<p class="small">
+作成: 2026-06-09。<a href="AppControllerResponsibilities.html">MVC 5 コラボレータ版</a>(2026-06-05)に対する
+<strong>MVVM 再構築版</strong>。<a href="MvcVsMvvm.html">MVC と MVVM の違い</a>を踏まえ、customtkinter の
+制約下で実装可能な範囲に落とし込む。
+</p>
+
+<!-- ========================================================= -->
+<h2>1. 前提と方針</h2>
+
+<h3>1-1. なぜ MVVM か</h3>
+
+<ul>
+  <li>現状の AppController は「Model + Controller(MVC)」を兼ねており、
+    GUI から呼ばれる Facade と内部ドメインの両方を抱えて 1,415 行に膨らんでいる。</li>
+  <li>5 コラボレータ案(MVC 版)は責務分離は進むが、依然として「Controller が View を更新する」
+    命令型パターンを残す。SettingsPanel / ControlPanel の状態同期コードは消えない。</li>
+  <li>MVVM では <strong>View が ViewModel の Observable プロパティを購読</strong> するため、
+    「設定変更したら別の widget が連動して更新される」式の手書き連動コードが消える。</li>
+  <li>「設定の保存ボタン」のように MVC 文脈で常識化していた UI は、MVVM では <strong>ViewModel が
+    Observable プロパティ書き換え時に自動永続化</strong> する形に置き換える。</li>
+</ul>
+
+<h3>1-2. customtkinter での MVVM 実装の現実解 — 既存パターンの extraction で組む</h3>
+
+<a href="MvcVsMvvm.html">MvcVsMvvm.html</a> で確認した通り、customtkinter には公式の
+データバインディングが無い。**ただし**、本プロジェクトには既に Observable パターンの実体がある
+(<code>src/voice_translator/common/backend_base.py</code> の <code>BackendBase.subscribe</code> /
+<code>Subscription</code>)。
+
+本計画は <strong>「green-field で自前構築」ではなく、既存パターンを <code>Observable[T]</code> として
+extraction + 周辺部品(Command / TkBinder / DebouncedSaver)を薄く追加</strong>する。新規依存は入れない。
+これにより:
+
+<ul>
+  <li>プロジェクト中の既存スタイル(<code>Subscription</code> トークンによる購読解除、
+    listener-copy-on-notify、スレッドセーフ notify)と <strong>1 つの流儀</strong>に揃う</li>
+  <li>traitlets / blinker のような <strong>別パラダイムの併存を避ける</strong>
+    (検討経緯は §8 末尾の代替案ノート参照)</li>
+  <li>コード量見積もりは <strong>~200 行(本体)+ ~250 行(テスト)</strong>。
+    <code>BackendBase</code> の listener 機構を generic 化する extraction が中心</li>
+</ul>
+
+<table>
+  <tr><th>道具</th><th>実装方針</th><th>新規 / 既存</th></tr>
+  <tr>
+    <td><code>Observable[T]</code></td>
+    <td><code>BackendBase</code> の <code>_listeners</code> / <code>_set_status</code> / <code>subscribe</code> を generic に剥がしたもの。値変更時に listener を呼ぶだけ。<code>common/observable.py</code></td>
+    <td>★ extraction(~40 行 + テスト ~50 行)</td>
+  </tr>
+  <tr>
+    <td><code>Subscription</code></td>
+    <td><code>common/backend_base.py</code> に既存。<code>common/observable.py</code> に移して <code>BackendBase</code> 側もこれを再利用する</td>
+    <td>**既存を移設**(<a href="../../../src/voice_translator/common/backend_base.py">既存ファイル</a>)</td>
+  </tr>
+  <tr>
+    <td><code>ObservableProperty</code>(任意)</td>
+    <td>descriptor 糖衣。<code>vm.run_state.set(...)</code> と書く煩わしさを許容するなら <strong>不要</strong>。導入は後追いで OK</td>
+    <td>新規(~30 行)/ 後追いで判断</td>
+  </tr>
+  <tr>
+    <td><code>Command</code></td>
+    <td>callable + <code>can_execute: Observable[bool]</code> のペア。<code>common/command.py</code></td>
+    <td>新規(~30 行)</td>
+  </tr>
+  <tr>
+    <td><code>AsyncCommand</code></td>
+    <td>既存の <code>load_models_async</code> / <code>start_pipeline_async</code> / <code>restart_pipeline_async</code> のパターン抽出。<code>busy: Observable[bool]</code> + <code>on_done</code> / <code>on_failed</code> コールバック</td>
+    <td>パターン抽出(~50 行)</td>
+  </tr>
+  <tr>
+    <td>View ⇄ ViewModel バインド</td>
+    <td>
+      - 一方向(VM → View): <code>Observable.subscribe(...)</code> + <code>UiDispatcher</code> でメインスレッドに marshal → <code>widget.configure(...)</code><br>
+      - 双方向(VM ⇄ View): StringVar/IntVar/BooleanVar を Observable とミラーリング(<code>TkBinder</code>)
+    </td>
+    <td><code>TkBinder</code> 新規(~30 行)</td>
+  </tr>
+  <tr>
+    <td><code>UiDispatcher</code></td>
+    <td>非 UI スレッドから tk メインスレッドへ marshal。<code>widget.after(0, ...)</code> の薄いラッパ + テスト用 fake 差し替え</td>
+    <td>新規(~15 行)/ 既に <code>after(0, ...)</code> 慣用は全コードで採用済</td>
+  </tr>
+  <tr>
+    <td><code>DebouncedSaver</code></td>
+    <td><code>ConfigStore.save()</code> を 500ms デバウンス(§1-3 連動)</td>
+    <td>新規(~30 行)</td>
+  </tr>
+  <tr>
+    <td>Command バインド</td>
+    <td><code>button.configure(command=lambda: vm.start_command.execute())</code> + <code>can_execute</code> 変化で button state 自動切替</td>
+    <td>—(Command で内包)</td>
+  </tr>
+  <tr>
+    <td>初期表示</td>
+    <td>ViewModel 生成時に Model から初期値をフェッチして Observable にセット → View 側 listener が初回発火で反映</td>
+    <td>—</td>
+  </tr>
+</table>
+
+<blockquote class="note">
+  <strong>「既存パターンの extraction」の重み</strong>: <code>BackendBase</code> は既にスレッドセーフな
+  Observable として動いている(<code>_listeners_lock</code> + listener コピー後のロック外通知、
+  <code>Subscription</code> トークン管理)。これを generic 化する作業は、新規構築ではなく
+  <strong>「特定型(ModelStatus 専用)を Observable[T] に汎用化する refactor」</strong>。
+  既存テスト(<code>tests/test_backend_base.py</code> 等)が保守される範囲で安全に進められる。
+</blockquote>
+
+<blockquote class="note warn">
+  <strong>customtkinter の StringVar の限界</strong>: Entry や OptionMenu は textvariable 経由で「Entry の値 ↔ StringVar」
+  の双方向同期ができるが、CTkButton / CTkLabel の text は textvariable に対応しない widget もある。
+  StringVar が使えない widget は <strong>Observable.subscribe(lambda v: widget.configure(text=v))</strong>
+  で代替する(TkBinder が両ケースを吸収)。
+</blockquote>
+
+<h3>1-3. 「設定の保存ボタン」を MVVM らしく置き換える</h3>
+
+現状: ユーザが「設定を保存」を押すと <code>ConfigStore.save()</code> が呼ばれ <code>config.yaml</code> に書き出される。
+
+MVVM 化の選択肢:
+
+<table>
+  <tr><th>案</th><th>挙動</th><th>採否</th></tr>
+  <tr>
+    <td>A. Auto-persist(都度保存)</td>
+    <td>ViewModel のプロパティが変わる度に Model 側で即 save。デバウンス(0.5 秒)で連続変更を集約</td>
+    <td class="good">★ 採用</td>
+  </tr>
+  <tr>
+    <td>B. Dirty flag + SaveCommand</td>
+    <td>変更があれば <code>IsDirty=True</code>、ボタンが enable に。押下で save</td>
+    <td class="mid">採用しない(操作が 1 つ増える)</td>
+  </tr>
+  <tr>
+    <td>C. Auto + Undo</td>
+    <td>都度保存 + 「設定を戻す」コマンドで 1 つ前にロールバック</td>
+    <td class="mid">保留(将来検討)</td>
+  </tr>
+</table>
+
+<p>
+  「設定を再読込」ボタンは MVVM でも維持する(外部編集の取り込み用)。
+  「設定を保存」ボタンは <strong>撤去</strong> し、デバウンス auto-persist で代替。
+  「デバイス再列挙」ボタンは Command として残す(ユーザの明示操作なので)。
+</p>
+
+<!-- ========================================================= -->
+<h2>2. レイヤ構成(MVVM 4 層)</h2>
+
+<div class="layers">
+
+  <!-- View -->
+  <div class="layer view">
+    <div class="title">① View(画面)</div>
+    <div class="desc">
+      customtkinter の widget 組み立て + ViewModel のプロパティ/コマンドへのバインドのみ。
+      ロジックは持たない。AppController / Model を <strong>知らない</strong>。
+    </div>
+    <div class="cards">
+      <div class="card"><div class="name">MainWindow</div><div class="role">トップウィンドウ + 子 View の配置</div></div>
+      <div class="card"><div class="name">BackendSettingsView</div><div class="role">6 レイヤのプルダウン + 設定ボタン</div></div>
+      <div class="card"><div class="name">DeviceSettingsView</div><div class="role">入力ソース / 出力デバイス UI</div></div>
+      <div class="card"><div class="name">LanguageSettingsView</div><div class="role">入力言語 / 出力言語プルダウン</div></div>
+      <div class="card"><div class="name">LogSettingsView</div><div class="role">ログ出力先 + 再読込 / 再列挙ボタン</div></div>
+      <div class="card"><div class="name">ControlView</div><div class="role">Start / Stop / Load / 出力テスト ボタン</div></div>
+      <div class="card"><div class="name">StatusView</div><div class="role">レイヤ別状態 + エラー集約 + アクセラレータ表示</div></div>
+      <div class="card"><div class="name">HistoryView</div><div class="role">翻訳履歴 + 平均レイテンシ</div></div>
+      <div class="card"><div class="name">NotificationBannerView</div><div class="role">起動失敗 / 警告 等の通知</div></div>
+      <div class="card"><div class="name">LayerSettingsDialog</div><div class="role">レイヤ詳細設定(スキーマ駆動)</div></div>
+      <div class="card"><div class="name">CredentialDialog</div><div class="role">API key 入力 + テスト</div></div>
+      <div class="card"><div class="name">ConsentDialog</div><div class="role">クラウド backend 同意</div></div>
+      <div class="card"><div class="name">ProcessSelectDialog</div><div class="role">PID 選択 + 試聴メータ</div></div>
+    </div>
+  </div>
+
+  <div class="arrow bind">↕ <span class="lbl">Observable プロパティ / Command(双方向バインド)</span></div>
+
+  <!-- ViewModel -->
+  <div class="layer vm">
+    <div class="title">② ViewModel(UI 用の整形済み状態)</div>
+    <div class="desc">
+      View の widget 形に整形した状態(<code>Observable[T]</code>)と、ボタン押下に対応する Command を持つ。
+      View を <strong>知らない</strong>。Model を <strong>注入されて</strong> 使う。GUI なしで単体テスト可能。
+    </div>
+    <div class="cards">
+      <div class="card"><div class="name">MainViewModel</div><div class="role">子 VM の所有 + ライフサイクル管理</div></div>
+      <div class="card"><div class="name">BackendSelectionVM</div><div class="role">各レイヤの selected_backend / status / 吸収済みフラグ</div></div>
+      <div class="card"><div class="name">DeviceSelectionVM</div><div class="role">capture_kind / 利用可能ソース / 選択中 PID</div></div>
+      <div class="card"><div class="name">LanguageSelectionVM</div><div class="role">利用可能言語 / src / tgt + 互換警告フラグ</div></div>
+      <div class="card"><div class="name">LogSettingsVM</div><div class="role">ログ出力先 + Reload / RescanDevices Command</div></div>
+      <div class="card"><div class="name">ControlVM</div><div class="role">RunState(idle/loading/running/...) + Start/Stop/Load/TestPlayback Command</div></div>
+      <div class="card"><div class="name">StatusVM</div><div class="role">layer_statuses / recent_errors / accel_text + clear_events Command</div></div>
+      <div class="card"><div class="name">HistoryVM</div><div class="role">history_entries(Observable[list]) + avg_latency + Clear Command</div></div>
+      <div class="card"><div class="name">NotificationVM</div><div class="role">current_message + severity + Dismiss Command</div></div>
+      <div class="card"><div class="name">LayerSettingsVM</div><div class="role">スキーマ駆動: フィールド集合と編集中の値</div></div>
+      <div class="card"><div class="name">CredentialVM</div><div class="role">入力中の値 + Verify Command + verified フラグ</div></div>
+      <div class="card"><div class="name">ConsentVM</div><div class="role">同意状態 + Accept / Decline Command</div></div>
+      <div class="card"><div class="name">ProcessSelectVM</div><div class="role">列挙リスト / 選択中 PID / 試聴 ON-OFF / peak</div></div>
+    </div>
+  </div>
+
+  <div class="arrow">↕ <span class="lbl">注入(コンストラクタ) + Observable サブスクリプション</span></div>
+
+  <!-- Model -->
+  <div class="layer model">
+    <div class="title">③ Model(ドメイン + アプリ状態)</div>
+    <div class="desc">
+      UI を一切知らない純ドメイン。View / ViewModel から直接参照されることもあるが、
+      <strong>変更通知は Observable / イベント</strong>で発信。
+    </div>
+    <div class="cards">
+      <div class="card"><div class="name">ConfigStore</div><div class="role">設定の永続化(auto-persist + デバウンス)</div></div>
+      <div class="card"><div class="name">BackendRegistry</div><div class="role">レイヤ別 backend 登録/列挙/生成 + capability hint</div></div>
+      <div class="card"><div class="name">BackendLoader</div><div class="role">backend 実体の生成/キャッシュ/eviction、状態購読</div></div>
+      <div class="card"><div class="name">CredentialsStore</div><div class="role">API key 永続化(keyring / local.secrets)</div></div>
+      <div class="card"><div class="name">CredentialsCoordinator</div><div class="role">verify → 保存 → verified フラグ管理</div></div>
+      <div class="card"><div class="name">PipelineRunner</div><div class="role">PipelineCoordinator の生成/起動/停止/restart + 観測装置組立</div></div>
+      <div class="card"><div class="name">PipelineCoordinator</div><div class="role">5 スレッド(将来 plan ベース)パイプライン本体</div></div>
+      <div class="card"><div class="name">UtteranceLedger</div><div class="role">seq_id 集約の中央レジャ</div></div>
+      <div class="card"><div class="name">SequenceGenerator</div><div class="role">seq_id 発行</div></div>
+      <div class="card"><div class="name">DeviceValidator</div><div class="role">起動時の入力 ≠ 出力 保証</div></div>
+      <div class="card"><div class="name">ErrorHandler</div><div class="role">例外 4 分類 + NotificationThrottle</div></div>
+      <div class="card"><div class="name">Backend layer impls</div><div class="role">{Capture, VAD, ASR, Translator, TTS, Output} 各実装(BackendBase)</div></div>
+      <div class="card"><div class="name">Logger 群</div><div class="role">TextLogger / TranslationLogger / ProcessTimeLogger / StageDumpWriter</div></div>
+      <div class="card"><div class="name">process_enumerator</div><div class="role">WASAPI セッション列挙 + peak worker</div></div>
+    </div>
+  </div>
+
+  <div class="arrow">↕ <span class="lbl">DI(起動時 1 回)</span></div>
+
+  <!-- Infrastructure -->
+  <div class="layer infra">
+    <div class="title">④ Infrastructure(MVVM の基盤)— extraction が中心</div>
+    <div class="desc">
+      本計画で扱う MVVM 基盤コード。<strong>大半は既存パターンの一般化(extraction)</strong> で、
+      green-field の新規構築ではない。新規依存は入れない。総量は本体 <strong>~200 行 + テスト ~250 行</strong>(見積もり)。
+      <span class="pill ok">extraction</span> は既存コードからの剥がし、<span class="pill">新規</span> は新規実装、
+      <span class="pill warn">任意</span> は導入を保留してもよいもの。
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="name">Observable[T] <span class="pill ok">extraction</span></div>
+        <div class="role"><code>BackendBase</code> の <code>_listeners</code> / <code>_set_status</code> / <code>subscribe</code> を generic に剥がしたもの。<strong>~40 行</strong>。スレッドセーフ(既存パターンそのまま)</div>
+      </div>
+      <div class="card">
+        <div class="name">Subscription <span class="pill ok">既存を移設</span></div>
+        <div class="role"><code>backend_base.py</code> に既存。<code>observable.py</code> に移して <code>BackendBase</code> 自身もこれを再利用</div>
+      </div>
+      <div class="card">
+        <div class="name">ObservableProperty <span class="pill warn">任意</span></div>
+        <div class="role">クラス属性として Observable を宣言する descriptor 糖衣。<strong>初期は導入しない</strong>。煩わしさが顕在化した Phase 以降で後追い判断</div>
+      </div>
+      <div class="card">
+        <div class="name">Command <span class="pill">新規</span></div>
+        <div class="role">execute() + can_execute: Observable[bool]。<strong>~30 行</strong></div>
+      </div>
+      <div class="card">
+        <div class="name">AsyncCommand <span class="pill ok">パターン抽出</span></div>
+        <div class="role">既存の <code>load_models_async</code> / <code>start_pipeline_async</code> / <code>restart_pipeline_async</code> の共通形を抽出。<strong>~50 行</strong>。busy: Observable[bool] + on_done / on_failed</div>
+      </div>
+      <div class="card">
+        <div class="name">TkBinder <span class="pill">新規</span></div>
+        <div class="role">Observable ⇔ StringVar/IntVar/BooleanVar の自動同期 + textvariable 非対応 widget へのフォールバック(<code>configure(text=...)</code>)。<strong>~30 行</strong></div>
+      </div>
+      <div class="card">
+        <div class="name">DebouncedSaver <span class="pill">新規</span></div>
+        <div class="role"><code>ConfigStore.save()</code> を 500ms デバウンス。タイマ + 排他のみ。<strong>~30 行</strong></div>
+      </div>
+      <div class="card">
+        <div class="name">UiDispatcher <span class="pill ok">既存慣用の薄いラッパ</span></div>
+        <div class="role">非 UI スレッド → tk メインスレッドへの marshal。プロジェクト中で既に <code>widget.after(0, ...)</code> を慣用している。<strong>~15 行</strong>(テスト用 fake 差し替え目的で薄く包む)</div>
+      </div>
+      <div class="card">
+        <div class="name">AppContainer <span class="pill">新規</span></div>
+        <div class="role">起動時 DI コンテナ。Model 群 + VM ファクトリを保持。<code>__main__.py</code> から呼ぶ</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<blockquote class="note">
+  <strong>Facade としての AppController は消える</strong>。GUI からのエントリポイントは <code>MainViewModel</code> +
+  注入された Model 群。「GUI から AppController に呼べばよかった」はずの 1 つの窓口を <strong>ViewModel の Command と
+  Observable に分散</strong>させる。
+</blockquote>
+
+<!-- ========================================================= -->
+<h2>3. ViewModel ごとの詳細</h2>
+
+<h3>3-1. BackendSelectionVM</h3>
+
+<table>
+  <tr><th>種別</th><th>名前</th><th>型</th><th>説明</th></tr>
+  <tr><td>State</td><td><code>backends</code></td><td><code>dict[LayerKind, Observable[str]]</code></td><td>レイヤ別 選択中の backend 名</td></tr>
+  <tr><td>State</td><td><code>statuses</code></td><td><code>dict[LayerKind, Observable[ModelStatus]]</code></td><td>レイヤ別 状態</td></tr>
+  <tr><td>State</td><td><code>absorbed_by</code></td><td><code>dict[LayerKind, Observable[LayerKind | None]]</code></td><td>「(◯◯ に統合)」表示用。複合バックエンド対応</td></tr>
+  <tr><td>State</td><td><code>available_backends</code></td><td><code>dict[LayerKind, Observable[list[str]]]</code></td><td>プルダウン候補。TTS は「(なし)」を含む</td></tr>
+  <tr><td>Command</td><td><code>select_backend(layer, name)</code></td><td>—</td><td>選択変更 → 同意 gate → ConfigStore 更新 → BackendLoader.evict → 関連 VM 更新</td></tr>
+  <tr><td>Command</td><td><code>open_layer_settings(layer)</code></td><td>—</td><td>LayerSettingsVM を作って dialog を開く</td></tr>
+  <tr><td>Model 依存</td><td colspan="3">ConfigStore / BackendRegistry / BackendLoader / CredentialsCoordinator(同意/認証 gate)</td></tr>
+</table>
+
+<h3>3-2. LanguageSelectionVM</h3>
+
+<table>
+  <tr><th>種別</th><th>名前</th><th>型</th><th>説明</th></tr>
+  <tr><td>State</td><td><code>src_lang</code></td><td><code>Observable[str]</code></td><td>選択中の入力言語</td></tr>
+  <tr><td>State</td><td><code>tgt_lang</code></td><td><code>Observable[str]</code></td><td>選択中の出力言語</td></tr>
+  <tr><td>State</td><td><code>src_choices</code></td><td><code>Observable[list[str]]</code></td><td>ASR backend の対応言語(動的)</td></tr>
+  <tr><td>State</td><td><code>tgt_choices</code></td><td><code>Observable[list[str]]</code></td><td>Translator backend の対応言語(動的)</td></tr>
+  <tr><td>State</td><td><code>tts_compat_warning</code></td><td><code>Observable[str]</code></td><td>「TTS が tgt_lang を読めない」警告メッセージ。空文字なら警告なし</td></tr>
+  <tr><td>Command</td><td><code>set_src(code)</code> / <code>set_tgt(code)</code></td><td>—</td><td>選択変更 → ConfigStore 更新 → 動作中なら PipelineRunner.set_languages</td></tr>
+  <tr><td>Reaction</td><td colspan="3">BackendSelectionVM の ASR / Translator / TTS の変化を購読して choices と警告を再計算</td></tr>
+</table>
+
+<p class="small">
+  注: 現状の SettingsPanel にあった「backend 切替時の言語自動 fallback + 通知バナー」はこの VM の Reaction として表現される。
+  NotificationBannerView はこの VM の <code>tts_compat_warning</code> や fallback メッセージを購読して自動表示。
+  「Controller が banner.show_warning(...) を呼ぶ」コードは消える。
+</p>
+
+<h3>3-3. ControlVM</h3>
+
+<table>
+  <tr><th>種別</th><th>名前</th><th>型</th><th>説明</th></tr>
+  <tr><td>State</td><td><code>run_state</code></td><td><code>Observable[RunState]</code></td><td>idle / loading / starting / running / stopping</td></tr>
+  <tr><td>State</td><td><code>start_label</code></td><td><code>Observable[str]</code></td><td>「▶ 開始」「認証情報未設定」「プロセス未選択」等</td></tr>
+  <tr><td>State</td><td><code>load_label</code></td><td><code>Observable[str]</code></td><td>「↻ ロード」「ロード済み」「ロード中…」</td></tr>
+  <tr><td>State</td><td><code>test_label</code></td><td><code>Observable[str]</code></td><td>「🔊 出力テスト」「🔊 (TTS なし)」等</td></tr>
+  <tr><td>Command</td><td><code>toggle_run</code></td><td>AsyncCommand</td><td>idle→running / running→idle のトグル。can_execute は前提チェック</td></tr>
+  <tr><td>Command</td><td><code>load_all</code></td><td>AsyncCommand</td><td>全レイヤを冪等ロード</td></tr>
+  <tr><td>Command</td><td><code>test_playback</code></td><td>AsyncCommand</td><td>TTS → Output の経路を 1 回叩く</td></tr>
+  <tr><td>Reaction</td><td colspan="3">BackendSelectionVM の statuses + DeviceSelectionVM の選択状態 + PipelineRunner の is_running を購読して、各 label と can_execute を派生</td></tr>
+</table>
+
+<h3>3-4. StatusVM</h3>
+
+<table>
+  <tr><th>種別</th><th>名前</th><th>型</th><th>説明</th></tr>
+  <tr><td>State</td><td><code>summary_text</code></td><td><code>Observable[str]</code></td><td>レイヤ別状態 + 最近のエラーをまとめたテキスト(push 駆動、3 秒 poll を撤去)</td></tr>
+  <tr><td>State</td><td><code>accel_text</code></td><td><code>Observable[str]</code></td><td>「演算: GPU (cuda)」等</td></tr>
+  <tr><td>State</td><td><code>accel_color</code></td><td><code>Observable[str]</code></td><td>表示色(色も Observable で View に流す)</td></tr>
+  <tr><td>State</td><td><code>recent_durations</code></td><td><code>dict[LayerKind, Observable[list[float]]]</code></td><td>直近処理時間バッファ</td></tr>
+  <tr><td>State</td><td><code>gui_event_log</code></td><td><code>Observable[list[str]]</code></td><td>UI 操作起源のイベント履歴</td></tr>
+  <tr><td>Command</td><td><code>clear_events</code></td><td>—</td><td>gui_event_log をクリア</td></tr>
+  <tr><td>Reaction</td><td colspan="3">BackendLoader の状態変化と PipelineRunner の utterance/error イベントを購読</td></tr>
+</table>
+
+<h3>3-5. HistoryVM</h3>
+
+<table>
+  <tr><th>種別</th><th>名前</th><th>型</th><th>説明</th></tr>
+  <tr><td>State</td><td><code>entries</code></td><td><code>Observable[list[HistoryEntry]]</code></td><td>翻訳履歴(seq_id / src / tgt / 時刻)</td></tr>
+  <tr><td>State</td><td><code>avg_latency_sec</code></td><td><code>Observable[float | None]</code></td><td>直近 10 件の平均</td></tr>
+  <tr><td>State</td><td><code>latency_label</code></td><td><code>Observable[str]</code></td><td>「平均レイテンシ: 1.20 秒(直近 10 件)」</td></tr>
+  <tr><td>Command</td><td><code>clear</code></td><td>—</td><td>history + latency 全クリア</td></tr>
+  <tr><td>Reaction</td><td colspan="3">PipelineRunner の <code>on_text_ready</code> / <code>on_utterance_done</code> を購読</td></tr>
+</table>
+
+<h3>3-6. DeviceSelectionVM</h3>
+
+<table>
+  <tr><th>種別</th><th>名前</th><th>型</th><th>説明</th></tr>
+  <tr><td>State</td><td><code>capture_kind</code></td><td><code>Observable[CaptureKind]</code></td><td>選択中 capture backend の取得単位</td></tr>
+  <tr><td>State</td><td><code>capture_sources</code></td><td><code>Observable[list[CaptureSource]]</code></td><td>DEVICE kind 時の利用可能ソース</td></tr>
+  <tr><td>State</td><td><code>selected_input</code></td><td><code>Observable[str]</code></td><td>選択中入力 ID(または PID 文字列)</td></tr>
+  <tr><td>State</td><td><code>output_devices</code></td><td><code>Observable[list[OutputDevice]]</code></td><td>利用可能出力デバイス</td></tr>
+  <tr><td>State</td><td><code>selected_output</code></td><td><code>Observable[str]</code></td><td>選択中出力 ID</td></tr>
+  <tr><td>Command</td><td><code>set_input</code> / <code>set_output</code></td><td>—</td><td>選択変更 → ConfigStore 更新 → 動作中なら PipelineRunner.restart_async</td></tr>
+  <tr><td>Command</td><td><code>rescan_devices</code></td><td>—</td><td>列挙再実行</td></tr>
+  <tr><td>Command</td><td><code>open_process_select</code></td><td>—</td><td>ProcessSelectVM を作って dialog を開く</td></tr>
+  <tr><td>Reaction</td><td colspan="3">BackendSelectionVM の capture 変化で capture_kind / capture_sources を再計算</td></tr>
+</table>
+
+<!-- ========================================================= -->
+<h2>4. データの流れ(イベント別)</h2>
+
+<table>
+  <tr><th>イベント</th><th>流れ</th></tr>
+  <tr>
+    <td>ユーザが ASR backend を変更</td>
+    <td>
+      View(OptionMenu) → StringVar 変化 → <code>BackendSelectionVM.select_backend()</code> Command 発火 →
+      ConfigStore 更新(auto-persist デバウンス起動) → BackendLoader.evict_layer → 状態 Observable が emit →
+      <strong>LanguageSelectionVM</strong> の Reaction が src_choices を再計算 → View が自動更新
+    </td>
+  </tr>
+  <tr>
+    <td>backend ロードが完了</td>
+    <td>
+      BackendLoader が <code>_set_status(LOADED)</code> → backend.subscribe 経由でレイヤ別 Observable に通知 →
+      <code>BackendSelectionVM.statuses[layer]</code> が更新 → <code>ControlVM</code> の Reaction が
+      <code>start_label</code> / <code>can_execute</code> を再計算 → View が自動更新
+    </td>
+  </tr>
+  <tr>
+    <td>ユーザが Start を押す</td>
+    <td>
+      View(button) → <code>ControlVM.toggle_run</code> AsyncCommand 起動 → DeviceValidator + 認証 gate →
+      PipelineRunner.start_async → run_state を <code>starting → running</code> に遷移 →
+      View が自動更新(「停止中」→「動作中」)
+    </td>
+  </tr>
+  <tr>
+    <td>1 発話の翻訳が完了</td>
+    <td>
+      PipelineRunner が ledger.pop + on_text_ready を <code>UiDispatcher</code> 経由で発火 →
+      <code>HistoryVM.entries</code> に追加 → View が自動更新(履歴 widget)。
+      同時に <code>HistoryVM.avg_latency_sec</code> も再計算 → View 自動更新
+    </td>
+  </tr>
+  <tr>
+    <td>設定の保存(MVC では「保存ボタン押下」)</td>
+    <td>
+      MVVM では <strong>明示操作なし</strong>。ViewModel の Command で ConfigStore.set が呼ばれた時点で
+      DebouncedSaver が 500ms タイマを起動 → タイマ満了で ConfigStore.save() 実行。
+      ユーザは「保存」を意識する必要がない。「設定を再読込」「デバイス再列挙」は明示 Command として残す
+    </td>
+  </tr>
+  <tr>
+    <td>クラウド backend 選択 → 認証フロー</td>
+    <td>
+      <code>BackendSelectionVM.select_backend</code> → 同意 gate(<code>ConsentVM</code> dialog) → OK なら
+      ConfigStore 更新 → 認証 gate(<code>CredentialVM</code> dialog) → verify → 保存 →
+      verified Observable が True に → ControlVM の can_execute が再計算 → View 自動更新
+    </td>
+  </tr>
+</table>
+
+<!-- ========================================================= -->
+<h2>5. MVC 案との対応関係</h2>
+
+<a href="AppControllerResponsibilities.html">MVC 5 コラボレータ版</a>と本 MVVM 案の対応:
+
+<table>
+  <tr><th>MVC 5 コラボレータ案</th><th>MVVM での置き場所</th><th>備考</th></tr>
+  <tr>
+    <td>StatusBroadcaster(A+C)</td>
+    <td><strong>StatusVM</strong> + Model 側の状態 Observable</td>
+    <td>UI に流す部分(VM)と、Model 内の通知部分(各 backend / loader)に分かれる</td>
+  </tr>
+  <tr>
+    <td>CredentialsCoordinator(D)</td>
+    <td>Model: <strong>CredentialsCoordinator</strong>(同名で残す)+ VM: <strong>CredentialVM</strong></td>
+    <td>Model 側のロジックは MVC 案と同じ。VM は dialog 用</td>
+  </tr>
+  <tr>
+    <td>BackendLoaderService(F+E)</td>
+    <td>Model: <strong>BackendLoader</strong>(rename) + メタ問合せ classmethod は各 BackendCls に残す</td>
+    <td>VM は BackendSelectionVM / LanguageSelectionVM が直接 Backend クラスの classmethod を呼ぶ</td>
+  </tr>
+  <tr>
+    <td>SettingsFacade(B)</td>
+    <td>Model: <strong>ConfigStore</strong>(Observable プロパティ化 or 変更通知付き)</td>
+    <td>ConfigStore 自体に Observer を付け、ViewModel が購読</td>
+  </tr>
+  <tr>
+    <td>PipelineRunner(G+H+I)</td>
+    <td>Model: <strong>PipelineRunner</strong>(同名)+ VM: <strong>ControlVM</strong> / <strong>HistoryVM</strong></td>
+    <td>Model 側は MVC 案とほぼ同じ。VM が表示形に整形して View に流す</td>
+  </tr>
+</table>
+
+<blockquote class="note">
+  <strong>差分の要点</strong>:
+  <ul>
+    <li>MVC 案の「Facade としての AppController」は <strong>不要</strong>(MainViewModel が代替)</li>
+    <li>各 Panel(View)から AppController を呼ぶ箇所が消える → <strong>Command 経由</strong>に統一</li>
+    <li>状態同期のために手書きしていた連動コード(`SettingsPanel._on_status_from_thread → on_status_change → _apply_status` 等)が <strong>Observable の購読</strong>に置き換わる</li>
+    <li>3 秒周期 poll の status refresh は <strong>消える</strong>(push 駆動)</li>
+  </ul>
+</blockquote>
+
+<!-- ========================================================= -->
+<h2>6. ファイル配置(目安)</h2>
+
+<pre><code>src/voice_translator/
+├── common/
+│   ├── observable.py        # ← 新規: Observable[T] / ObservableProperty
+│   ├── command.py           # ← 新規: Command / AsyncCommand
+│   ├── tk_binder.py         # ← 新規: Observable ⇔ StringVar 同期
+│   ├── debounced_saver.py   # ← 新規: ConfigStore.save() の自動デバウンス
+│   ├── ui_dispatcher.py     # ← 新規: 非 UI スレッド → tk メインスレッド marshal
+│   ├── app_container.py     # ← 新規: 起動時 DI コンテナ
+│   ├── config_store.py      # 既存 + 変更通知(Observable プロパティ化)
+│   ├── backend_loader.py    # ← 新規(旧 AppController の F 責務)
+│   ├── pipeline_runner.py   # ← 新規(旧 AppController の G+H+I)
+│   ├── credentials_coordinator.py  # ← 新規(旧 AppController の D)
+│   └── ...(その他既存)
+├── viewmodels/              # ← 新規ディレクトリ
+│   ├── main_vm.py
+│   ├── backend_selection_vm.py
+│   ├── device_selection_vm.py
+│   ├── language_selection_vm.py
+│   ├── log_settings_vm.py
+│   ├── control_vm.py
+│   ├── status_vm.py
+│   ├── history_vm.py
+│   ├── notification_vm.py
+│   ├── layer_settings_vm.py
+│   ├── credential_vm.py
+│   ├── consent_vm.py
+│   └── process_select_vm.py
+└── gui/                     # ← View 専用(現状を再編)
+    ├── main_window.py
+    ├── backend_settings_view.py
+    ├── device_settings_view.py
+    ├── language_settings_view.py
+    ├── log_settings_view.py
+    ├── control_view.py
+    ├── status_view.py
+    ├── history_view.py
+    ├── notification_banner.py
+    ├── layer_settings_dialog.py
+    ├── credential_dialog.py
+    ├── consent_dialog.py
+    ├── process_select_dialog.py
+    └── collapsible_section.py
+</code></pre>
+
+<p class="small">
+  既存の <code>app_controller.py</code> は <strong>段階的に解体</strong>。最終形では存在しない。
+  GUI のエントリポイントは <code>__main__.py</code> → <code>AppContainer</code> → <code>MainViewModel</code> +
+  <code>MainWindow</code>。
+</p>
+
+<!-- ========================================================= -->
+<h2>7. 段階移行案</h2>
+
+<table>
+  <tr><th>#</th><th>Phase</th><th>難度</th><th>恩恵</th></tr>
+  <tr>
+    <td>1</td>
+    <td><strong>Infrastructure を整える(extraction 中心)</strong>:
+      <code>BackendBase</code> の listener 機構を <code>Observable[T]</code> + <code>Subscription</code> として <strong>extraction</strong>(<code>BackendBase</code> 自身もこれを使うように小規模 refactor)→
+      <code>Command</code> / <code>TkBinder</code> / <code>DebouncedSaver</code> / <code>UiDispatcher</code> / <code>AppContainer</code> を新規追加 →
+      既存の <code>load_models_async</code> 等から <code>AsyncCommand</code> パターンを抽出。
+      単体テスト 100% で覆う。<strong>ObservableProperty descriptor は導入しない</strong>(後追い判断)
+    </td>
+    <td>小</td>
+    <td>MVVM 基盤が揃う。<code>BackendBase</code> も新形に移行し、流儀が 1 つに揃う。以降の Phase で安心して使える</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><strong>StatusVM + StatusView</strong> を最小ペアで切り出し。AppController._emit_status を Observable へ橋渡し。既存 ControlPanel の status textbox 部分を新 View で置き換え</td>
+    <td>小</td>
+    <td>体感的に「MVVM が動く」最小サンプルが手に入る。3 秒 poll が消える</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><strong>BackendSelectionVM + BackendSettingsView</strong>。SettingsPanel のバックエンドセクションを置き換え。BackendLoader を Model 化(MVC 案の F + E を吸収)</td>
+    <td>中</td>
+    <td>AppController の Backend 関連メソッド群を一気に削減</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><strong>LanguageSelectionVM + LanguageSettingsView</strong>。SettingsPanel の言語連動ロジックを VM の Reaction として表現。NotificationVM もここで導入</td>
+    <td>中</td>
+    <td>SettingsPanel の最大の連動ロジックが消える</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><strong>DeviceSelectionVM + DeviceSettingsView</strong>。CAPTURE kind 別 UI 切替も VM 側で吸収</td>
+    <td>中</td>
+    <td>SettingsPanel の「ControlPanel への逆参照」が不要に</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><strong>ControlVM + HistoryVM + Control/HistoryView</strong>。PipelineRunner を Model 化。「設定を保存」ボタン撤去 + DebouncedSaver 接続</td>
+    <td>大</td>
+    <td>AppController が解体される</td>
+  </tr>
+  <tr>
+    <td>7</td>
+    <td><strong>各種 Dialog の VM 化</strong>(LayerSettings / Credential / Consent / ProcessSelect)。AppController の最後の残骸を撤去</td>
+    <td>中</td>
+    <td>app_controller.py を削除 → MainViewModel + AppContainer で起動</td>
+  </tr>
+  <tr>
+    <td>8</td>
+    <td><strong>ドキュメント整理</strong>。Architecture.html を MVVM 4 層構成で書き直し、Class.md の AppController 章を削除</td>
+    <td>小</td>
+    <td>新規開発者の理解コスト低下</td>
+  </tr>
+</table>
+
+<!-- ========================================================= -->
+<h2>8. リスクと留意点</h2>
+
+<table>
+  <tr><th>リスク</th><th>対策</th></tr>
+  <tr>
+    <td>customtkinter の widget が StringVar に対応しない場合の更新コードが増える</td>
+    <td>TkBinder で「subscribe + widget.configure(text=...)」をラップ。コード量は最小化</td>
+  </tr>
+  <tr>
+    <td>Observable の listener がメモリリークの温床になる(widget が破棄されても listener が残る)</td>
+    <td>Subscription トークン方式(現状の R2-6 / BackendBase.subscribe を踏襲)。View 破棄時に明示 unsubscribe</td>
+  </tr>
+  <tr>
+    <td>auto-persist で保存頻度が上がる</td>
+    <td>DebouncedSaver で 500ms 集約。設定変更 1 回 = ファイル書込み 1 回に近づける</td>
+  </tr>
+  <tr>
+    <td>移行中に「MVC 残骸」と「MVVM 新形」が混在</td>
+    <td>Phase ごとに「MVC 側を完全に消す」プルリク単位を切る。中間状態を長期間放置しない</td>
+  </tr>
+  <tr>
+    <td>テスト fixture の書き直しが大きい</td>
+    <td>VM 単体テストは fixture 軽量(Model モックを VM に注入するだけ)。View 統合テストは tk fixture を一本化</td>
+  </tr>
+  <tr>
+    <td>「設定の保存ボタン」が消えたことのユーザ混乱</td>
+    <td>NotificationBanner で「変更は自動保存されます」を初回起動時に出す or LogSettingsView にヒント表示</td>
+  </tr>
+  <tr>
+    <td><code>BackendBase</code> の listener 機構を <code>Observable[T]</code> に extraction する際の既存テスト破壊</td>
+    <td>Phase 1 の最初のコミットで <code>BackendBase</code> の内部実装だけを <code>Observable[T]</code> 委譲に置き換える(公開 API <code>subscribe()</code> / <code>get_status()</code> は維持)。既存 <code>tests/test_backend_base.py</code> がそのまま pass することを完了条件にする</td>
+  </tr>
+</table>
+
+<h3>8-x. 代替案ノート — なぜ traitlets / blinker を使わないか</h3>
+
+検討経緯(2026-06-09 ユーザとの対話):
+
+<table>
+  <tr><th>選択肢</th><th>評価</th><th>不採用の理由</th></tr>
+  <tr>
+    <td><strong>traitlets</strong>(Jupyter 実績、descriptor ベース)</td>
+    <td class="mid">機能的には適合するが…</td>
+    <td>
+      - <code>BackendBase.subscribe</code> 系統(既存)と <code>HasTraits</code> / <code>@observe</code>(traitlets)の <strong>2 流儀が共存</strong>することになる<br>
+      - traitlets 採用で削減できる自前コードは ~30〜50 行(descriptor 糖衣分)。一方 extraction なら ~200 行で全部揃う<br>
+      - StringVar ブリッジ / AsyncCommand は traitlets でも自前必要 ⇒ 「依存を入れた割に削減量が小さい」
+    </td>
+  </tr>
+  <tr>
+    <td><strong>blinker</strong>(Signal/Slot)</td>
+    <td class="mid">軽量だが</td>
+    <td>signal 部分しか提供しない。<code>Observable[T]</code> / <code>Command</code> は結局自前で書くことになり、依存を入れる動機が弱い</td>
+  </tr>
+  <tr>
+    <td><strong>RxPY(reactivex)</strong></td>
+    <td class="bad">合わない</td>
+    <td>ストリーム指向(event stream)で、値プロパティの変化通知という MVVM ViewModel の用途には形が違う</td>
+  </tr>
+  <tr>
+    <td><strong>atom(enaml 基盤)</strong></td>
+    <td class="mid">性能は最高だが</td>
+    <td>enaml 抜きでの単独利用は情報が少なく、Tkinter プロジェクトに持ち込むメリットが薄い</td>
+  </tr>
+  <tr>
+    <td><strong>extraction(本計画の採用案)</strong></td>
+    <td class="good">採用</td>
+    <td>
+      <code>BackendBase</code> 既存パターン(<code>_listeners_lock</code> + listener コピー後ロック外通知 + <code>Subscription</code> トークン)が <strong>そのまま Observable[T] の実装になる</strong>。
+      新規依存なし、流儀が 1 つに揃う、テスト保守コストが既存延長で済む。
+      自前総量 ~200 行は、traitlets 採用時の自前ぶん(~100〜150 行) + 依存学習コスト + パラダイム共存コストを上回らない
+    </td>
+  </tr>
+</table>
+
+<blockquote class="note">
+  <strong>1 行要約</strong>: 本プロジェクトは <code>BackendBase</code> という形で <strong>既に Observable パターンを持っている</strong>。
+  これを generic 化すれば「自前実装」ではなく「既存パターンの一般化」になる。外部ライブラリ採用は
+  「別パラダイムを併存させる」コストの方が高くつく、と判断した。
+</blockquote>
+
+<blockquote class="note warn">
+  <strong>再検討トリガ</strong>: Phase 1 で <code>Observable[T]</code> の自前実装に予想外の難所
+  (リーク / 競合 / ガベージコレクト周りのエッジケース)が出た場合は、当該 Phase で traitlets 導入を再評価する。
+  その時点で extraction を捨てる必要はなく、<code>Observable[T]</code> の内部実装だけ traitlets に差し替えれば
+  公開 API は維持できる(本計画の Observable インタフェース設計はそれを許す前提で組む)。
+</blockquote>
+
+<!-- ========================================================= -->
+<h2>9. 関連ドキュメント</h2>
+
+<ul>
+  <li><a href="MvcVsMvvm.html">MVC と MVVM の違い</a> — 採用判断の根拠</li>
+  <li><a href="AppControllerResponsibilities.html">AppController 責務マップ(MVC 5 コラボレータ版)</a> — 移行前の整理</li>
+  <li><a href="../refactor-roles-rebalance/Plan.md">refactor/roles-rebalance — 計画</a> — MVC 版の段階分割計画。MVVM に振った場合は本ドキュメントが上位仕様</li>
+  <li><a href="../refactor-pipeline-composite-backend/Plan.md">refactor/pipeline-composite-backend — 計画</a> — パイプライン改造側。Model 層の PipelineRunner に集約される</li>
+</ul>
+
+</body>
+</html>
