@@ -349,7 +349,7 @@ class TestModelStatus:
         ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
 
         events: list[tuple[LayerKind, ModelStatus]] = []
-        ctrl.set_callbacks(on_status_change=lambda l, s: events.append((l, s)))
+        ctrl.add_status_listener(lambda l, s: events.append((l, s)))
 
         started = threading.Event()
         ctrl.start_pipeline_async(on_started=lambda: started.set())
@@ -416,7 +416,7 @@ class TestCallbacks:
         ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
 
         seen: list[dict] = []
-        ctrl.set_callbacks(on_utterance_done=lambda r: seen.append(r))
+        ctrl.add_utterance_done_listener(lambda r: seen.append(r))
 
         # _translation_logger を手動で初期化(start せずに直接 _handle_utterance_done を叩く)
         from voice_translator.common.logger import TranslationLogger
@@ -789,17 +789,14 @@ class TestPhaseA2MultiListener:
         assert seen_a == seen_b
         assert len(seen_a) > 0
 
-    def test_old_single_callback_still_works(
-        self, populated_registry, config
-    ) -> None:
-        """旧 set_callbacks(on_status_change=...) の経路も維持されている。"""
+    def test_set_callbacks_is_removed(self, populated_registry, config) -> None:
+        """旧 set_callbacks(single callback 互換層)は P2 で撤去済み。
+
+        旧テスト test_old_single_callback_still_works が守っていた「状態変化が
+        UI に届く」契約は add_status_listener 系(本クラスの他テスト)で温存。
+        """
         ctrl = AppController(registry=populated_registry, config=config)
-        events: list[tuple[LayerKind, ModelStatus]] = []
-        ctrl.set_callbacks(on_status_change=lambda l, s: events.append((l, s)))
-        ctrl.load_models()
-        for layer in LayerKind:
-            seen = [s for (l, s) in events if l == layer]
-            assert seen[-1] == ModelStatus.LOADED
+        assert not hasattr(ctrl, "set_callbacks")
 
     def test_listener_exception_does_not_break_others(
         self, populated_registry, config
@@ -1677,3 +1674,154 @@ class TestHandleDropped:
         ctrl = AppController(registry=populated_registry, config=config)
         # 例外なく終わること
         ctrl._handle_dropped([], "captured_queue")
+
+
+class TestP2EventListeners:
+    """P2: 全 UI 通知が add_<event>_listener(Subscription)で購読できる。"""
+
+    def test_text_ready_listener_receives_record(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        seen: list[dict] = []
+        ctrl.add_text_ready_listener(lambda r: seen.append(r))
+        record = _sample_record(seq_id=7)
+        ctrl._handle_text_ready(record)
+        assert seen == [record]
+
+    def test_fatal_and_warn_listeners_receive_context(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        fatals: list[tuple] = []
+        warns: list[tuple] = []
+        ctrl.add_fatal_listener(
+            lambda m, **kw: fatals.append((m, kw.get("stage"), kw.get("seq_id")))
+        )
+        ctrl.add_warn_listener(lambda m, **kw: warns.append((m, kw.get("stage"))))
+        # ErrorHandler 注入口(_emit_fatal / _emit_warn)経由で発火
+        ctrl._emit_fatal("boom", exc=None, stage="ASR", seq_id=3, suppressed=0)
+        ctrl._emit_warn("careful", exc=None, stage="TTS", seq_id=None, suppressed=0)
+        assert fatals == [("boom", "ASR", 3)]
+        assert warns == [("careful", "TTS")]
+
+    def test_settings_listener_receives_keys_without_value(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        seen: list[tuple[str, ...]] = []
+        ctrl.add_settings_listener(lambda keys: seen.append(keys))
+        ctrl.set_setting("languages", "src", "en")
+        assert ("languages", "src") in seen
+
+    def test_event_listener_unsubscribe(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        seen: list[dict] = []
+        sub = ctrl.add_text_ready_listener(lambda r: seen.append(r))
+        sub.unsubscribe()
+        ctrl._handle_text_ready(_sample_record(seq_id=1))
+        assert seen == []
+
+    def test_event_listener_exception_does_not_break_others(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        seen: list[dict] = []
+
+        def bad(_r):
+            raise RuntimeError("listener bug")
+
+        ctrl.add_text_ready_listener(bad)
+        ctrl.add_text_ready_listener(lambda r: seen.append(r))
+        ctrl._handle_text_ready(_sample_record(seq_id=2))
+        assert len(seen) == 1
+
+    def test_listeners_of_different_events_are_isolated(
+        self, populated_registry, config
+    ) -> None:
+        """status listener に text_ready が紛れ込まない(イベント種の分離)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        status_seen: list = []
+        ctrl.add_status_listener(lambda l, s: status_seen.append((l, s)))
+        ctrl._handle_text_ready(_sample_record(seq_id=1))
+        assert status_seen == []
+
+
+class TestP2DeviceRestartReactive:
+    """P2: 動作中の devices.* 変更が set_setting 反応系で自動 restart になる。
+
+    restart_pipeline_async 自体の挙動(stop→start 順序 / 失敗 / 多重防御)は
+    tests/test_dynamic_devices.py 側で検証済みのため、ここでは
+    「set_setting がライフサイクルイベントを正しく流すか」に絞る。
+    """
+
+    @staticmethod
+    def _running_ctrl(populated_registry, config):
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl._coord = MagicMock(is_running=True)  # is_running を True にする
+        return ctrl
+
+    def test_input_change_while_running_emits_started_then_completed(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = self._running_ctrl(populated_registry, config)
+        ctrl.restart_pipeline_async = MagicMock(
+            side_effect=lambda *, on_restarted=None, on_failed=None: on_restarted()
+        )
+        events: list = []
+        ctrl.add_restart_listener(lambda e: events.append(e))
+
+        ctrl.set_setting("devices", "input", "mic_b")
+
+        assert [e.phase for e in events] == ["started", "completed"]
+        assert all(e.device_key == "input" for e in events)
+        ctrl.restart_pipeline_async.assert_called_once()
+
+    def test_output_change_while_running_emits_with_output_key(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = self._running_ctrl(populated_registry, config)
+        ctrl.restart_pipeline_async = MagicMock(
+            side_effect=lambda *, on_restarted=None, on_failed=None: on_restarted()
+        )
+        events: list = []
+        ctrl.add_restart_listener(lambda e: events.append(e))
+
+        ctrl.set_setting("devices", "output", "hp2")
+
+        assert events[0].phase == "started"
+        assert events[0].device_key == "output"
+
+    def test_restart_failure_emits_failed_with_message(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = self._running_ctrl(populated_registry, config)
+        ctrl.restart_pipeline_async = MagicMock(
+            side_effect=lambda *, on_restarted=None, on_failed=None: on_failed(
+                "再開に失敗: boom"
+            )
+        )
+        events: list = []
+        ctrl.add_restart_listener(lambda e: events.append(e))
+
+        ctrl.set_setting("devices", "input", "mic_b")
+
+        assert [e.phase for e in events] == ["started", "failed"]
+        assert "boom" in events[-1].message
+
+    def test_no_restart_when_not_running(self, populated_registry, config) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.restart_pipeline_async = MagicMock()
+        events: list = []
+        ctrl.add_restart_listener(lambda e: events.append(e))
+
+        ctrl.set_setting("devices", "input", "mic_b")
+
+        assert events == []
+        ctrl.restart_pipeline_async.assert_not_called()
+
+    def test_non_device_keys_do_not_restart(self, populated_registry, config) -> None:
+        ctrl = self._running_ctrl(populated_registry, config)
+        ctrl.restart_pipeline_async = MagicMock()
+        ctrl.set_setting("ui", "collapsed", "backends", True)
+        ctrl.restart_pipeline_async.assert_not_called()

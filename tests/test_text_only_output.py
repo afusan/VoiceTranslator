@@ -534,7 +534,8 @@ class TestAppControllerHandleTextReady:
         ctrl._translation_logger = MagicMock()  # noqa: SLF001
         ctrl._process_time_logger = MagicMock()  # noqa: SLF001
         ui_records: list[dict] = []
-        ctrl._on_text_ready = lambda r: ui_records.append(r)  # noqa: SLF001
+        # P2: UI 通知は listener 購読(旧 _on_text_ready フィールドは撤去済み)
+        ctrl.add_text_ready_listener(lambda r: ui_records.append(r))
         return ctrl, ui_records
 
     def test_text_only_writes_logs(self) -> None:

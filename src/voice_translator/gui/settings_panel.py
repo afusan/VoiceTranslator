@@ -46,6 +46,7 @@ from .logic.language_choices import (
     tts_warning_needed,
 )
 from .logic.palette import DISABLED_TEXT, STATUS_COLOR_DEFAULT, STATUS_COLORS
+from .logic.restart_messages import format_restart_failed, format_restart_started
 from .process_select_dialog import ProcessSelectDialog
 
 # GUIで切替対象とするレイヤと表示ラベル
@@ -83,12 +84,6 @@ class SettingsPanel(ctk.CTkFrame):
         # 通知バナー(入力言語の自動 fallback などをユーザに伝える)。
         # None でも動作する(その場合は print に落とす)。
         self._banner = banner
-        # ControlPanel への逆参照(MainWindow が後から `set_control_panel` で注入)。
-        # PROCESS kind 入力ソースの PID 選択完了など、`devices.input` が変わったときに
-        # ControlPanel.refresh_ready_state() を呼んで「プロセス未選択 → ▶ 開始」へ
-        # 即時遷移させるための窓。未注入(None)時はベストエフォートで sync を見送る
-        # (テスト時の差し込みや、SettingsPanel 単体動作の場合に対する保険)。
-        self._control_panel = None
 
         self._backend_vars: dict[LayerKind, ctk.StringVar] = {}
         self._status_labels: dict[LayerKind, ctk.CTkLabel] = {}
@@ -123,6 +118,13 @@ class SettingsPanel(ctk.CTkFrame):
             self._refresh_target_language_choices(current_translator, notify_fallback=False)
         # 起動時に TTS 互換も一度チェック(警告は出さない)
         self._check_tts_output_lang_compatibility(notify_fallback=False)
+
+        # P2: 通知の購読(従来は ControlPanel 経由で状態転送されていた)。
+        # listener は emit 元スレッドで呼ばれるため、各ハンドラ側で after(0) marshalling する。
+        self._subscriptions = [
+            controller.add_status_listener(self.on_status_change),
+            controller.add_restart_listener(self._on_restart_event),
+        ]
 
     # ============================================================
     def _build_widgets(self) -> None:
@@ -810,19 +812,12 @@ class SettingsPanel(ctk.CTkFrame):
         if dlg.result_pid is None:
             # Cancel / 閉じる
             return
+        # `set_setting("devices", ...)` の書き込みだけで以下が連鎖する(P2):
+        # - ControlPanel の ready 再計算(settings イベント購読。
+        #   「プロセス未選択(disable)→ ▶ 開始(normal)」遷移)
+        # - 動作中なら AppController 側で自動 restart + restart イベント
         self._controller.set_setting("devices", "input", str(dlg.result_pid))
         self._update_capture_select_btn_label()
-        # ControlPanel に「ready 状態を見直して」と通知。
-        # PROCESS kind で PID 未選択 → 選択完了 になった瞬間に、Start ボタンの表記が
-        # 「プロセス未選択(disable)→ ▶ 開始(normal)」へ遷移する。
-        if self._control_panel is not None:
-            try:
-                self._control_panel.refresh_ready_state()
-            except Exception:  # noqa: BLE001 - UI 通知失敗で本処理は止めない
-                pass
-        # 動作中なら自動 restart(DEVICE 切替と同じ挙動)
-        if self._controller_is_running():
-            self._trigger_device_restart("入力")
 
     def _refresh_output_devices_dropdown(self) -> None:
         """出力デバイスプルダウンを再列挙する(挙動は capture 側と対称)。"""
@@ -851,83 +846,41 @@ class SettingsPanel(ctk.CTkFrame):
     def _on_capture_changed(self, display_name: str) -> None:
         device_id = self._capture_id_map.get(display_name)
         if device_id:
+            # 動作中の自動 restart は AppController の set_setting 反応系が担う(P2)
             self._controller.set_setting("devices", "input", device_id)
-            # P4: 動作中に変えたら自動 restart(停止→再開)
-            if self._controller_is_running():
-                self._trigger_device_restart("入力")
 
     def _on_output_changed(self, display_name: str) -> None:
         device_id = self._output_id_map.get(display_name)
         if device_id:
             self._controller.set_setting("devices", "output", device_id)
-            if self._controller_is_running():
-                self._trigger_device_restart("出力")
 
     # ============================================================
-    # P4: 動作中デバイス変更の自動 restart
+    # 自動 restart のバナー連動(P2: AppController の restart イベントを購読)
     # ============================================================
-    def set_control_panel(self, panel) -> None:
-        """ControlPanel への逆参照を注入する(MainWindow が生成後に呼ぶ)。
-
-        参照を持つことで、`devices.input` を `set_setting` で書いた直後に
-        ControlPanel.refresh_ready_state() を直接呼べる。注入されていない場合は
-        この経路では通知されない(レイヤ状態変化など別の経路でしか sync しない)。
-        """
-        self._control_panel = panel
-
-    def _controller_is_running(self) -> bool:
-        """AppController.is_running を安全に問い合わせる(モック/古い実装対策)。"""
+    def _on_restart_event(self, event) -> None:
+        """restart イベント受信(`vt_restart` 等の別スレッド)。after で marshalling。"""
         try:
-            return bool(self._controller.is_running)
-        except Exception:  # noqa: BLE001
-            return False
-
-    def _trigger_device_restart(self, kind: str) -> None:
-        """動作中のパイプラインを停止→再開する(デバイス切替の自動反映)。
-
-        バナーに「(入力/出力)デバイスを切り替えました(再開中…)」を永続表示し、
-        restart 完了で dismiss、失敗時は show_error で上書きする。
-        """
-        msg = f"{kind}デバイスを切り替えました(再開中…)"
-        if self._banner is not None:
-            try:
-                self._banner.show_info(msg, duration_ms=0)
-            except Exception:  # noqa: BLE001
-                pass
-        self._controller.restart_pipeline_async(
-            on_restarted=lambda: self._on_restart_completed(kind),
-            on_failed=lambda m: self._on_restart_failed(kind, m),
-        )
-
-    def _on_restart_completed(self, kind: str) -> None:
-        """restart 完了通知(`vt_restart` スレッド上)。tk への反映は after で marshalling。"""
-        try:
-            self.after(0, self._apply_restart_completed)
-        except Exception:  # noqa: BLE001
+            self.after(0, lambda: self._apply_restart_event(event))
+        except Exception:  # noqa: BLE001 - widget 破棄後の通知は無視
             pass
 
-    def _apply_restart_completed(self) -> None:
-        if self._banner is not None:
-            try:
-                self._banner.dismiss()
-            except Exception:  # noqa: BLE001
-                pass
-
-    def _on_restart_failed(self, kind: str, message: str) -> None:
-        """restart 失敗通知(`vt_restart` スレッド上)。"""
+    def _apply_restart_event(self, event) -> None:
+        """restart ライフサイクルをバナーに反映する(started / completed / failed)。"""
+        if self._banner is None:
+            return
         try:
-            self.after(0, lambda: self._apply_restart_failed(kind, message))
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _apply_restart_failed(self, kind: str, message: str) -> None:
-        if self._banner is not None:
-            try:
-                self._banner.show_error(
-                    f"{kind}デバイス変更後の再開に失敗しました: {message}"
+            if event.phase == "started":
+                self._banner.show_info(
+                    format_restart_started(event.device_key), duration_ms=0
                 )
-            except Exception:  # noqa: BLE001
-                pass
+            elif event.phase == "completed":
+                self._banner.dismiss()
+            elif event.phase == "failed":
+                self._banner.show_error(
+                    format_restart_failed(event.device_key, event.message)
+                )
+        except Exception:  # noqa: BLE001 - バナー表示失敗で UI を止めない
+            pass
 
     def _on_save(self) -> None:
         try:

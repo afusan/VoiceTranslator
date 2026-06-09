@@ -147,8 +147,8 @@ class _StubController:
         self._capture_kind = capture_kind
         self._statuses = {layer: ModelStatus.LOADED for layer in LayerKind}
         self.output_mode = output_mode
-        # 後段の処理に必要な callback 受信窓
-        self._callbacks: dict = {}
+        # P2: ControlPanel が __init__ で登録する listener の記録(event 名 → callbacks)
+        self.listeners: dict[str, list] = {}
 
     # ---- ControlPanel が使う API ----
     def get_setting(self, *keys, default=None):
@@ -157,6 +157,9 @@ class _StubController:
     def set_setting(self, *keys_and_value):
         *keys, value = keys_and_value
         self._settings[tuple(keys)] = value
+        # 本物の AppController と同様に settings イベントを流す
+        for cb in self.listeners.get("settings", []):
+            cb(tuple(keys))
 
     def get_capture_kind(self, backend_name):
         return self._capture_kind
@@ -170,8 +173,28 @@ class _StubController:
     def get_layer_device(self, layer):
         return None
 
-    def set_callbacks(self, **kwargs):
-        self._callbacks.update(kwargs)
+    # ---- P2: listener 登録 API ----
+    def _add_listener(self, event: str, cb):
+        self.listeners.setdefault(event, []).append(cb)
+        return None
+
+    def add_status_listener(self, cb):
+        return self._add_listener("status", cb)
+
+    def add_text_ready_listener(self, cb):
+        return self._add_listener("text_ready", cb)
+
+    def add_utterance_done_listener(self, cb):
+        return self._add_listener("utterance_done", cb)
+
+    def add_fatal_listener(self, cb):
+        return self._add_listener("fatal", cb)
+
+    def add_warn_listener(self, cb):
+        return self._add_listener("warn", cb)
+
+    def add_settings_listener(self, cb):
+        return self._add_listener("settings", cb)
 
     @property
     def is_running(self):
@@ -185,7 +208,7 @@ class _StubController:
 class TestControlPanelStartDisabled:
     def _make_panel(self, root, controller):
         from voice_translator.gui.control_panel import ControlPanel
-        return ControlPanel(root, controller, settings_panel=None, banner=None)
+        return ControlPanel(root, controller, banner=None)
 
     def test_start_disabled_when_process_kind_and_no_pid(self, root):
         ctrl = _StubController(capture_backend="proctap", input_value="",
@@ -196,6 +219,32 @@ class TestControlPanelStartDisabled:
         btn_state = panel._toggle_btn.cget("state")  # noqa: SLF001
         assert btn_text == "プロセス未選択"
         assert str(btn_state) == "disabled"
+
+    def test_pid_selection_via_settings_event_enables_start(self, root):
+        """P2(契約 §11.5): `devices.input` の書き込み(settings イベント)だけで
+        「プロセス未選択(disable)」→「▶ 開始(normal)」へ遷移する。
+        旧 `SettingsPanel → refresh_ready_state()` 直叩きの置き換え経路。"""
+        ctrl = _StubController(capture_backend="proctap", input_value="",
+                               capture_kind=CaptureKind.PROCESS)
+        panel = self._make_panel(root, ctrl)
+        assert panel._toggle_btn.cget("text") == "プロセス未選択"  # noqa: SLF001
+
+        # PID 選択完了相当: set_setting が settings イベントを流す
+        ctrl.set_setting("devices", "input", "1234")
+        root.update()  # after(0, ...) を反映
+
+        assert panel._toggle_btn.cget("text") == "▶ 開始"  # noqa: SLF001
+        assert str(panel._toggle_btn.cget("state")) == "normal"  # noqa: SLF001
+
+    def test_non_device_settings_event_does_not_resync(self, root):
+        """devices 以外の settings イベントでは ready 再計算をスケジュールしない。"""
+        ctrl = _StubController(capture_backend="proctap", input_value="",
+                               capture_kind=CaptureKind.PROCESS)
+        panel = self._make_panel(root, ctrl)
+        # devices 以外のキーを書く → イベントは流れるが ready は触らない
+        ctrl.set_setting("ui", "collapsed", "status_text", True)
+        root.update()
+        assert panel._toggle_btn.cget("text") == "プロセス未選択"  # noqa: SLF001
 
     def test_start_enabled_when_process_kind_pid_present(self, root):
         ctrl = _StubController(capture_backend="proctap", input_value="1234",
@@ -215,23 +264,16 @@ class TestControlPanelStartDisabled:
         # DEVICE は未選択でも開始可(soundcard が default 入力で動くため)
         assert btn_text == "▶ 開始"
 
-    def test_refresh_ready_state_reflects_pid_selection(self, root):
-        """PID 選択後に `refresh_ready_state` を呼ぶと「プロセス未選択」→「▶ 開始」へ。
+    def test_refresh_ready_state_window_is_removed(self, root):
+        """P2: `refresh_ready_state` 公開窓は撤去済み。
 
-        2026-06-06 修正のレグレッション防止: 旧実装では `devices.input` を
-        `set_setting` で書いただけでは ControlPanel が再判定せず、Start ボタンが
-        「プロセス未選択」のまま残るバグがあった。
+        旧テスト test_refresh_ready_state_reflects_pid_selection が守っていた
+        「PID 選択(set_setting)後に Start が enable になる」契約(2026-06-06
+        修正のレグレッション防止)は、settings イベント経由の
+        test_pid_selection_via_settings_event_enables_start がより強い形で温存
+        (今は set_setting 単独で再評価が走る)。
         """
         ctrl = _StubController(capture_backend="proctap", input_value="",
                                capture_kind=CaptureKind.PROCESS)
         panel = self._make_panel(root, ctrl)
-        # 初期状態: 「プロセス未選択」disable
-        assert panel._toggle_btn.cget("text") == "プロセス未選択"  # noqa: SLF001
-        assert str(panel._toggle_btn.cget("state")) == "disabled"  # noqa: SLF001
-
-        # PID を選択(SettingsPanel が set_setting で書く挙動を模擬)
-        ctrl.set_setting("devices", "input", "1234")
-        # SettingsPanel から呼ばれる公開メソッドで再評価
-        panel.refresh_ready_state()
-        assert panel._toggle_btn.cget("text") == "▶ 開始"  # noqa: SLF001
-        assert str(panel._toggle_btn.cget("state")) == "normal"  # noqa: SLF001
+        assert not hasattr(panel, "refresh_ready_state")

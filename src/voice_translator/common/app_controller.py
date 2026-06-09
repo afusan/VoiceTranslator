@@ -16,18 +16,19 @@ AppController は購読 → UI に re-broadcast する(R2-1)。
 状態管理(Phase A2):
 - `_model_status` dict は廃止。状態の真実は backend 側にある(`backend.get_status()`)。
 - backend をロードしたら `backend.subscribe(...)` でその後の変化を購読し、UI に re-broadcast する。
-- UI 側の購読は `add_status_listener(callback) -> Subscription`(multi-listener、R2-6)。
-- 旧 `on_status_change` callback は `set_callbacks` 経由で互換維持。
+
+UI への通知(refactor-ui-3move P2 で Subscription 1 本に統一):
+- すべて `add_<event>_listener(callback) -> Subscription` で購読する
+  (status / text_ready / utterance_done / fatal / warn / settings / restart)。
+- 旧 `set_callbacks` の single callback 経路は撤去済み。
+- listener は emit 元スレッドで呼ばれる。UI 側は `widget.after(0, ...)` で marshalling する。
+- 動作中に `set_setting("devices", ...)` が書かれたら自動 restart し、ライフサイクルを
+  restart イベントで通知する(backends / languages と同じ「実行条件が変わったら反応する」規則)。
 
 処理時間バッファ(Phase A2):
 - レイヤ別に直近 5 件の処理時間(ms)をリングバッファで保持。
 - `_handle_utterance_done(record)` から timeline を読んで push。
 - `get_recent_durations(layer)` で UI が参照(Phase C の詳細ダイアログ等)。
-
-コールバックシグネチャ:
-- on_utterance_done(record: dict)  : UtteranceLedger.pop() の戻り値 dict を受ける
-- on_dropped(seq_ids: list[int], stage: str): 捨てられた発話の seq_id を受ける
-TextLogger / TranslationLogger も新 I/F (write_src/write_tgt/write_record) に追従。
 """
 
 from __future__ import annotations
@@ -62,6 +63,7 @@ from .types import (
     LayerStatusLine,
     ModelStatus,
     OutputDevice,
+    PipelineRestartEvent,
     VerifyResult,
 )
 
@@ -105,22 +107,9 @@ class AppController:
         # _backends と self._coord の生成・破棄を排他的に行う(ロード/起動の競合防止)
         self._load_lock = threading.Lock()
 
-        # UI コールバック(既定は no-op)
-        # record は UtteranceLedger.pop() の戻り値 dict(seq_id, timeline, src/tgt 各種)。
-        # on_fatal/on_warn は (message, *, exc, stage, seq_id) を受ける。
-        # GUI 側で stage / seq_id を使わなければ **kwargs で吸収可。
-        self._on_utterance_done: Callable[[dict], None] = lambda r: None
-        # 音声合成完了の時点で UI に履歴を出すための前倒し通知。
-        # record は ledger のスナップショット(`peek`)で、t_playback_start / t_playback
-        # は含まれていない可能性あり。レイテンシ計算は on_utterance_done 側で行う。
-        self._on_text_ready: Callable[[dict], None] = lambda r: None
-        self._on_fatal: Callable[..., None] = lambda m, **_kw: None
-        self._on_warn: Callable[..., None] = lambda m, **_kw: None
-        # 旧 single callback(後方互換)。新規コードは add_status_listener() を使う。
-        self._on_status_change: UiStatusListener = lambda l, s: None
-
-        # UI 側からの multi-listener(R2-6)。トークン辞書 + ロック。
-        self._ui_status_listeners: dict[int, UiStatusListener] = {}
+        # UI 側からの multi-listener(R2-6 / P2 で全イベント種に汎用化)。
+        # token → (event 名, callback)。解除は Subscription.unsubscribe()。
+        self._ui_listeners: dict[int, tuple[str, Callable[..., None]]] = {}
         self._next_listener_token: int = 0
         self._listeners_lock = threading.Lock()
 
@@ -134,41 +123,77 @@ class AppController:
         self._credentials: CredentialsStore | None = None
 
     # ============================================================
-    # コールバック登録
+    # UI イベント購読(R2-6 の Subscription 機構を全イベント種に適用、P2)
     # ============================================================
-    def set_callbacks(
-        self,
-        *,
-        on_utterance_done: Callable[[dict], None] | None = None,
-        on_text_ready: Callable[[dict], None] | None = None,
-        on_fatal: Callable[..., None] | None = None,
-        on_warn: Callable[..., None] | None = None,
-        on_status_change: UiStatusListener | None = None,
-    ) -> None:
-        if on_utterance_done is not None:
-            self._on_utterance_done = on_utterance_done
-        if on_text_ready is not None:
-            self._on_text_ready = on_text_ready
-        if on_fatal is not None:
-            self._on_fatal = on_fatal
-        if on_warn is not None:
-            self._on_warn = on_warn
-        if on_status_change is not None:
-            self._on_status_change = on_status_change
-
-    # ---- UI 側の multi-listener(R2-6 / Phase A2)----
+    # イベント種と callback シグネチャ:
+    # - "status":         (layer: LayerKind, status: ModelStatus)
+    # - "text_ready":     (record: dict)  … TTS 完了時の前倒し通知(text_only では最終通知)
+    # - "utterance_done": (record: dict)  … Output 完了時
+    # - "fatal" / "warn": (message, *, exc, stage, seq_id, suppressed)
+    # - "settings":       (keys: tuple[str, ...]) … set_setting のキー(値は含めない)
+    # - "restart":        (event: PipelineRestartEvent)
+    # listener は emit 元スレッド(Loader / Coordinator / vt_restart 等)で呼ばれる。
+    # UI 側は `widget.after(0, ...)` でメインスレッドへ marshalling すること。
     def add_status_listener(self, callback: UiStatusListener) -> Subscription:
         """UI 側から状態変化を購読する(複数同時 OK)。解除は `Subscription.unsubscribe()`。"""
+        return self._add_listener("status", callback)
+
+    def add_text_ready_listener(self, callback: Callable[[dict], None]) -> Subscription:
+        """翻訳テキスト確定(TTS 完了 / text_only では最終)の前倒し通知を購読する。"""
+        return self._add_listener("text_ready", callback)
+
+    def add_utterance_done_listener(self, callback: Callable[[dict], None]) -> Subscription:
+        """発話完了(Output 完了)通知を購読する。record は ledger.pop() の dict。"""
+        return self._add_listener("utterance_done", callback)
+
+    def add_fatal_listener(self, callback: Callable[..., None]) -> Subscription:
+        """致命的エラー通知を購読する(ErrorHandler 由来。context は kwargs で届く)。"""
+        return self._add_listener("fatal", callback)
+
+    def add_warn_listener(self, callback: Callable[..., None]) -> Subscription:
+        """警告通知を購読する(ErrorHandler 由来)。"""
+        return self._add_listener("warn", callback)
+
+    def add_settings_listener(
+        self, callback: Callable[[tuple[str, ...]], None],
+    ) -> Subscription:
+        """設定変更通知を購読する。`set_setting` のキー tuple が届く(値は含めない)。"""
+        return self._add_listener("settings", callback)
+
+    def add_restart_listener(self, callback: Callable[..., None]) -> Subscription:
+        """動作中デバイス変更に伴う自動 restart のライフサイクル通知を購読する。"""
+        return self._add_listener("restart", callback)
+
+    def _add_listener(self, event: str, callback: Callable[..., None]) -> Subscription:
         with self._listeners_lock:
             token = self._next_listener_token
             self._next_listener_token += 1
-            self._ui_status_listeners[token] = callback
+            self._ui_listeners[token] = (event, callback)
         return Subscription(self, token)
 
     def _remove_listener(self, token: int) -> None:
         """`Subscription` の解除フック。AppController 直結 listener 用。"""
         with self._listeners_lock:
-            self._ui_status_listeners.pop(token, None)
+            self._ui_listeners.pop(token, None)
+
+    def _emit(self, event: str, *args, **kwargs) -> None:
+        """指定イベントの listener へ通知する。listener の例外は他を止めない。"""
+        with self._listeners_lock:
+            callbacks = [
+                cb for (ev, cb) in self._ui_listeners.values() if ev == event
+            ]
+        for cb in callbacks:
+            try:
+                cb(*args, **kwargs)
+            except Exception:  # noqa: BLE001
+                self._logger.exception("UI %s listener で例外", event)
+
+    # ErrorHandler への注入口(emit への薄い橋。シグネチャは FatalNotifier 準拠)
+    def _emit_fatal(self, message: str, **kwargs) -> None:
+        self._emit("fatal", message, **kwargs)
+
+    def _emit_warn(self, message: str, **kwargs) -> None:
+        self._emit("warn", message, **kwargs)
 
     # ============================================================
     # モデルステータス
@@ -508,24 +533,8 @@ class AppController:
         return value or None
 
     def _emit_status(self, layer: LayerKind, status: ModelStatus) -> None:
-        """状態変化を UI 側 listener へ伝搬する。
-
-        旧 single callback と新 multi-listener の両方に届ける。listener の例外は
-        他の listener / 本体を止めない(ログだけ残す)。
-        """
-        # 旧 single callback(後方互換)
-        try:
-            self._on_status_change(layer, status)
-        except Exception:  # noqa: BLE001
-            self._logger.exception("on_status_change callback で例外")
-        # 新 multi-listener
-        with self._listeners_lock:
-            listeners = list(self._ui_status_listeners.values())
-        for cb in listeners:
-            try:
-                cb(layer, status)
-            except Exception:  # noqa: BLE001
-                self._logger.exception("UI status listener で例外")
+        """状態変化を UI 側 listener へ伝搬する(P2: multi-listener 一本)。"""
+        self._emit("status", layer, status)
 
     def _on_backend_status_changed(self, layer: LayerKind, status: ModelStatus) -> None:
         """backend.subscribe 由来の通知ハンドラ。UI に re-broadcast する。"""
@@ -597,6 +606,45 @@ class AppController:
                 self._coord.set_languages(src=value)
             elif key == "tgt":
                 self._coord.set_languages(tgt=value)
+
+        # デバイス設定が動作中に変わったら自動 restart(refactor-ui-3move P2)。
+        # 「実行条件が変わったら反応する」規則を backends / languages と揃えた。
+        # ユーザのプルダウン操作だけでなく、再列挙 fallback による書き込みでも発火する
+        # (実デバイスが変わったのに旧デバイスで動き続ける方が事故。契約 §3.11 / §13.6)。
+        if (
+            len(keys_and_value) == 3
+            and keys_and_value[0] == "devices"
+            and keys_and_value[1] in ("input", "output")
+            and self.is_running
+        ):
+            self._restart_for_device_change(str(keys_and_value[1]))
+
+        # 設定変更イベント(キーのみ、値は含めない)を UI へ通知する(P2)。
+        # ControlPanel が devices.* を購読して ready 状態を再計算する。
+        self._emit("settings", tuple(str(k) for k in keys_and_value[:-1]))
+
+    def _restart_for_device_change(self, device_key: str) -> None:
+        """動作中デバイス変更の自動 restart を起動し、ライフサイクルを emit する。
+
+        多重 restart は `restart_pipeline_async` 側の防御により failed("既に再開中です")
+        として届く。
+        """
+        self._emit(
+            "restart",
+            PipelineRestartEvent(phase="started", device_key=device_key),
+        )
+        self.restart_pipeline_async(
+            on_restarted=lambda: self._emit(
+                "restart",
+                PipelineRestartEvent(phase="completed", device_key=device_key),
+            ),
+            on_failed=lambda m: self._emit(
+                "restart",
+                PipelineRestartEvent(
+                    phase="failed", device_key=device_key, message=m
+                ),
+            ),
+        )
 
     def save_settings(self) -> None:
         # 段階 3 / A-7 確定方針: PROCESS kind の capture backend が選ばれているときは
@@ -1089,8 +1137,8 @@ class AppController:
             throttle = NotificationThrottle(window_sec=throttle_sec)
             error_handler = ErrorHandler(
                 logger=self._logger,
-                on_fatal=self._on_fatal,
-                on_warn=self._on_warn,
+                on_fatal=self._emit_fatal,
+                on_warn=self._emit_warn,
                 throttle=throttle,
             )
 
@@ -1350,10 +1398,7 @@ class AppController:
                     self._process_time_logger.write_record(record)
             except Exception:  # noqa: BLE001
                 self._logger.exception("処理時間ログ(csv)書き出しに失敗(text_only)")
-        try:
-            self._on_text_ready(record)
-        except Exception:  # noqa: BLE001
-            self._logger.exception("UI 前倒し通知コールバックで例外")
+        self._emit("text_ready", record)
 
     def _handle_utterance_done(self, record: dict) -> None:
         """Output 完了時に Coordinator から呼ばれる。
@@ -1373,10 +1418,7 @@ class AppController:
                 self._process_time_logger.write_record(record)
         except Exception:  # noqa: BLE001
             self._logger.exception("処理時間ログ(csv)書き出しに失敗")
-        try:
-            self._on_utterance_done(record)
-        except Exception:  # noqa: BLE001
-            self._logger.exception("UI 通知コールバックで例外")
+        self._emit("utterance_done", record)
 
     def _push_recent_durations(self, record: dict) -> None:
         """`timeline` から各レイヤの処理時間(ms)を取り出してリングバッファに積む。

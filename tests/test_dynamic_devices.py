@@ -185,28 +185,24 @@ def _make_panel_controller(*, is_running: bool):
 
 
 class TestSettingsPanelDeviceRestart:
-    def test_capture_change_triggers_restart_when_running(self, root) -> None:
+    """P2: 自動 restart は AppController の set_setting 反応系に移管された。
+
+    SettingsPanel のデバイス変更ハンドラは `set_setting` を書くだけで、
+    restart_pipeline_async を直接呼ばない。バナーは restart イベントの購読で反映する。
+    """
+
+    def test_capture_change_writes_setting_without_direct_restart(self, root) -> None:
         from voice_translator.gui.settings_panel import SettingsPanel
 
         ctrl = _make_panel_controller(is_running=True)
-        # 必要な _capture_id_map を持たせるためにモック側を直接組む
         panel = SettingsPanel(root, ctrl)
         panel._capture_id_map = {"DevA": "id-a"}  # noqa: SLF001
         panel._on_capture_changed("DevA")  # noqa: SLF001
         ctrl.set_setting.assert_any_call("devices", "input", "id-a")
-        ctrl.restart_pipeline_async.assert_called_once()
-
-    def test_capture_change_does_not_restart_when_stopped(self, root) -> None:
-        from voice_translator.gui.settings_panel import SettingsPanel
-
-        ctrl = _make_panel_controller(is_running=False)
-        panel = SettingsPanel(root, ctrl)
-        panel._capture_id_map = {"DevA": "id-a"}  # noqa: SLF001
-        panel._on_capture_changed("DevA")  # noqa: SLF001
-        ctrl.set_setting.assert_any_call("devices", "input", "id-a")
+        # restart は controller 側の責務(SettingsPanel は直接呼ばない)
         ctrl.restart_pipeline_async.assert_not_called()
 
-    def test_output_change_triggers_restart_when_running(self, root) -> None:
+    def test_output_change_writes_setting_without_direct_restart(self, root) -> None:
         from voice_translator.gui.settings_panel import SettingsPanel
 
         ctrl = _make_panel_controller(is_running=True)
@@ -214,17 +210,40 @@ class TestSettingsPanelDeviceRestart:
         panel._output_id_map = {"OutA": "out-a"}  # noqa: SLF001
         panel._on_output_changed("OutA")  # noqa: SLF001
         ctrl.set_setting.assert_any_call("devices", "output", "out-a")
-        ctrl.restart_pipeline_async.assert_called_once()
+        ctrl.restart_pipeline_async.assert_not_called()
 
-    def test_trigger_shows_info_banner(self, root) -> None:
+    def test_panel_subscribes_restart_events(self, root) -> None:
+        """__init__ で add_restart_listener を購読している。"""
+        from voice_translator.gui.settings_panel import SettingsPanel
+
+        ctrl = _make_panel_controller(is_running=False)
+        SettingsPanel(root, ctrl)
+        ctrl.add_restart_listener.assert_called_once()
+
+    def test_set_control_panel_is_removed(self, root) -> None:
+        """ControlPanel への逆参照注入窓は P2 で撤去済み。"""
+        from voice_translator.gui.settings_panel import SettingsPanel
+
+        ctrl = _make_panel_controller(is_running=False)
+        panel = SettingsPanel(root, ctrl)
+        assert not hasattr(panel, "set_control_panel")
+
+    # ---- restart イベント → バナー反映 ----
+    @staticmethod
+    def _event(phase: str, device_key: str = "input", message: str = ""):
+        from voice_translator.common.types import PipelineRestartEvent
+        return PipelineRestartEvent(
+            phase=phase, device_key=device_key, message=message
+        )
+
+    def test_started_event_shows_persistent_info_banner(self, root) -> None:
         from voice_translator.gui.settings_panel import SettingsPanel
 
         ctrl = _make_panel_controller(is_running=True)
         banner = MagicMock()
         panel = SettingsPanel(root, ctrl, banner=banner)
-        panel._trigger_device_restart("入力")  # noqa: SLF001
+        panel._apply_restart_event(self._event("started", "input"))  # noqa: SLF001
         banner.show_info.assert_called_once()
-        # メッセージに「入力」と「再開中」が含まれる
         args, kwargs = banner.show_info.call_args
         msg = args[0] if args else kwargs.get("message", "")
         assert "入力" in msg
@@ -232,22 +251,24 @@ class TestSettingsPanelDeviceRestart:
         # duration_ms=0(永続表示)
         assert kwargs.get("duration_ms") == 0
 
-    def test_apply_restart_completed_dismisses_banner(self, root) -> None:
+    def test_completed_event_dismisses_banner(self, root) -> None:
         from voice_translator.gui.settings_panel import SettingsPanel
 
         ctrl = _make_panel_controller(is_running=True)
         banner = MagicMock()
         panel = SettingsPanel(root, ctrl, banner=banner)
-        panel._apply_restart_completed()  # noqa: SLF001
+        panel._apply_restart_event(self._event("completed"))  # noqa: SLF001
         banner.dismiss.assert_called_once()
 
-    def test_apply_restart_failed_shows_error(self, root) -> None:
+    def test_failed_event_shows_error(self, root) -> None:
         from voice_translator.gui.settings_panel import SettingsPanel
 
         ctrl = _make_panel_controller(is_running=True)
         banner = MagicMock()
         panel = SettingsPanel(root, ctrl, banner=banner)
-        panel._apply_restart_failed("出力", "device validator")  # noqa: SLF001
+        panel._apply_restart_event(  # noqa: SLF001
+            self._event("failed", "output", "device validator")
+        )
         banner.show_error.assert_called_once()
         args, _ = banner.show_error.call_args
         assert "出力" in args[0]
@@ -260,6 +281,6 @@ class TestSettingsPanelDeviceRestart:
         ctrl = _make_panel_controller(is_running=True)
         panel = SettingsPanel(root, ctrl, banner=None)
         # 例外を出さない
-        panel._trigger_device_restart("入力")  # noqa: SLF001
-        panel._apply_restart_completed()  # noqa: SLF001
-        panel._apply_restart_failed("入力", "x")  # noqa: SLF001
+        panel._apply_restart_event(self._event("started"))  # noqa: SLF001
+        panel._apply_restart_event(self._event("completed"))  # noqa: SLF001
+        panel._apply_restart_event(self._event("failed", "input", "x"))  # noqa: SLF001

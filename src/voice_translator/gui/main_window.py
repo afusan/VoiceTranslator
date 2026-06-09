@@ -44,16 +44,10 @@ class MainWindow(ctk.CTk):
         self._banner._before_widget = self._settings  # noqa: SLF001 - 内部値の遅延注入
 
         # 3) ControlPanel(動作系)。banner を渡して起動失敗時に show_error させる。
-        self._control = ControlPanel(
-            self, controller,
-            settings_panel=self._settings,
-            banner=self._banner,
-        )
+        # 各 Panel は AppController のイベントを自身で購読するため(P2)、
+        # Panel 間の参照注入は不要になった。
+        self._control = ControlPanel(self, controller, banner=self._banner)
         self._control.pack(fill="both", expand=True, padx=10, pady=(5, 10))
-        # SettingsPanel → ControlPanel への逆参照を注入。
-        # SettingsPanel が `devices.input` を変えた瞬間(プロセス選択 OK 等)に
-        # ControlPanel.refresh_ready_state() を直接叩けるようにする。
-        self._settings.set_control_panel(self._control)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 

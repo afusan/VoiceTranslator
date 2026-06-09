@@ -77,7 +77,8 @@ class _StubController:
         self.output_mode = output_mode
         self._is_running = is_running
         self._playback_raises = playback_raises
-        self._callbacks: dict = {}
+        # P2: ControlPanel が __init__ で登録する listener の記録(event 名 → callbacks)
+        self.listeners: dict[str, list] = {}
         # ボタン押下で呼ばれた回数 + 引数を観察
         self.test_output_calls: list[str] = []
 
@@ -100,8 +101,28 @@ class _StubController:
     def get_layer_device(self, layer):
         return None
 
-    def set_callbacks(self, **kwargs):
-        self._callbacks.update(kwargs)
+    # ---- P2: listener 登録 API(Subscription は不要なので None を返す)----
+    def _add_listener(self, event: str, cb):
+        self.listeners.setdefault(event, []).append(cb)
+        return None
+
+    def add_status_listener(self, cb):
+        return self._add_listener("status", cb)
+
+    def add_text_ready_listener(self, cb):
+        return self._add_listener("text_ready", cb)
+
+    def add_utterance_done_listener(self, cb):
+        return self._add_listener("utterance_done", cb)
+
+    def add_fatal_listener(self, cb):
+        return self._add_listener("fatal", cb)
+
+    def add_warn_listener(self, cb):
+        return self._add_listener("warn", cb)
+
+    def add_settings_listener(self, cb):
+        return self._add_listener("settings", cb)
 
     @property
     def is_running(self):
@@ -119,7 +140,7 @@ class _StubController:
 
 def _make_panel(root, controller):
     from voice_translator.gui.control_panel import ControlPanel
-    return ControlPanel(root, controller, settings_panel=None, banner=None)
+    return ControlPanel(root, controller, banner=None)
 
 
 # ============================================================
