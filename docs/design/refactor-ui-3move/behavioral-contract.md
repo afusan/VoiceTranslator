@@ -236,3 +236,13 @@ P2 で新たに自動テスト化(✅)された項目:
 
 🧪 手動チェック(§3.11 の実機確認: 動作中にデバイスを切り替えて「再開中…」→ 復帰)は
 **未実施 — ユーザのドッグフーディングでの確認待ち**。
+
+### P3: controller-slim(2026-06-10)
+
+実装の置き場が変わっただけでふるまい変更ゼロの Phase。確認記録:
+
+| 項目 | 確認 |
+|---|---|
+| §2(モデルステータス表示)/ §8(認証フロー)全章 | ✅ 既存テストが**無修正で全 pass**(互換窓経由 = 委譲の正しさの検証)。特に `tests/test_credential_flow.py`(認証契約 22 件)無修正 pass |
+| 縮退規約(未登録 / 例外 → 安全側既定値) | ✅ `tests/test_backend_catalog.py` / `tests/test_credentials_service.py`(実体直叩きで移植) |
+| §8.3(認証成功 → MISSING_CREDENTIALS なら reload) | ✅ Phase F1 後処理はランタイム側に残置。`tests/test_app_controller.py` の既存テスト無修正 pass |
