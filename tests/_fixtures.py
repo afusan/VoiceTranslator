@@ -111,13 +111,21 @@ class WavReplayCapture(AudioCaptureBackend):
         chunk_size: int = 512,
         source_id: str = "wav_replay",
         display_name: str = "WAV Replay",
+        loop: bool = False,
     ) -> None:
+        """`loop=True` で PCM を使い切ったら先頭から再生し続ける。
+
+        用途: 「動作中に設定を変える」系のテスト。再生は実時間ペーシング無しの
+        全速で進むため、有限 PCM だと負荷次第で「設定変更前に全発話が処理済み」
+        というレースが起きる。ループ再生なら変更後の発話が必ず存在する。
+        """
         if pcm is None:
             pcm = np.zeros(0, dtype=np.float32)
         self._pcm = pcm.astype(np.float32, copy=False)
         self._chunk_size = chunk_size
         self._source_id = source_id
         self._display_name = display_name
+        self._loop = loop
         self._pos = 0
         self._started = False
 
@@ -159,10 +167,14 @@ class WavReplayCapture(AudioCaptureBackend):
         if not self._started:
             raise RuntimeError("start() を先に呼んでください")
         if self._pos >= self._pcm.size:
-            # データが尽きたら待ち時間相当だけ寝て None を返す(Coordinator 側の停止チェックに譲る)
-            from time import sleep
-            sleep(timeout)
-            return None
+            if self._loop and self._pcm.size > 0:
+                # ループ再生: 先頭に巻き戻して続行
+                self._pos = 0
+            else:
+                # データが尽きたら待ち時間相当だけ寝て None を返す(Coordinator 側の停止チェックに譲る)
+                from time import sleep
+                sleep(timeout)
+                return None
         end = min(self._pos + self._chunk_size, self._pcm.size)
         chunk = self._pcm[self._pos:end]
         self._pos = end
