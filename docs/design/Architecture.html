@@ -143,7 +143,9 @@
 <h3>横断機能</h3>
 <table>
   <tr><th>機能</th><th>役割</th></tr>
-  <tr><td><strong>AppController</strong></td><td>GUI と内部モジュールの仲介。バックエンド初期化、モデル状態の発信、設定操作の窓口、ドロップ通知の受け口を担う。</td></tr>
+  <tr><td><strong>AppController</strong></td><td>GUI と内部モジュールを繋ぐ<strong>ランタイム</strong>: 設定の反映(set_setting の反応系: backends 変更 → evict+再ロード、languages 変更 → 動作中反映、devices 変更 → 動作中なら自動 restart)、backend のロード/キャッシュ、パイプラインの起動/停止。UI への通知はすべて <code>add_&lt;event&gt;_listener</code>(Subscription)の emit で行う(§9)。メタ問合せは <code>BackendCatalog</code>、認証は <code>CredentialsService</code> に分離済み(refactor-ui-3move P3)。</td></tr>
+  <tr><td><strong>BackendCatalog</strong></td><td>backend クラスのメタ情報問合せ口(状態なし)。capture_kind / 対応言語 / credential_spec / capability hint をインスタンス化せずに引く。未登録・例外時は安全側既定値に縮退。<code>AppController.catalog</code> で公開。</td></tr>
+  <tr><td><strong>CredentialsService</strong></td><td>認証情報の保管(keyring / 平文 fallback)・疎通確認・verified フラグ管理。<code>AppController.credentials</code> で公開。</td></tr>
   <tr><td><strong>PipelineCoordinator</strong></td><td>各レイヤの起動・停止と、レイヤ間キューの管理を担う。</td></tr>
   <tr><td><strong>UtteranceLedger</strong></td><td>発話ごとのメタ情報(タイミング・言語・テキスト・状態)を中央で集約する。最終段で取り出して履歴ログに書く。スレッドセーフ。</td></tr>
   <tr><td><strong>SequenceGenerator</strong></td><td>発話ごとに一意の通し番号を発行する。各ログにこの番号が載り、レコード間の対応を取れる。</td></tr>
@@ -156,7 +158,7 @@
   <tr><td><strong>DeviceValidator</strong></td><td>入力デバイスと出力デバイスが同一でないことを起動時に保証する。フィードバック防止のため。</td></tr>
   <tr><td><strong>cache_check</strong></td><td>各バックエンドのモデルがローカルキャッシュにあるかを軽量に判定する。GUI の初期状態表示に使う。</td></tr>
   <tr><td><strong>process_enumerator</strong></td><td>Windows WASAPI AudioSession の列挙とプロセス単位 peak メータ供給のヘルパー(段階 3)。ProcTap backend と「プロセス選択ダイアログ」が共有して使う。永続 COM ワーカースレッド <code>_PeakWorker</code> を内部に 1 つだけ持ち、列挙(同期)+ 試聴 peak の 5fps 内部 poll(<code>latest_peak()</code> を atomic 保持)を 1 つのスレッドで処理する。GUI スレッドと COM のスレッドモード競合(STA / MTA)を回避するための隔離層。</td></tr>
-  <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態・モデルステータスを可視化する。</td></tr>
+  <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態・モデルステータスを可視化する。内部は View(widget)と <code>gui/logic</code>(判断の純関数)に分離(§9 参照)。</td></tr>
 </table>
 
 <!-- =================================================== -->
@@ -174,9 +176,14 @@
     <td>tkinter mainloop / MainWindow</td>
   </tr>
   <tr>
-    <td><strong>Loader</strong></td>
-    <td>各レイヤのバックエンドを順次初期化する。完了/失敗を UI に通知する。1回限り起動。</td>
-    <td>AppController._loader_body</td>
+    <td><strong>Loader</strong>(vt_loader / vt_auto_loader / vt_reload_*)</td>
+    <td>バックエンドの初期化を UI から切り離す。起動時の auto_load、Start 押下時の未ロード分一括ロード、backend 切替時の単レイヤ再ロードで都度起動。完了/失敗は status イベントで UI に届く。</td>
+    <td>AppController.load_models_async / load_auto_load_layers_async / start_pipeline_async / _safe_load_layer</td>
+  </tr>
+  <tr>
+    <td><strong>vt_restart</strong>(任意)</td>
+    <td>動作中デバイス変更の自動 restart(stop → start を直列実行)。ライフサイクルは restart イベントで UI に届く(P2)。多重起動は拒否。</td>
+    <td>AppController.restart_pipeline_async</td>
   </tr>
   <tr>
     <td><strong>Input</strong></td>
@@ -376,6 +383,58 @@ translations.jsonl:
   <li><strong>シーケンスID</strong>: 全発話に一意IDを発行し、すべてのログに付与してレコード間追跡を可能にする。</li>
   <li><strong>停止/再開のクリーンさ</strong>: stop_event ベースの協調停止、再start時にキュー + ledger を drain。</li>
 </ul>
+
+<!-- =================================================== -->
+<h2>9. GUI 内部構成と UI 実装規約(refactor-ui-3move / 2026-06-10 確立)</h2>
+
+<p>
+UI まわりの肥大化(判断ロジックの widget 同居・通知経路の乱立・AppController への機能集中)を
+解消した際に確立した構成。<strong>新しい UI 機能はこの構成に従って置き場を決める</strong>。
+</p>
+
+<h3>9-1. 役割の 3 分割</h3>
+<table>
+  <tr><th>置き場</th><th>役割</th><th>書いてよいもの / 禁止</th></tr>
+  <tr>
+    <td><strong>View</strong><br><code>gui/*.py</code>(Panel / Dialog)</td>
+    <td>widget の組立と「入力収集 → logic 呼び出し → 計算結果を widget に塗る」の配線</td>
+    <td>イベントハンドラ・<code>after(0)</code> marshalling・controller への問い合わせ(失敗時の縮退含む)は OK。<strong>条件分岐による表示の判断・文言の組み立ては書かない</strong>(logic へ)</td>
+  </tr>
+  <tr>
+    <td><strong>判断</strong><br><code>gui/logic/*.py</code></td>
+    <td>「現在の状態 → UI に表示すべき値」の計算(ボタン文言/有効無効、言語候補と fallback、表示変換、ステータス整形、バナー文言、色)</td>
+    <td><strong>状態を持たない純関数のみ</strong>。widget / AppController / ConfigStore / customtkinter に依存しない(依存は common の純粋モジュールと標準ライブラリ)。GUI 不要の small テストで全分岐を検証する。表示文言は固定文字列テスト(集約テキストは golden)で守る</td>
+  </tr>
+  <tr>
+    <td><strong>ランタイム</strong><br><code>common/app_controller.py</code></td>
+    <td>設定の反映・backend ロード/キャッシュ・パイプライン起動/停止 + イベント emit</td>
+    <td>メタ問合せは <code>BackendCatalog</code>、認証は <code>CredentialsService</code>、表示用整形は <code>gui/logic</code> へ。<strong>AppController 本体にこれらを足さない</strong></td>
+  </tr>
+</table>
+
+<h3>9-2. 通知の規約(1 系統)</h3>
+<ul>
+  <li>UI への通知はすべて <code>AppController.add_&lt;event&gt;_listener(callback) → Subscription</code>。
+    イベント種: <code>status / text_ready / utterance_done / fatal / warn / settings / restart</code>。</li>
+  <li>listener は emit 元スレッドで呼ばれる。UI 側は必ず <code>widget.after(0, ...)</code> でメインスレッドへ戻す。</li>
+  <li><strong>Panel 同士は互いを参照しない</strong>(逆参照の後注入・転送・直接メソッド呼び出しの禁止)。
+    Panel 間で同期が必要になったら、それは AppController の状態変化のはず — 既存イベントを購読するか、イベント種を追加する。</li>
+  <li>「実行条件が変わったら反応する」は <code>set_setting</code> の反応系に置く(backends → evict+再ロード、
+    languages → 動作中反映、devices → 動作中 restart)。UI 側ハンドラに反応ロジックを書かない。</li>
+</ul>
+
+<h3>9-3. 肥大化を防ぐチェック(新機能を入れる前に)</h3>
+<ul>
+  <li>新しい「モード」「gate」「表示分岐」を入れるとき: 判断関数を <code>gui/logic</code> に 1 つ追加し、View は塗りの 1 行だけになっているか。</li>
+  <li>AppController にメソッドを足そうとしたとき: それはメタ問合せ(→ catalog)/ 認証(→ credentials)/ 整形(→ gui/logic)ではないか。</li>
+  <li>「モックが来ても落ちないように」の <code>try/except Exception</code> を本番コードに足そうとしたとき: それはテストの書き方の問題(logic 直テスト + 配線 smoke にする)。</li>
+  <li>poll や後注入で「とりあえず同期」しようとしたとき: イベント購読で表現できないか。</li>
+</ul>
+
+<p class="small">
+経緯と判断の記録: <code>docs/design/refactor-ui-3move/</code>(Roadmap / behavioral-contract、マージ後は done/ 配下)。
+旧 MVC 案・MVVM 案との比較検討は同フォルダの Roadmap §6 を参照。
+</p>
 
 <p class="small">
 詳細(クラス名/メソッド/バックエンド一覧/GUIクラス階層 等)は <a href="Class.md">Class.md</a> を参照。

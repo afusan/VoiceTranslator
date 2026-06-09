@@ -441,7 +441,17 @@
 
 ---
 
-## [2026-05-29] AppController の責務分離(リファクタ予約)
+## [✅完了 2026-06-10] AppController の責務分離(リファクタ予約)
+- **解決**: `refactor-ui-3move`(P1〜P3)で対応。ただし採用形は当時の方針案と異なる:
+  - UI 判断ロジックは `gui/logic/` の純関数へ(P1)、通知は `add_<event>_listener`
+    (Subscription)1 本に統一(P2)、メタ問合せ → `BackendCatalog` / 認証 →
+    `CredentialsService` に分離(P3)
+  - `ModelLoaderService` / `StatusBroadcaster` / `LatencyBuffer` は**不採用**
+    (ロード・起動停止は `_load_lock` / `_backends` を共有しており、切ると配線が純増するため
+    ランタイムとして AppController に残す判断。Roadmap §1「やらないこと」参照)
+- **確立した規約**: `Architecture.html §9`(GUI 内部構成と UI 実装規約)+ CLAUDE.md
+- **経緯の記録**: `docs/design/refactor-ui-3move/`(マージ後は done/ 配下)
+- 以下は起票時の記録:
 - **背景**: `feature/backend-mgmt` の Phase A2 で AppController に layer 単位 load / multi-listener / 処理時間 buffer 等の orchestration 責務が追加される。R2-1 解消の分散化で `_model_status` dict は消えるものの、全体としては引き続き肥大化傾向
 - **方針案**(将来のリファクタ時):
   - `ModelLoaderService`(ロード処理)

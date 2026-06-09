@@ -152,6 +152,24 @@ large テストを必ず追加**する。
 ## コーディング規約
 - 基本は**言語標準に従う**。
 
+## UI 実装の規約(肥大化防止 / refactor-ui-3move で確立、2026-06-10)
+詳細と背景は `docs/design/Architecture.html` §9。新しい UI 機能は以下に従って置き場を決める:
+
+- **判断は logic、widget は塗るだけ**: 「状態 → 表示すべき値」の計算(ボタン文言・有効無効・
+  言語候補・表示変換・整形・バナー文言・色)は `gui/logic/` の**状態を持たない純関数**に置く。
+  Panel / Dialog には「入力収集 → logic 呼び出し → widget へ反映」以外を書かない。
+- **Panel 同士を直接参照しない**: 連携は AppController のイベント購読
+  (`add_<event>_listener` → Subscription)経由。新しい同期が必要ならイベント種を追加する。
+  callback 引数・逆参照の後注入・poll による「とりあえず同期」を作らない。
+- **AppController に機能を足す前に置き場を確認**: メタ問合せ → `BackendCatalog` /
+  認証 → `CredentialsService` / 表示整形 → `gui/logic/` / 「実行条件が変わったら反応する」→
+  `set_setting` の反応系。AppController 本体は「設定反映・backend ロード・起動停止」の
+  ランタイムに限る。
+- **表示文言は logic 側に置き、固定文字列テストで守る**(集約テキストは golden テスト)。
+  文言・分岐の変更が「ふるまい変更」として必ずテスト差分に現れるようにする。
+- **「モック対策」の防御 try/except を本番コードに足さない**: それはテストの書き方の問題。
+  判断は logic 直テスト(モック不要の small)、View は配線 smoke で検証する。
+  controller 問い合わせの失敗縮退だけは View の入力収集ヘルパに置いてよい。
 
 ## 運用
 
