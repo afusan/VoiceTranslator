@@ -4,6 +4,18 @@
 
 ---
 
+## [2026-06-10] 「設定を保存」ボタンの auto-persist 化(停止 MVVM 計画からの引き継ぎ)
+- **内容**: 設定変更を debounce 付きで自動保存し、「設定を保存」ボタンを撤去する UX 変更。
+- **背景**: 停止した MVVM 再構築計画(behavioral-contract 旧 §13.1)で予定されていた項目。
+  UI 肥大化対策(`docs/design/refactor-ui-3move/`)を起こす際、肥大化解消とは独立した
+  「挙動が変わる UX 変更」のためリファクタリング系列から切り離した。
+- **見送り理由**: リファクタリング(ふるまい変更ゼロが原則)に UX 変更を混ぜると、
+  契約チェックの基準が曖昧になる。単独の feature ブランチで扱うべき規模。
+- **再検討トリガ**: refactor-ui-3move P3 完了後 / 保存忘れによる設定消失が
+  ドッグフーディングで発生したとき。
+
+---
+
 ## [2026-06-08] flaky テスト: `test_set_languages_takes_effect_on_next_utterance`
 - **対象**: `tests/test_pipeline_e2e.py::TestPipelineE2EWithSynthPcm::test_set_languages_takes_effect_on_next_utterance`
 - **症状**: `py -m uv run pytest`(全体実行)で**数十回に 1 回程度**失敗するが、
