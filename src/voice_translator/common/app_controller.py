@@ -57,7 +57,9 @@ from .stage_dump import NullStageDumpWriter, StageDumpWriter
 from .types import (
     CaptureSource,
     CredentialField,
+    ErrorRecord,
     LayerKind,
+    LayerStatusLine,
     ModelStatus,
     OutputDevice,
     VerifyResult,
@@ -188,35 +190,31 @@ class AppController:
         """指定レイヤの直近処理時間(ms、古い→新しい順、最大 5 件)。"""
         return list(self._recent_durations[layer])
 
-    def get_status_summary(self) -> str:
-        """全レイヤの状態 + 直近エラーを 1 つのテキストにまとめる(Phase C3)。
+    def get_status_snapshot(
+        self,
+    ) -> tuple[list[LayerStatusLine], list[tuple[LayerKind, ErrorRecord]]]:
+        """全レイヤの状態 + 直近エラーを整形前のデータで返す(Phase C3 改 / P1)。
 
-        ステータステキストボックスに 1 ブロックで貼れる形を返す。
-        - 各レイヤの「現状態 + (DOWNLOADING 時は DL サイズ目安)」を 1 行ずつ
-        - 末尾に「最近のエラー」を新しい順で集約(最大 5 件)
-
-        backend が `BackendBase` 由来でない場合(モック等)はベストエフォートで縮退する。
+        文字列への整形は UI 側(`gui/logic/status_summary.py`)の役割。ここは
+        - 各レイヤの「backend 名 + 現状態 + (DOWNLOADING 時は DL サイズ目安)」
+        - 全 backend の直近エラー(timestamp 新しい順)
+        をデータとして集めるだけ。backend が `BackendBase` 由来でない場合(モック等)は
+        ベストエフォートで縮退する。
         """
-        lines: list[str] = []
+        lines: list[LayerStatusLine] = []
         for layer in LayerKind:
             backend_name = self._config.get("backends", layer.value, default="-")
             status = self.get_model_status(layer)
             tail = self._dl_size_hint(layer) if status == ModelStatus.DOWNLOADING else ""
             lines.append(
-                f"[{layer.value}] {backend_name}: {status.value}{tail}"
-            )
-
-        errors = self._collect_recent_errors()
-        if errors:
-            lines.append("")
-            lines.append("最近のエラー:")
-            # 新しい順に最大 5 件
-            for layer, rec in errors[:5]:
-                ctx = f" ({rec.context})" if rec.context else ""
-                lines.append(
-                    f"  [{layer.value}] {rec.exc_type}: {rec.message}{ctx}"
+                LayerStatusLine(
+                    layer=layer,
+                    backend_name=str(backend_name),
+                    status=status,
+                    dl_size_hint=tail,
                 )
-        return "\n".join(lines)
+            )
+        return lines, self._collect_recent_errors()
 
     def _dl_size_hint(self, layer: LayerKind) -> str:
         """DOWNLOADING 時に表示する「~XGB」ヒント。取得失敗時は空文字。"""
