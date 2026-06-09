@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>MVC と MVVM の違い</title>
+<style>
+  body { font-family: "Yu Gothic UI", "Meiryo", sans-serif; max-width: 1280px; margin: 1.5em auto; padding: 0 1.2em; color: #1f2937; line-height: 1.6; }
+  h1 { border-bottom: 3px solid #2563eb; padding-bottom: 0.3em; }
+  h2 { border-bottom: 2px solid #94a3b8; padding-bottom: 0.2em; margin-top: 2em; color: #1e3a8a; }
+  h3 { margin-top: 1.4em; color: #1e40af; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-family: "Cascadia Code", Consolas, monospace; font-size: 0.92em; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.93em; }
+  th, td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: #e0e7ff; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .small { font-size: 0.88em; color: #475569; }
+
+  /* arch diagram */
+  .arch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-gap: 24px;
+    margin: 1.6em 0;
+  }
+  .panel {
+    border: 2px solid #1e3a8a;
+    border-radius: 10px;
+    padding: 16px 18px;
+    background: #f8fafc;
+  }
+  .panel h3 { margin-top: 0; color: #1e3a8a; font-size: 1.15em; }
+
+  /* node + arrow visual */
+  .nodes { display: flex; flex-direction: column; align-items: stretch; gap: 18px; margin: 14px 0; position: relative; }
+  .node {
+    border: 2px solid;
+    border-radius: 8px;
+    padding: 10px 14px;
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+    background: #fff;
+  }
+  .node .name { font-weight: 700; font-size: 1.0em; }
+  .node .sub { font-size: 0.82em; color: #475569; margin-top: 4px; }
+
+  .node.view  { border-color: #a21caf; background: linear-gradient(180deg,#fae8ff,#f5d0fe); }
+  .node.view .name { color: #6b21a8; }
+  .node.ctrl  { border-color: #d97706; background: linear-gradient(180deg,#fef3c7,#fde68a); }
+  .node.ctrl .name { color: #78350f; }
+  .node.vm    { border-color: #d97706; background: linear-gradient(180deg,#fef3c7,#fde68a); }
+  .node.vm .name { color: #78350f; }
+  .node.model { border-color: #15803d; background: linear-gradient(180deg,#dcfce7,#bbf7d0); }
+  .node.model .name { color: #14532d; }
+
+  .edges { font-size: 0.85em; color: #475569; margin: 8px 0 0 0; padding-left: 18px; }
+  .edges li { margin: 4px 0; }
+  .edges .one { color: #2563eb; font-weight: bold; }
+  .edges .two { color: #be123c; font-weight: bold; }
+
+  .arrow-band {
+    text-align: center;
+    color: #2563eb;
+    font-size: 1.4em;
+    font-weight: bold;
+    margin: -4px 0;
+  }
+  .arrow-band.two { color: #be123c; }
+
+  /* comparison table */
+  td.good { background: #dcfce7 !important; color: #14532d; }
+  td.bad  { background: #fee2e2 !important; color: #991b1b; }
+  td.mid  { background: #fef3c7 !important; color: #78350f; }
+
+  blockquote.note {
+    border-left: 4px solid #2563eb;
+    background: #eff6ff;
+    padding: 0.6em 0.9em;
+    color: #1e3a8a;
+    margin: 1em 0;
+    font-size: 0.92em;
+  }
+
+  /* code blocks */
+  pre {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 12px 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  pre code { background: transparent; padding: 0; color: inherit; }
+</style>
+</head>
+<body>
+
+<h1>MVC と MVVM のアーキテクチャ的な違い</h1>
+<p class="small">
+作成: 2026-06-08。Python(特に Tkinter / customtkinter 系)での実装視点で整理。
+</p>
+
+<!-- =============================================== -->
+<h2>1. 構造の図解</h2>
+
+<div class="arch">
+  <!-- MVC -->
+  <div class="panel">
+    <h3>MVC(Model-View-Controller)</h3>
+    <div class="nodes">
+      <div class="node view">
+        <div class="name">View(画面)</div>
+        <div class="sub">ボタン・テキストボックス・ラベル等のウィジェット</div>
+      </div>
+      <div class="arrow-band two">↕</div>
+      <div class="node ctrl">
+        <div class="name">Controller(操作の橋渡し)</div>
+        <div class="sub">View からのイベントを受け、Model 更新と View 再描画を仲介</div>
+      </div>
+      <div class="arrow-band two">↕</div>
+      <div class="node model">
+        <div class="name">Model(状態 + ドメインロジック)</div>
+        <div class="sub">設定値、計算結果、外部 API の結果など。View を知らない</div>
+      </div>
+    </div>
+    <ul class="edges">
+      <li><span class="one">①</span> View が「ボタン押された」イベントを Controller に通知</li>
+      <li><span class="one">②</span> Controller が Model を更新</li>
+      <li><span class="one">③</span> Controller が **明示的に** View を書き換える(<code>label.config(text=...)</code>)</li>
+      <li><strong>View ⇄ Controller は強結合</strong>:Controller は View インスタンスを直接参照する</li>
+      <li><strong>状態の所在</strong>:Model に集中。View は描画のたびに引く</li>
+    </ul>
+  </div>
+
+  <!-- MVVM -->
+  <div class="panel">
+    <h3>MVVM(Model-View-ViewModel)</h3>
+    <div class="nodes">
+      <div class="node view">
+        <div class="name">View(画面)</div>
+        <div class="sub">ViewModel の Observable プロパティに**バインド**(購読)</div>
+      </div>
+      <div class="arrow-band two">↕ <span style="font-size:0.6em">バインディング</span></div>
+      <div class="node vm">
+        <div class="name">ViewModel(UI 用の状態)</div>
+        <div class="sub">表示用に整形された状態 + Command。View を知らない</div>
+      </div>
+      <div class="arrow-band two">↕</div>
+      <div class="node model">
+        <div class="name">Model(ドメイン)</div>
+        <div class="sub">純粋なドメイン。UI のことを一切知らない</div>
+      </div>
+    </div>
+    <ul class="edges">
+      <li><span class="one">①</span> View がボタンを <strong>Command にバインド</strong>(ViewModel.click_handler 等)</li>
+      <li><span class="one">②</span> Command が ViewModel の Observable プロパティを書き換える</li>
+      <li><span class="one">③</span> プロパティ変更が <strong>自動で</strong> View に伝播(=データバインディング)</li>
+      <li><strong>View ⇄ ViewModel は疎結合</strong>:ViewModel は View インスタンスを知らない</li>
+      <li><strong>状態の所在</strong>:ViewModel に「UI 用の整形済み」が居る。Model は純粋なドメイン</li>
+    </ul>
+  </div>
+</div>
+
+<blockquote class="note">
+<strong>1 行要約</strong>: MVC は「Controller が View を更新する <em>命令型</em>」、MVVM は「View が ViewModel の状態を <em>購読</em> して自動更新される <em>宣言型</em>」。
+</blockquote>
+
+<!-- =============================================== -->
+<h2>2. 同じ機能を両方で書くと(擬似コード)</h2>
+
+<p>「テキストボックスに名前を入れて『挨拶』を押すと、ラベルに『Hello, &lt;名前&gt;』と表示」を両方の流儀で書いた例。</p>
+
+<h3>MVC 流(Tkinter)</h3>
+<pre><code># View: ウィジェットの組み立てだけ
+class GreetingView:
+    def __init__(self, master, controller):
+        self.controller = controller
+        self.name_entry = tk.Entry(master)
+        self.greeting_label = tk.Label(master, text="")
+        tk.Button(master, text="挨拶", command=self._on_click).pack()
+        # ↑ View が Controller を直接 知っている
+
+    def _on_click(self):
+        name = self.name_entry.get()
+        self.controller.greet(name)  # ① Controller に通知
+
+    def update_greeting(self, text):
+        self.greeting_label.config(text=text)  # ③ Controller から呼ばれて View 更新
+
+
+class GreetingController:
+    def __init__(self, view, model):
+        self.view = view   # ← View インスタンスを保持(結合点)
+        self.model = model
+
+    def greet(self, name):
+        self.model.last_name = name           # ② Model 更新
+        self.view.update_greeting(            # ③ View を明示的に更新
+            f"Hello, {name}"
+        )
+</code></pre>
+
+<h3>MVVM 流(疑似コード、enaml / Qt 風)</h3>
+<pre><code># ViewModel: Observable プロパティ + Command
+class GreetingViewModel(Observable):
+    name = ObservableProperty("")             # 入力
+    greeting = ObservableProperty("")         # 出力(自動でラベルへ反映)
+
+    def greet_command(self):                  # Command
+        self.greeting = f"Hello, {self.name}"
+        # ↑ プロパティを書き換えるだけ。View 側は自動更新
+
+# View(宣言的)
+&lt;Entry text="{viewmodel.name}" /&gt;            # ← 双方向バインド
+&lt;Label text="{viewmodel.greeting}" /&gt;        # ← 一方向バインド
+&lt;Button text="挨拶" command="{viewmodel.greet_command}" /&gt;
+# View は ViewModel を「購読」するだけで、ViewModel は View を知らない
+</code></pre>
+
+<blockquote class="note">
+<strong>差分のポイント</strong>:
+<ul>
+<li>MVC は「Controller が View に <code>label.config(text=...)</code> と書く」必要がある</li>
+<li>MVVM は「ViewModel が <code>self.greeting = ...</code> を書くだけ」で View が自動追従する</li>
+<li>MVC の Controller は View インスタンスを参照、MVVM の ViewModel は View を <strong>一切知らない</strong></li>
+</ul>
+</blockquote>
+
+<!-- =============================================== -->
+<h2>3. 観点別の対比</h2>
+
+<table>
+  <tr>
+    <th style="width: 22%">観点</th>
+    <th style="width: 39%">MVC</th>
+    <th style="width: 39%">MVVM</th>
+  </tr>
+  <tr>
+    <td>View ⇄ 中間層 の結合</td>
+    <td class="mid">Controller が View を <strong>直接参照</strong> して更新</td>
+    <td class="good">ViewModel は View を <strong>知らない</strong>(Observable のみ)</td>
+  </tr>
+  <tr>
+    <td>状態同期の方式</td>
+    <td class="mid">命令型(Controller がいちいち書く)</td>
+    <td class="good">宣言型(データバインディング、自動)</td>
+  </tr>
+  <tr>
+    <td>状態の所在</td>
+    <td class="mid">Model に集中、View はその都度引く</td>
+    <td class="good">ViewModel に UI 用の整形済み状態が居る(キャッシュ的)</td>
+  </tr>
+  <tr>
+    <td>テスト(ロジック)</td>
+    <td class="bad">Controller の単体テストは View モックが要る</td>
+    <td class="good">ViewModel は GUI なしで純テスト可能</td>
+  </tr>
+  <tr>
+    <td>学習コスト</td>
+    <td class="good">低(Observer すら無くても動く)</td>
+    <td class="mid">中(バインディングの理解が要る)</td>
+  </tr>
+  <tr>
+    <td>必要な道具</td>
+    <td class="good">標準ライブラリだけで OK</td>
+    <td class="bad">バインディングを提供するフレームワーク or 自前 Observer 実装</td>
+  </tr>
+  <tr>
+    <td>UI 変更時のコード波及</td>
+    <td class="bad">Controller を毎回さわる</td>
+    <td class="good">View 宣言だけ書き換えれば済むことが多い</td>
+  </tr>
+  <tr>
+    <td>大規模化での見通し</td>
+    <td class="mid">Controller が肥大化しがち</td>
+    <td class="good">ViewModel 単位で分割しやすい</td>
+  </tr>
+  <tr>
+    <td>Python での実装難度</td>
+    <td class="good">Tkinter で素直に書ける</td>
+    <td class="bad">Tkinter には公式バインディングなし、Qt 系が必要</td>
+  </tr>
+</table>
+
+<!-- =============================================== -->
+<h2>4. 実装上の決定的な違い:「データバインディング」の有無</h2>
+
+<p>MVVM の心臓部は <strong>データバインディング</strong>。これがフレームワーク側で提供されているかで「MVVM が使える/使えない」が決まる。</p>
+
+<table>
+  <tr><th>フレームワーク</th><th>データバインディング</th><th>MVVM 採用しやすさ</th></tr>
+  <tr><td>PyQt6 / PySide6 + QML</td><td class="good">公式提供(Qt Quick)</td><td class="good">公式パターン</td></tr>
+  <tr><td>PyQt6 / PySide6(Widget のみ)</td><td class="mid">Signal/Slot で半自動</td><td class="mid">手で組める</td></tr>
+  <tr><td>enaml + atom</td><td class="good">公式提供(宣言的)</td><td class="good">小規模だがちゃんと動く</td></tr>
+  <tr><td>Flet</td><td class="mid">Reactive スタイル</td><td class="mid">MVVM 風に書ける、実績はまだ少</td></tr>
+  <tr><td>Tkinter / customtkinter</td><td class="bad">無し(<code>StringVar</code> 程度)</td><td class="bad">自作必須</td></tr>
+  <tr><td>Kivy</td><td class="good">KV 言語で提供</td><td class="good">採用可</td></tr>
+</table>
+
+<blockquote class="note">
+<strong>Tkinter の <code>StringVar</code> はバインディングか?</strong><br>
+- <code>StringVar</code> + <code>textvariable=</code> は「Entry の値 ↔ 変数」の双方向同期。これは限定的なデータバインディング。<br>
+- でも「ViewModel の Observable プロパティが N 個あって全部の View に自動反映」までは行かない。<br>
+- 結論:<strong>部分的にはバインディング相当</strong> だが、本格 MVVM の自動同期能力には届かない。
+</blockquote>
+
+<!-- =============================================== -->
+<h2>5. このプロジェクトでの判断</h2>
+
+<table>
+  <tr><th>判断項目</th><th>結論</th></tr>
+  <tr>
+    <td>customtkinter のままで MVVM 化できるか</td>
+    <td>自作の Observer を書けば「MVVM 風」までは到達できる。ただし本格的なデータバインディングを欲しがると痛い</td>
+  </tr>
+  <tr>
+    <td>Qt 系に移行すべきか</td>
+    <td>現状の規模では UI 全書き換えのコストに見合わない。<strong>移行は非推奨</strong></td>
+  </tr>
+  <tr>
+    <td>現状の実装をどう位置付けるか</td>
+    <td>「MVC + Observer 混在」 が最適。AppController 分割案(5 コラボレータ)はこの方向の延長</td>
+  </tr>
+  <tr>
+    <td>必要なら何を入れるか</td>
+    <td><code>blinker</code>(Signal/Slot 軽量実装)を導入して Observer を明示化する程度で十分</td>
+  </tr>
+</table>
+
+<p class="small">関連: <a href="AppControllerResponsibilities.html">AppController 責務マップと分割案</a></p>
+
+</body>
+</html>
