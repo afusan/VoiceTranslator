@@ -99,7 +99,14 @@ def register_default_backends(
     registry.register(
         LayerKind.CAPTURE,
         "proctap",
-        lambda: ProcTapCaptureBackend(resample_quality=proctap_resample_quality),
+        # input_gain は factory 内で都度読む(設定ダイアログで変更 → backend 再生成で
+        # 最新値が反映される。credential と同じ流儀)
+        lambda: ProcTapCaptureBackend(
+            resample_quality=proctap_resample_quality,
+            input_gain=_read_float(
+                config, ("backends_config", "proctap", "input_gain"), default=1.0,
+            ),
+        ),
         backend_cls=ProcTapCaptureBackend,
         capabilities=BackendCapabilities(
             is_cloud=False,

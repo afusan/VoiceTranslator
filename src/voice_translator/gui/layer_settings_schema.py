@@ -308,6 +308,20 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             ),
         ),
         _auto_load_toggle("soundcard"),
+        # ProcTap(プロセス単位キャプチャ)の入力ゲイン。対象プロセスの再生音量が
+        # 小さいと VAD が発話を拾えないため、内部で増幅できるようにする。
+        SettingField(
+            keys=("backends_config", "proctap", "input_gain"),
+            label="ProcTap: 入力ゲイン (倍率)",
+            field_type="float",
+            default=1.0,
+            applies_when_backend="proctap",
+            help_text=(
+                "取得した音声に掛ける増幅倍率(1.0=等倍、2〜8 程度が目安)。"
+                "対象アプリの音量が小さく認識されないときに上げる(±1.0 でクリップ)。"
+                "音量 0 は増幅できない。変更後は「モデルを(再)ロード」で反映。"
+            ),
+        ),
     ],
     LayerKind.VAD: [
         # Silero(MVP)

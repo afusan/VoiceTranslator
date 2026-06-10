@@ -85,17 +85,27 @@ class ProcTapCaptureBackend(AudioCaptureBackend):
         self,
         *,
         resample_quality: str = "best",
+        input_gain: float = 1.0,
     ) -> None:
         """コンストラクタ。proc-tap は遅延 import で依存未インストール環境でも
         backend クラス自体は import 可能にする(`capture_kind` 等を問い合わせるため)。
 
         実 capture を始めるには `start(pid_str)` を呼ぶ必要がある。
+
+        `input_gain`: 取得 PCM に掛ける増幅倍率(既定 1.0 = 等倍)。対象プロセスの
+        再生音量が小さく VAD/ASR が拾えない場合に上げる。増幅後は ±1.0 にクリップ。
+        音量 0 のソースは増幅できない(0 × N = 0)。不正値(数値でない / 負)は 1.0 扱い。
         """
         super().__init__()
         # `resample_quality` は proc-tap 内部のリサンプル(WASAPI が int16 で返す稀な
         # ケースの float32 変換時に使われる)。本 backend は最終的に 48k→16k を自前で
         # 実装するため、ここは proc-tap 側の品質指定のみ。
         self._resample_quality = resample_quality
+        try:
+            gain = float(input_gain)
+        except (TypeError, ValueError):
+            gain = 1.0
+        self._input_gain = gain if gain > 0.0 else 1.0
         self._tap = None  # 型: proctap.ProcessAudioCapture | None。実体は遅延構築
         # 起動可否は proc-tap が import できるかで決まる
         try:
@@ -185,11 +195,17 @@ class ProcTapCaptureBackend(AudioCaptureBackend):
         if not data:
             return None
         try:
-            return _convert_pcm(data)
+            pcm = _convert_pcm(data)
         except Exception as e:  # noqa: BLE001 - 変換失敗は致命扱い(継続不能)
             raise FatalError(
                 f"音声フォーマット変換に失敗: {e}", cause=e,
             ) from e
+        if self._input_gain != 1.0 and pcm.size:
+            # 対象プロセスの再生音量が小さい場合の内部増幅(±1.0 にクリップ)
+            pcm = np.clip(pcm * self._input_gain, -1.0, 1.0).astype(
+                np.float32, copy=False
+            )
+        return pcm
 
     # ----------------------------------------------------------
     def stop(self) -> None:

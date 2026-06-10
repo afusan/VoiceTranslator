@@ -335,3 +335,57 @@ class TestProcTapLargeSelfCapture:
             assert s.kind == CaptureKind.PROCESS
             assert s.source_id.isdigit()  # PID 数字文字列
             assert s.display_name  # 何かしらのラベル
+
+
+# ============================================================
+# small: 入力ゲイン(プロセス音量が小さいときの内部増幅)
+# ============================================================
+@pytest.mark.skipif(
+    not PROCTAP_INSTALLED,
+    reason="scipy が依存に含まれる proc-tap が未インストールだとリサンプル不可",
+)
+class TestInputGain:
+    def _backend_with_tap(self, *, input_gain: float):
+        from unittest.mock import MagicMock
+
+        from voice_translator.capture.proctap_backend import ProcTapCaptureBackend
+
+        backend = ProcTapCaptureBackend(input_gain=input_gain)
+        backend._tap = MagicMock(name="tap")  # start() 済み相当
+        return backend
+
+    @staticmethod
+    def _constant_stereo_bytes(value: float, n_frames: int = 3000) -> bytes:
+        stereo = np.full((n_frames, 2), value, dtype=np.float32)
+        return stereo.tobytes()
+
+    def test_gain_amplifies_quiet_signal(self) -> None:
+        backend = self._backend_with_tap(input_gain=4.0)
+        backend._tap.read.return_value = self._constant_stereo_bytes(0.1)
+        out = backend.read_chunk()
+        # リサンプルの境界を避けて中央部で振幅を確認(0.1 × 4 ≒ 0.4)
+        mid = out[out.size // 4 : -out.size // 4]
+        assert abs(float(mid.mean()) - 0.4) < 0.02
+        assert out.dtype == np.float32
+
+    def test_gain_clips_to_unit_range(self) -> None:
+        backend = self._backend_with_tap(input_gain=4.0)
+        backend._tap.read.return_value = self._constant_stereo_bytes(0.5)
+        out = backend.read_chunk()
+        assert float(np.max(np.abs(out))) <= 1.0
+        mid = out[out.size // 4 : -out.size // 4]
+        assert abs(float(mid.mean()) - 1.0) < 0.02  # 0.5 × 4 = 2.0 → クリップで 1.0
+
+    def test_default_gain_is_passthrough(self) -> None:
+        backend = self._backend_with_tap(input_gain=1.0)
+        backend._tap.read.return_value = self._constant_stereo_bytes(0.25)
+        out = backend.read_chunk()
+        mid = out[out.size // 4 : -out.size // 4]
+        assert abs(float(mid.mean()) - 0.25) < 0.02
+
+    @pytest.mark.parametrize("bad", [0.0, -2.0, "abc", None])
+    def test_invalid_gain_falls_back_to_passthrough(self, bad) -> None:
+        from voice_translator.capture.proctap_backend import ProcTapCaptureBackend
+
+        backend = ProcTapCaptureBackend(input_gain=bad)
+        assert backend._input_gain == 1.0

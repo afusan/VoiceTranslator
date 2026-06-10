@@ -459,3 +459,34 @@ class TestPvcobraRegistration:
         registry.create(LayerKind.VAD, "pvcobra")
         call_kwargs = patched_backend_setup["PvcobraVadBackend"].call_args.kwargs
         assert call_kwargs["threshold"] == 0.7
+
+
+class TestProctapInputGainConfig:
+    """ProcTap の入力ゲインが config から factory に渡ること。"""
+
+    def test_default_gain_is_passthrough(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        registry.create(LayerKind.CAPTURE, "proctap")
+        patched_backend_setup["ProcTapCaptureBackend"].assert_called_with(
+            resample_quality="best", input_gain=1.0,
+        )
+
+    def test_gain_read_from_config_at_create_time(
+        self, patched_backend_setup, tmp_path
+    ) -> None:
+        """factory 内で都度読むため、登録後の設定変更も次の生成に反映される。"""
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+
+        config.set("backends_config", "proctap", "input_gain", 4.0)
+        registry.create(LayerKind.CAPTURE, "proctap")
+        patched_backend_setup["ProcTapCaptureBackend"].assert_called_with(
+            resample_quality="best", input_gain=4.0,
+        )
