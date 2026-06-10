@@ -17,6 +17,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from voice_translator.common.types import LayerKind
+
 
 def _bind(shim, *method_names: str):
     """SettingsPanel の実メソッドを shim に bind する。"""
@@ -113,6 +115,8 @@ def stub_tgt_panel():
         "_refresh_target_language_choices",
         "_notify_tgt_lang_fallback",
         "_notify_warning",
+        "_effective_target_languages",
+        "_tgt_provider_name",
     )
     shim._tgt_dropdown = MagicMock(name="tgt_dropdown")
     shim._tgt_var = MagicMock(name="tgt_var")
@@ -126,14 +130,15 @@ class TestTgtLanguageWiring:
         self, stub_tgt_panel,
     ) -> None:
         """fallback 時: set_setting + バナー + TTS 互換チェック連鎖まで配線される。"""
-        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
+        stub_tgt_panel._controller.get_effective_target_languages.return_value = [
             "en", "ja", "fr",
         ]
+        stub_tgt_panel._controller.get_target_language_provider.return_value = (
+            LayerKind.TRANSLATOR, "fake_backend",
+        )
         stub_tgt_panel._controller.get_setting.return_value = "xx"  # 非対応
 
-        stub_tgt_panel._refresh_target_language_choices(
-            "fake_backend", notify_fallback=True
-        )
+        stub_tgt_panel._refresh_target_language_choices(notify_fallback=True)
 
         stub_tgt_panel._controller.set_setting.assert_called_with(
             "languages", "tgt", "ja"
@@ -145,20 +150,44 @@ class TestTgtLanguageWiring:
         )
 
     def test_keeps_current_if_supported(self, stub_tgt_panel) -> None:
-        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
+        stub_tgt_panel._controller.get_effective_target_languages.return_value = [
             "en", "ja",
         ]
         stub_tgt_panel._controller.get_setting.return_value = "ja"
 
-        stub_tgt_panel._refresh_target_language_choices(
-            "fake_backend", notify_fallback=True
-        )
+        stub_tgt_panel._refresh_target_language_choices(notify_fallback=True)
         stub_tgt_panel._controller.set_setting.assert_not_called()
         stub_tgt_panel._tgt_var.set.assert_called_with("ja (Japanese)")
 
     def test_dropdown_missing_is_noop(self, stub_tgt_panel) -> None:
         stub_tgt_panel._tgt_dropdown = None
-        stub_tgt_panel._refresh_target_language_choices("any", notify_fallback=True)
+        stub_tgt_panel._refresh_target_language_choices(notify_fallback=True)
+
+    def test_absorbed_translator_uses_composite_languages(
+        self, stub_tgt_panel,
+    ) -> None:
+        """翻訳ロールが複合に吸収されている場合、候補は複合 backend が決める。
+
+        例: faster_whisper_translate(英語固定)→ 候補は en のみ。現在の ja は
+        en へ fallback され、通知の backend 名も複合側になる。
+        """
+        stub_tgt_panel._controller.get_effective_target_languages.return_value = ["en"]
+        stub_tgt_panel._controller.get_target_language_provider.return_value = (
+            LayerKind.ASR, "faster_whisper_translate",
+        )
+        stub_tgt_panel._controller.get_setting.return_value = "ja"
+
+        stub_tgt_panel._refresh_target_language_choices(notify_fallback=True)
+
+        stub_tgt_panel._tgt_dropdown.configure.assert_called_with(
+            values=["en (English)"]
+        )
+        stub_tgt_panel._controller.set_setting.assert_called_with(
+            "languages", "tgt", "en"
+        )
+        # fallback 通知の文言には複合 backend 名が入る
+        msg = stub_tgt_panel._banner.show_warning.call_args[0][0]
+        assert "faster_whisper_translate" in msg
 
 
 @pytest.fixture()

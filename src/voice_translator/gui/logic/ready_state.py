@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Collection, Mapping
 
 from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
 
@@ -35,16 +35,24 @@ class ReadyState:
 
 
 def filter_active_statuses(
-    statuses: Mapping[LayerKind, ModelStatus], output_mode: str,
+    statuses: Mapping[LayerKind, ModelStatus],
+    output_mode: str,
+    absorbed: Collection[LayerKind] = (),
 ) -> dict[LayerKind, ModelStatus]:
-    """text_only モードなら TTS / OUTPUT を除外したレイヤ状態 dict を返す。"""
+    """起動対象外のレイヤを除いた状態 dict を返す。
+
+    - text_only モードなら TTS / OUTPUT を除外。
+    - 複合 backend に吸収されたロール(`absorbed`)も除外(ロードされないため、
+      残すと「永遠に Init のレイヤ」が ready 判定を濁す)。
+    """
+    excluded = set(absorbed)
     if output_mode == "text_only":
-        return {
-            layer: status
-            for layer, status in statuses.items()
-            if layer not in (LayerKind.TTS, LayerKind.OUTPUT)
-        }
-    return dict(statuses)
+        excluded.update((LayerKind.TTS, LayerKind.OUTPUT))
+    return {
+        layer: status
+        for layer, status in statuses.items()
+        if layer not in excluded
+    }
 
 
 def compute_ready_state(
@@ -54,16 +62,17 @@ def compute_ready_state(
     capture_kind: CaptureKind,
     has_input_source: bool,
     has_output_device: bool,
+    absorbed: Collection[LayerKind] = (),
 ) -> ReadyState | None:
     """idle 状態のときの 3 ボタン + ラベルの表示を一括計算する。
 
     statuses は全レイヤ分(フィルタ前)を渡す。対象レイヤが空のときは None を返し、
-    View 側は何もしない(移行元 `_sync_ready_state` の早期 return と同じ)。
+    View 側は何もしない。`absorbed` は複合 backend に吸収されたロール(判定対象外)。
 
-    トグルの優先順位(移行元の分岐順を維持):
+    トグルの優先順位:
     MISSING_CREDENTIALS > DOWNLOADING > (PROCESS kind かつ入力未選択) > 通常
     """
-    active = filter_active_statuses(statuses, output_mode)
+    active = filter_active_statuses(statuses, output_mode, absorbed)
     vals = list(active.values())
     if not vals:
         return None

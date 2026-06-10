@@ -338,6 +338,33 @@ class AppController:
         """互換窓 → `BackendCatalog.get_supported_output_languages`。"""
         return self._catalog.get_supported_output_languages(backend_name)
 
+    # ---- 複合 backend(ロール吸収)関連 ----
+    def get_absorbed_roles(self) -> dict[LayerKind, LayerKind]:
+        """複合 backend に吸収されているロール → 吸収先レイヤ(現在の設定から)。
+
+        例: ASR に ASR+翻訳の複合が選ばれていれば `{TRANSLATOR: ASR}`。
+        吸収されたロールはロード・認証 gate・編成の対象外で、設定された backend は
+        Start 時に無視される(UI は「吸収済み」表示を出す)。
+        """
+        return self._current_plan().absorbed_map
+
+    def get_target_language_provider(self) -> tuple[LayerKind, str]:
+        """翻訳先言語の候補を決める backend の (登録レイヤ, backend 名) を返す。
+
+        通常は Translator レイヤの選択 backend。翻訳ロールが複合に吸収されている
+        場合は吸収先(ASR 等)の backend(英語固定の複合なら候補も英語のみになる)。
+        """
+        lead = self.get_absorbed_roles().get(
+            LayerKind.TRANSLATOR, LayerKind.TRANSLATOR
+        )
+        name = str(self._config.get("backends", lead.value, default="") or "")
+        return lead, name
+
+    def get_effective_target_languages(self) -> list[str]:
+        """翻訳先言語の候補(翻訳ロールを実際に担う backend に問い合わせる)。"""
+        layer, name = self.get_target_language_provider()
+        return self._catalog.get_supported_target_languages(name, layer=layer)
+
     def get_credential_spec(self, layer: LayerKind, name: str) -> list[CredentialField]:
         """互換窓 → `BackendCatalog.get_credential_spec`。"""
         return self._catalog.get_credential_spec(layer, name)

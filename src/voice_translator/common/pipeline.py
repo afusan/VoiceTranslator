@@ -538,6 +538,7 @@ class PipelineCoordinator:
             (LayerKind.TRANSLATOR,): self._process_translator,
             (LayerKind.TTS,): self._process_tts,
             (LayerKind.OUTPUT,): self._process_output,
+            (LayerKind.ASR, LayerKind.TRANSLATOR): self._process_asr_translator,
         }
         processor = processors.get(spec.roles)
         if processor is None:
@@ -606,6 +607,56 @@ class PipelineCoordinator:
 
         return (
             TranslatedPayload(tgt_text=tgt_text, tgt_lang=self._tgt_lang),
+            ErrorAction.CONTINUE,
+        )
+
+    def _process_asr_translator(
+        self, msg: PipelineMessage
+    ) -> tuple[Payload | None, str]:
+        """RAW → TRANSLATED(複合: 書き起こし + 翻訳を 1 回の backend 呼び出しで)。
+
+        timeline は入口(t_asr_start)と出口(t_translate)のみ記録し、ロール内側の
+        境界時刻(t_asr / t_translate_start)は欠損として扱う(処理時間表示は
+        既存の欠損スキップで縮退する)。
+        """
+        payload: RawPayload = msg.payload
+        result, action = self._call_with_retry(
+            lambda: self._asr.transcribe_translate(
+                payload.pcm, payload.src_lang_hint, self._tgt_lang
+            ),
+            stage="ASR+Translator", seq_id=msg.seq_id, backend=self._asr,
+        )
+        if action != ErrorAction.CONTINUE or result is self._SENTINEL_RESULT:
+            return None, action
+        src_text, detected_lang, tgt_text, tgt_lang = result
+
+        # 言語: hint が auto/空でモデルが検出した場合は採用(単体 ASR と同じ規約)
+        src_lang = (
+            detected_lang if payload.src_lang_hint in ("auto", "", None)
+            else payload.src_lang_hint
+        )
+
+        self._ledger.mark_time(msg.seq_id, "t_translate")
+        self._dump.on_asr(msg.seq_id, src_text, src_lang)
+        self._dump.on_translate(msg.seq_id, src_text, src_lang, tgt_text, tgt_lang)
+        self._ledger.record(
+            msg.seq_id,
+            src_text=src_text, src_lang=src_lang,
+            tgt_text=tgt_text, tgt_lang=tgt_lang,
+        )
+        if self._text_logger is not None:
+            try:
+                self._text_logger.write_src(msg.seq_id, src_text, src_lang)
+                self._text_logger.write_tgt(msg.seq_id, tgt_text, tgt_lang)
+            except Exception:  # noqa: BLE001 - テキストログ失敗で停止しない
+                self._logger.exception("write_src/write_tgt failed")
+
+        if not tgt_text:
+            # 空翻訳は次段に流す意味がないので破棄(ledger 解放は worker loop 側)
+            return None, ErrorAction.CONTINUE
+
+        return (
+            TranslatedPayload(tgt_text=tgt_text, tgt_lang=tgt_lang),
             ErrorAction.CONTINUE,
         )
 

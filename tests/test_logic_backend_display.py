@@ -85,3 +85,17 @@ class TestLayerDispatch:
     def test_other_layers_pass_through(self) -> None:
         assert backend_display_to_internal(LayerKind.ASR, "faster_whisper") == "faster_whisper"
         assert backend_internal_to_display(LayerKind.ASR, "faster_whisper") == "faster_whisper"
+
+
+class TestAbsorbedStatusText:
+    """吸収済み表示の固定文言(変更はふるまい変更としてここに現れる)。"""
+
+    def test_absorbed_by_asr(self) -> None:
+        from voice_translator.gui.logic.backend_display import absorbed_status_text
+
+        assert absorbed_status_text(LayerKind.ASR) == "(ASR に吸収済み)"
+
+    def test_absorbed_by_capture(self) -> None:
+        from voice_translator.gui.logic.backend_display import absorbed_status_text
+
+        assert absorbed_status_text(LayerKind.CAPTURE) == "(音声取得 に吸収済み)"
