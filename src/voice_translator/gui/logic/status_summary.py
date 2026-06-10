@@ -29,10 +29,7 @@ def format_status_summary(
     - errors: timestamp 降順(新しい順)でソート済みを渡す。max_errors 件で打ち切り
     - gui_events: 古い → 新しい順で渡す(deque のまま)。新しい順 max_events 件で表示
     """
-    out = [
-        f"[{line.layer.value}] {line.backend_name}: {line.status.value}{line.dl_size_hint}"
-        for line in lines
-    ]
+    out = [_format_layer_line(line) for line in lines]
     if errors:
         out.append("")
         out.append("最近のエラー:")
@@ -40,6 +37,27 @@ def format_status_summary(
             ctx = f" ({rec.context})" if rec.context else ""
             out.append(f"  [{layer.value}] {rec.exc_type}: {rec.message}{ctx}")
     return append_gui_events("\n".join(out), gui_events, max_events=max_events)
+
+
+def _format_layer_line(line: LayerStatusLine) -> str:
+    """レイヤ 1 行の表示。編成上の扱い(吸収 / 対象外)を実態どおりに出す。
+
+    - 通常:   `[asr] faster_whisper: Loaded`
+    - 吸収:   `[translator] (asr の faster_whisper_translate で実行)`
+      — 設定されている backend 名や状態を出すと「それが動く」ように見えるため出さない
+    - 対象外: `[tts] (なし)`
+    """
+    if line.disposition == "absorbed":
+        return (
+            f"[{line.layer.value}] "
+            f"({line.absorbed_into} の {line.absorbed_backend} で実行)"
+        )
+    if line.disposition == "skipped":
+        return f"[{line.layer.value}] (なし)"
+    return (
+        f"[{line.layer.value}] {line.backend_name}: "
+        f"{line.status.value}{line.dl_size_hint}"
+    )
 
 
 def append_gui_events(

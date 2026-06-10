@@ -160,12 +160,21 @@ class LayerStatusLine:
     UI 側(`gui/logic/status_summary.py`)の責務で、ここはデータのみを運ぶ。
     `dl_size_hint` は表示にそのまま連結する末尾文字列(例: `" (~2.9GB)"`。
     **先頭スペースを含む**)で、DOWNLOADING 以外のときは空文字。
+
+    `disposition` は現在の編成でこのレイヤがどう扱われるか:
+    - `"active"`   : 通常(このレイヤの backend が動く)
+    - `"absorbed"` : 複合 backend に吸収(`absorbed_into` のレイヤの
+                     `absorbed_backend` が代行。自レイヤの backend は使われない)
+    - `"skipped"`  : 編成に載らない(text_only の TTS/Output 等。何も動かない)
     """
 
     layer: LayerKind
     backend_name: str
     status: ModelStatus
     dl_size_hint: str = ""
+    disposition: str = "active"
+    absorbed_into: str = ""      # 吸収先レイヤの value(例: "asr")
+    absorbed_backend: str = ""   # 吸収先で実際に動く backend 名
 
 
 @dataclass(frozen=True)

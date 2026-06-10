@@ -37,13 +37,21 @@ LAYER_SHORT_LABELS: dict[LayerKind, str] = {
 }
 
 
-def absorbed_status_text(lead: LayerKind) -> str:
+# 編成に載らないレイヤ(text_only の TTS/Output 等)のステータス欄に出す文言
+SKIPPED_STATUS_TEXT = "(なし)"
+
+
+def absorbed_status_text(lead: LayerKind, lead_backend: str = "") -> str:
     """複合 backend に吸収されたレイヤのステータス欄に出す文言。
 
-    例: 翻訳ロールが ASR の複合に吸収 → 「(ASR に吸収済み)」。
+    「どの backend が実際に動くか」を示す:
+    例: 翻訳ロールが ASR の複合に吸収 → 「(ASR 側で実行: faster_whisper_translate)」。
+    吸収先の backend 名が取れない場合は「(ASR に吸収済み)」に縮退。
     このレイヤの backend 選択は Start 時に無視されることを示す。
     """
     label = LAYER_SHORT_LABELS.get(lead, lead.value)
+    if lead_backend:
+        return f"({label} 側で実行: {lead_backend})"
     return f"({label} に吸収済み)"
 
 

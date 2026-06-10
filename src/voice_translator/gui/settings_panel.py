@@ -31,6 +31,7 @@ from .collapsible_section import CollapsibleSection
 from .consent_dialog import ConsentDialog
 from .layer_settings_dialog import LayerSettingsDialog
 from .logic.backend_display import (
+    SKIPPED_STATUS_TEXT,
     TTS_NONE_DISPLAY,
     TTS_NONE_INTERNAL,
     absorbed_status_text,
@@ -88,8 +89,9 @@ class SettingsPanel(ctk.CTkFrame):
 
         self._backend_vars: dict[LayerKind, ctk.StringVar] = {}
         self._status_labels: dict[LayerKind, ctk.CTkLabel] = {}
-        # 複合 backend に吸収中のロール(ステータス欄の「吸収済み」表示の維持用)
-        self._absorbed_shown: set[LayerKind] = set()
+        # ステータス欄を編成表示(「〜側で実行」/「(なし)」)で上書き中のレイヤ。
+        # ここに入っている間は実ステータスでの再描画をブロックする。
+        self._status_overridden: set[LayerKind] = set()
         self._capture_var = ctk.StringVar(value="(未選択)")
         self._output_var = ctk.StringVar(value="(未選択)")
         # 言語プルダウンは表示形式 "en (English)" を保持。内部値(コード)と区別する。
@@ -462,8 +464,8 @@ class SettingsPanel(ctk.CTkFrame):
         self.after(0, lambda: self._apply_status(layer, status))
 
     def _apply_status(self, layer: LayerKind, status: ModelStatus) -> None:
-        if layer in self._absorbed_shown:
-            return  # 吸収済み表示を維持(編成対象外レイヤの実状態は表示しない)
+        if layer in self._status_overridden:
+            return  # 編成表示(吸収 / なし)を維持(対象外レイヤの実状態は表示しない)
         label = self._status_labels.get(layer)
         if label is None:
             return
@@ -490,7 +492,7 @@ class SettingsPanel(ctk.CTkFrame):
             self._apply_status(layer, status)
 
     # ============================================================
-    # 複合 backend の吸収表示(「(〜に吸収済み)」)
+    # 編成表示(吸収=「〜側で実行」/ 対象外=「(なし)」)
     # ============================================================
     def _absorbed_roles(self) -> dict[LayerKind, LayerKind]:
         """吸収状況を controller に問い合わせる(失敗時は「吸収なし」に縮退)。"""
@@ -500,37 +502,64 @@ class SettingsPanel(ctk.CTkFrame):
             return {}
         return dict(result) if isinstance(result, dict) else {}
 
-    def _apply_absorbed_visuals(self) -> None:
-        """複合 backend に吸収されたレイヤの行に「吸収済み」表示を反映する。
+    def _skipped_roles(self) -> set[LayerKind]:
+        """編成に載らないレイヤ(text_only の TTS/Output)。失敗時は「なし」に縮退。"""
+        try:
+            if self._controller.output_mode == "text_only":
+                return {LayerKind.TTS, LayerKind.OUTPUT}
+        except Exception:  # noqa: BLE001
+            pass
+        return set()
 
-        吸収中: ステータス欄を「(〜に吸収済み)」+ グレー表示。プルダウンは選べる
-        まま残す(選択は保存されるが Start 時は無視される。複合をやめた時の選択を
-        保持するため)。吸収解除: 行ラベルの色と実ステータス表示に戻す。
+    def _lead_backend_name(self, lead: LayerKind) -> str:
+        """吸収先レイヤで実際に動く backend 名(取得失敗は空文字 = 文言が縮退)。"""
+        try:
+            return str(
+                self._controller.get_setting("backends", lead.value, default="") or ""
+            )
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _apply_absorbed_visuals(self) -> None:
+        """編成上「動かないレイヤ」の行に実態を表示する。
+
+        - 複合 backend に吸収: ステータス欄に「(〜側で実行: <backend>)」+ グレー表示。
+          プルダウンは選べるまま残す(選択は保存されるが Start 時は無視される。
+          複合をやめた時の選択を保持するため)。
+        - 編成対象外(text_only の TTS/Output): ステータス欄に「(なし)」。
+        - 解除されたレイヤ: 行ラベルの色と実ステータス表示に戻す。
         """
         absorbed = self._absorbed_roles()
-        prev = set(self._absorbed_shown)
-        self._absorbed_shown = set(absorbed)
+        overrides: dict[LayerKind, str] = {
+            layer: absorbed_status_text(lead, self._lead_backend_name(lead))
+            for layer, lead in absorbed.items()
+        }
+        for layer in self._skipped_roles():
+            overrides.setdefault(layer, SKIPPED_STATUS_TEXT)
+
+        prev = set(self._status_overridden)
+        self._status_overridden = set(overrides)
         rows = getattr(self, "_backend_rows", {})
 
-        for layer, lead in absorbed.items():
+        for layer, text in overrides.items():
             status_label = self._status_labels.get(layer)
             if status_label is not None:
                 try:
-                    status_label.configure(
-                        text=absorbed_status_text(lead), text_color=DISABLED_TEXT
-                    )
+                    status_label.configure(text=text, text_color=DISABLED_TEXT)
                 except Exception:  # noqa: BLE001 - widget 破棄で UI を止めない
                     pass
-            for w in rows.get(layer, []):
-                if isinstance(w, ctk.CTkLabel) and w is not status_label:
-                    try:
-                        w.configure(text_color=DISABLED_TEXT)
-                    except Exception:  # noqa: BLE001
-                        pass
+            # 吸収レイヤは行ラベルもグレーに(対象外レイヤは _apply_tts_none_visual が担当)
+            if layer in absorbed:
+                for w in rows.get(layer, []):
+                    if isinstance(w, ctk.CTkLabel) and w is not status_label:
+                        try:
+                            w.configure(text_color=DISABLED_TEXT)
+                        except Exception:  # noqa: BLE001
+                            pass
 
-        # 吸収が解除されたレイヤ: 行ラベル色を戻し、実ステータスで上書きする
+        # 表示上書きが解除されたレイヤ: 行ラベル色を戻し、実ステータスで上書きする
         # (ctk は text_color=None を受け付けないため、保存済みの既定色で戻す)
-        for layer in prev - set(absorbed):
+        for layer in prev - set(overrides):
             for w in rows.get(layer, []):
                 if isinstance(w, ctk.CTkLabel):
                     try:
