@@ -140,6 +140,19 @@ class ModelInfo:
 
 
 @dataclass(frozen=True)
+class PipelineRestartEvent:
+    """動作中デバイス変更に伴う自動 restart のライフサイクルイベント(P2)。
+
+    役割: `AppController.add_restart_listener` で UI に届く通知。バナー表示
+    (再開中… / 完了 / 失敗)の材料になる。
+    """
+
+    phase: str        # "started" | "completed" | "failed"
+    device_key: str   # 契機となった devices キー("input" | "output")
+    message: str = ""  # failed 時の理由(それ以外は空)
+
+
+@dataclass(frozen=True)
 class LayerStatusLine:
     """レイヤ 1 行分のステータス表示データ(整形前)。
 

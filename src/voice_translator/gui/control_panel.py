@@ -48,11 +48,10 @@ class ControlPanel(ctk.CTkFrame):
 
     def __init__(
         self, master, controller: AppController,
-        settings_panel=None, banner=None,
+        banner=None,
     ) -> None:
         super().__init__(master)
         self._controller = controller
-        self._settings_panel = settings_panel  # 共有: SettingsPanel.on_status_change を呼ぶため
         self._banner = banner                  # NotificationBanner(あれば起動失敗を流す)
         self._state: str = "idle"  # idle / loading / running / stopping
         self._latencies: deque[float] = deque(maxlen=10)
@@ -68,14 +67,16 @@ class ControlPanel(ctk.CTkFrame):
         )
 
         self._build_widgets()
-        # AppController からのコールバックを受け取る
-        self._controller.set_callbacks(
-            on_utterance_done=self._on_utterance_from_thread,
-            on_text_ready=self._on_text_ready_from_thread,
-            on_fatal=self._on_fatal_from_thread,
-            on_warn=self._on_warn_from_thread,
-            on_status_change=self._on_status_from_thread,
-        )
+        # AppController のイベントを購読する(P2: Subscription 1 本に統一)。
+        # listener は emit 元スレッドで呼ばれるため、各ハンドラ側で after(0) marshalling する。
+        self._subscriptions = [
+            controller.add_status_listener(self._on_status_from_thread),
+            controller.add_text_ready_listener(self._on_text_ready_from_thread),
+            controller.add_utterance_done_listener(self._on_utterance_from_thread),
+            controller.add_fatal_listener(self._on_fatal_from_thread),
+            controller.add_warn_listener(self._on_warn_from_thread),
+            controller.add_settings_listener(self._on_settings_changed_from_thread),
+        ]
         # 初期状態(モデル未ロード)を反映: ボタンを準備中にする
         self._sync_ready_state()
 
@@ -447,11 +448,19 @@ class ControlPanel(ctk.CTkFrame):
         return prefix + " " + message + suffix
 
     def _on_status_from_thread(self, layer: LayerKind, status: ModelStatus) -> None:
-        # SettingsPanel に転送(UI 表示) + 自分も再計算
-        if self._settings_panel is not None:
-            self._settings_panel.on_status_change(layer, status)
-        # 自身もスレッドセーフに反映(メインスレッドへ転送)
+        # スレッドセーフに反映(メインスレッドへ転送)。
+        # SettingsPanel への転送は廃止(P2: 各 Panel が自身で購読する)。
         self.after(0, lambda: self._apply_layer_status(layer, status))
+
+    def _on_settings_changed_from_thread(self, keys: tuple[str, ...]) -> None:
+        """settings イベント受信。devices.* の変更だけ ready 状態の再計算につなげる。
+
+        PROCESS kind での PID 選択完了(「プロセス未選択」→「▶ 開始」遷移)と、
+        出力デバイス選択(出力テストボタンの enable)をカバーする(P2: 旧
+        `SettingsPanel → refresh_ready_state()` 直叩きの置き換え)。
+        """
+        if keys and keys[0] == "devices":
+            self.after(0, self._sync_ready_state)
 
     def _apply_layer_status(self, layer: LayerKind, status: ModelStatus) -> None:
         self._layer_statuses[layer] = status
@@ -462,7 +471,11 @@ class ControlPanel(ctk.CTkFrame):
     # ============================================================
     # ステータステキストボックス(Phase C3)
     # ============================================================
-    _STATUS_REFRESH_INTERVAL_MS = 3000  # 3 秒ごとにエラー履歴等を再フェッチ
+    # 30 秒ごとにエラー履歴を再フェッチする(P2 で 3 秒から縮小)。
+    # 用途: イベント化されていない backend エラー履歴(RECOVERABLE / SKIP の
+    # リトライ失敗は record_error に積まれるだけで通知が来ない)の遅延表示専用。
+    # 状態変化・致命エラー・操作イベントは push(listener)で即時反映される。
+    _STATUS_REFRESH_INTERVAL_MS = 30_000
 
     def _refresh_status_text(self) -> None:
         """ステータススナップショット + GUI 操作イベント履歴を整形して表示する。
@@ -504,7 +517,7 @@ class ControlPanel(ctk.CTkFrame):
         self._refresh_status_text()
 
     def _schedule_status_refresh(self) -> None:
-        """周期的にステータスを再描画する。`on_status_change` の通知漏れに対する保険。"""
+        """周期的にステータスを再描画する(イベント化されていないエラー履歴の遅延表示)。"""
         try:
             self.after(self._STATUS_REFRESH_INTERVAL_MS, self._tick_status_refresh)
         except Exception:  # noqa: BLE001
@@ -513,15 +526,6 @@ class ControlPanel(ctk.CTkFrame):
     def _tick_status_refresh(self) -> None:
         self._refresh_status_text()
         self._schedule_status_refresh()
-
-    def refresh_ready_state(self) -> None:
-        """外部(SettingsPanel 等)から「ボタン状態を見直して」と依頼するための公開窓。
-
-        `_sync_ready_state` は内部実装名で呼び出し側にとっては紛らわしい。動作中
-        / 起動中などの遷移中は内部で何もしないので、呼び出し側はタイミングを気に
-        しなくてよい。SettingsPanel のプロセス選択ダイアログから PID 確定後に呼ぶ。
-        """
-        self._sync_ready_state()
 
     def _sync_ready_state(self) -> None:
         """各レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。

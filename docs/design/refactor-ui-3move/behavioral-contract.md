@@ -63,7 +63,7 @@
 | 3.8 | バックグラウンドでロード(未ロード分)→ Coordinator 起動 → `on_started` で UI 反映 | 同上 |
 | 3.9 | 動作中は「■ 停止」(normal) + 中央ロードボタン / 出力テストボタンは「(動作中)」で disable | `control_panel.py:_apply_loader_started` |
 | 3.10 | Stop 押下 → 「停止中…」(disable) → 完了で「停止中」(idle)に戻る | `control_panel.py:_do_stop` |
-| 3.11 | 動作中に入出力デバイスを変えると自動 restart + 「再開中…」バナー | `settings_panel.py:_trigger_device_restart` ※ **P2 で意図的変更予定**(§13.6) |
+| 3.11 | ❌(P2 で意図的変更)動作中に `devices.input` / `devices.output` が**書き変わったら**(プルダウン操作・PID 選択・再列挙 fallback を問わず)自動 restart + 「再開中…」バナー | `app_controller.py:set_setting` 反応系 + `settings_panel.py:_apply_restart_event`(§13.6。旧: SettingsPanel のドロップダウンハンドラのみが発火) |
 | 3.12 | 動作中に言語設定を変えると **次の発話から反映**(キュー内の発話は古い言語のまま) | `app_controller.py:set_setting` + `pipeline.py:set_languages` |
 | 3.13 | 起動失敗 / 致命的エラーは NotificationBanner + status_label + status textbox の **3 段表示** | `control_panel.py:_do_start_async` 失敗分岐 |
 
@@ -161,7 +161,7 @@
 | 11.2 | ボタン押下で ProcessSelectDialog が開く + プロセス一覧が列挙される | `process_select_dialog.py` |
 | 11.3 | プロセスを選んで ▶ 試聴開始でレベルメータが動く(5fps poll) | `process_select_dialog.py` + `process_enumerator.py:_PeakWorker` |
 | 11.4 | OK で PID を `devices.input` に保存 + ボタンラベルが「PID 1234 ▼」に | `settings_panel.py:_on_capture_select_clicked` |
-| 11.5 | PID 未選択時は Start ボタン disable / 選択完了で即座に Start enable に遷移 | `control_panel.py:refresh_ready_state` ※ P2 で経路が逆参照 → 購読に変わる(遷移自体は維持) |
+| 11.5 | PID 未選択時は Start ボタン disable / 選択完了で即座に Start enable に遷移 | `control_panel.py:_on_settings_changed_from_thread`(P2 で逆参照 → settings イベント購読に置換。遷移は維持) |
 
 ---
 
@@ -177,18 +177,16 @@
 
 ---
 
-## 13. 置き換え予定のふるまい(P2: event-unify で実施)
+## 13. 置き換えたふるまい(P2: event-unify で実施済み 2026-06-10)
 
-これらは **「現在はあるが P2 完了後は無くなる / 変わる」** ふるまい。P2 完了時に確認:
-
-| # | 旧ふるまい | 置き換え |
+| # | 旧ふるまい | 置き換え(結果) |
 |---|---|---|
 | 13.1 | 「設定を保存」ボタン | **撤去しない**(MVVM 案からの変更)。auto-persist 化は pendList で保留 |
-| 13.2 | SettingsPanel が ControlPanel の `refresh_ready_state()` を直接呼ぶ | 撤去。AppController の状態変化イベント購読経由の自動更新 |
-| 13.3 | ControlPanel の 3 秒周期 `_schedule_status_refresh` poll | 撤去。push 駆動(判断点: 保険として 30 秒間隔で 1 Phase 残す選択肢あり → Roadmap §4) |
-| 13.4 | AppController.set_callbacks(on_status_change=...) の single callback 互換層 | 撤去。`add_status_listener`(Subscription)に統一。text_ready / utterance_done / fatal / warn も同型の listener 登録へ |
-| 13.5 | (MVVM 案: Subscription を Observable に置き換え) | **逆転**: Subscription を標準として維持・適用拡大する。Observable 基盤は作らない |
-| 13.6 | 動作中デバイス変更の restart は SettingsPanel のドロップダウンハンドラだけが発火する | AppController の `set_setting("devices", …)` 反応系へ移管。**意味拡張**: 動作中のデバイス再列挙 fallback 書き込みでも restart が走るようになる(契約 §3.11 を書き換え) |
+| 13.2 | ✅ SettingsPanel が ControlPanel の `refresh_ready_state()` を直接呼ぶ | 撤去済み。settings イベント購読経由の自動更新(`tests/test_capture_process_source_lifecycle.py`) |
+| 13.3 | ✅ ControlPanel の 3 秒周期 `_schedule_status_refresh` poll | **30 秒に縮小して存続**(判断点の決定)。push 一本化後も RECOVERABLE/SKIP のエラー履歴はイベント化されないため、その遅延表示専用として残す。完全廃止は backend エラーのイベント化とセットで P4 以降 |
+| 13.4 | ✅ AppController.set_callbacks(on_status_change=...) の single callback 互換層 | 撤去済み。`add_<event>_listener`(Subscription)に統一(status / text_ready / utterance_done / fatal / warn / settings / restart。`tests/test_app_controller.py:TestP2EventListeners`) |
+| 13.5 | (MVVM 案: Subscription を Observable に置き換え) | **逆転**: Subscription を標準として維持・適用拡大した。Observable 基盤は作らない |
+| 13.6 | ✅ 動作中デバイス変更の restart は SettingsPanel のドロップダウンハンドラだけが発火する | AppController の `set_setting("devices", …)` 反応系へ移管済み。**意味拡張**: 動作中のデバイス再列挙 fallback 書き込みでも restart が走る(§3.11 を ❌ 書き換え。`tests/test_app_controller.py:TestP2DeviceRestartReactive`) |
 
 ---
 
@@ -224,3 +222,17 @@ P1 で新たに自動テスト化(✅)された項目:
 🧪 手動チェック(実機 GUI 操作: §1.6〜1.11 / §3.1〜3.6 / §6 / §7 / §9 を 1 回ずつ踏む)は
 **未実施 — ユーザのドッグフーディングでの確認待ち**。実 widget を使った自動テスト
 (panel 系)が配線を検証済みのため、リスクは表示の見た目崩れ等に限られる。
+
+### P2: event-unify(2026-06-10)
+
+P2 で新たに自動テスト化(✅)された項目:
+
+| 項目 | テスト |
+|---|---|
+| §2.8(状態変化が複数 UI コンポーネントに届く) | `tests/test_app_controller.py:TestPhaseA2MultiListener`(機構)+ 各 Panel が自身で購読(構造) |
+| §3.11(❌ 意図的変更: devices.* 書き込みで自動 restart + イベント) | `tests/test_app_controller.py:TestP2DeviceRestartReactive` + `tests/test_dynamic_devices.py`(バナー反映) |
+| §11.5(PID 選択完了 → Start enable 遷移) | `tests/test_capture_process_source_lifecycle.py:test_pid_selection_via_settings_event_enables_start`(実 widget) |
+| §13.2 / 13.4 / 13.6(置き換えの実施) | §13 の表に記載のテスト + hasattr による撤去確認 |
+
+🧪 手動チェック(§3.11 の実機確認: 動作中にデバイスを切り替えて「再開中…」→ 復帰)は
+**未実施 — ユーザのドッグフーディングでの確認待ち**。
