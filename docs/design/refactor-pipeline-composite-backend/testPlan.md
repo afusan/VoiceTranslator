@@ -53,6 +53,23 @@
   snapshot に出る(全 6 行固定)のが既存仕様のため、吸収ロールも同様に行は残す。
   設定パネル側の「(〜に吸収済み)」表示で区別する。
 
+## C-6: 認証あり(有償)複合 — クラウド 2 種 ✅
+
+- [x] `OpenAiWhisperApiTranslateBackend`(httpx 完全モック small: `tests/test_composite_cloud_backends.py`)
+  - [x] 申告(covers/consumes/produces / 英語固定 / auto detect)
+  - [x] translations エンドポイントへ language パラメータを送らない
+  - [x] 検出言語(英語名)の ISO 正規化 / hint 優先 / 空 PCM SkipError
+  - [x] HTTP 401→Fatal / 429・5xx→Recoverable / その他→Fatal / ネット例外→Recoverable
+- [x] `GptAudioTranslateBackend`(同上)
+  - [x] input_audio(wav/base64)で送信 / JSON 契約のパース(コードフェンス耐性)
+  - [x] JSON 契約が崩れたら本文全体を訳として縮退(src_text 空 / src_lang auto)
+  - [x] 自由記述の src_lang は auto に縮退 / HTTP エラー写像 / 空 PCM SkipError
+- [x] backend_setup: 登録一覧 + モック fixture 更新
+- [x] large テスト 2 件追加(`test_openai_whisper_api_translate_large.py` /
+      `test_gpt_audio_translate_large.py`)。**local.secrets の OpenAI key が placeholder のため
+      skip 縮退を確認**(placeholder 検出付き)。実キー投入後に各 1 回の実行が必要
+      (CLAUDE.md の「token が用意された backend は実ロード確認」は key 未用意のため未適用)
+
 ## 回帰確認
 
 - [x] 各 Phase コミット前: `py -m uv run pytest`(small 全件 green)

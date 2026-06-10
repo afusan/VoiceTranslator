@@ -172,20 +172,31 @@ py -m uv run python -m voice_translator
   - 選択した PID は **アプリを閉じると保存されない**(再起動時は毎回プロセス選択し直し)。プロセス再起動で PID が変わるため、保存しても次回起動で別アプリの音を取り込む事故を防ぐ仕様。
   - 未選択のまま「▶ 開始」を押そうとすると、ボタンが「プロセス未選択」になり Start を阻止する。
 - VAD: `silero` / `webrtcvad` / `pyannote` / `pvcobra`(後 3 つは `--extra vad-extra` で追加)
-- ASR: `faster_whisper` / `faster_whisper_translate` / `openai_whisper` / `openai_whisper_api` / `google_stt` / `deepgram`
+- ASR: `faster_whisper` / `faster_whisper_translate` / `openai_whisper` / `openai_whisper_api` / `openai_whisper_api_translate` / `gpt_audio_translate` / `google_stt` / `deepgram`
 - 翻訳: `nllb200` / `deepl` / `openai_gpt` / `anthropic_claude`
 - TTS: `sapi` / `piper` / `elevenlabs` / `openai_tts` / `google_cloud_tts` / **`(なし)`**
 - 音声出力: `soundcard`
 
-#### ASR+翻訳の一括バックエンド(`faster_whisper_translate`)
-ASR に `faster_whisper_translate` を選ぶと、Whisper が**書き起こしと英語への翻訳を 1 回の推論で**行う:
+#### ASR+翻訳の一括バックエンド(複合)
+ASR に以下のいずれかを選ぶと、**書き起こしと翻訳を 1 回の処理で**行う(End-to-End 音声翻訳):
+
+| 名前 | 形態 | 翻訳先 | 原文表示 | 備考 |
+|---|---|---|---|---|
+| `faster_whisper_translate` | ローカル(無料) | 英語固定 | なし | Whisper の translate タスク。NLLB のロード(約 2.5GB)が不要になり起動が軽い |
+| `openai_whisper_api_translate` | クラウド(従量・要 API key) | 英語固定 | なし | OpenAI Whisper API の translations。25MB/発話の上限 |
+| `gpt_audio_translate` | クラウド(従量・要 API key) | **任意** | **あり** | GPT 音声入力モデル。原文(書き起こし)も履歴に出る。既定は mini 系モデル(設定で変更可) |
+
+共通のふるまい:
 - **翻訳レイヤは使われなくなる**(ロードもされない)。翻訳行のステータス欄は
   「(ASR に吸収済み)」のグレー表示になる。プルダウンの選択自体は記憶され、ASR を
   単体バックエンドに戻すと従来どおり翻訳レイヤが復帰する。
-- **翻訳先は英語固定**。出力言語プルダウンの候補は `en` のみになり、`ja` 等を選んでいた
-  場合は自動的に `en` へ切り替わる(通知バナーで明示)。
-- 履歴の「原文」欄は空になる(Whisper の translate は翻訳結果だけを出力するため)。
-- NLLB のロード(約 2.5GB)が不要になるぶん、起動が軽い。英語字幕/英語読み上げ用途向け。
+- 出力言語プルダウンの候補は複合バックエンドが決める。英語固定の 2 つでは候補が `en`
+  のみになり、`ja` 等を選んでいた場合は自動的に `en` へ切り替わる(通知バナーで明示)。
+- 英語固定の 2 つは履歴の「原文」欄が空になる(Whisper の translate は翻訳結果だけを
+  出力するため)。`gpt_audio_translate` は原文も表示される。
+- クラウドの 2 つは認証が必要。API key は各バックエンドの詳細ダイアログから登録する。
+  未登録の場合、同じ OpenAI key を使う既存バックエンド(`openai_whisper_api` /
+  `openai_gpt`)に登録済みの key を自動で使い回す。
 
 ### 5-4-0. TTS=(なし) でテキスト字幕モードにする
 TTS プルダウンの末尾に `(なし)` の選択肢がある。これを選ぶと:

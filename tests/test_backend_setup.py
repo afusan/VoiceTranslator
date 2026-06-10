@@ -35,6 +35,11 @@ def patched_backend_setup(monkeypatch):
         ),
         ("voice_translator.asr.openai_whisper_backend", "OpenAiWhisperAsrBackend"),
         ("voice_translator.asr.openai_whisper_api_backend", "OpenAiWhisperApiAsrBackend"),
+        (
+            "voice_translator.asr.openai_whisper_api_translate_backend",
+            "OpenAiWhisperApiTranslateBackend",
+        ),
+        ("voice_translator.asr.gpt_audio_translate_backend", "GptAudioTranslateBackend"),
         ("voice_translator.asr.google_stt_backend", "GoogleSttAsrBackend"),
         ("voice_translator.asr.deepgram_backend", "DeepgramAsrBackend"),
         ("voice_translator.translator.nllb200_backend", "Nllb200TranslatorBackend"),
@@ -73,11 +78,11 @@ class TestRegisterDefaultBackends:
         assert registry.list_names(LayerKind.VAD) == [
             "silero", "webrtcvad", "pyannote", "pvcobra",
         ]
-        # MVP の faster-whisper が先頭。faster_whisper_translate は ASR+翻訳の複合。
+        # MVP の faster-whisper が先頭。*_translate / gpt_audio_translate は ASR+翻訳の複合。
         assert registry.list_names(LayerKind.ASR) == [
             "faster_whisper", "faster_whisper_translate",
-            "openai_whisper", "openai_whisper_api",
-            "google_stt", "deepgram",
+            "openai_whisper", "openai_whisper_api", "openai_whisper_api_translate",
+            "gpt_audio_translate", "google_stt", "deepgram",
         ]
         # Phase F2 で DeepL / OpenAI GPT / Anthropic Claude を追加。
         # MVP の nllb200 が先頭。
