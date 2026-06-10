@@ -15,10 +15,7 @@ import customtkinter as ctk
 import pytest
 
 from voice_translator.common.types import LayerKind, ModelStatus
-from voice_translator.gui.logic.backend_display import (
-    SKIPPED_STATUS_TEXT,
-    absorbed_status_text,
-)
+from voice_translator.gui.logic.backend_display import SKIPPED_STATUS_TEXT
 from voice_translator.gui.logic.palette import DISABLED_TEXT
 
 
@@ -42,7 +39,6 @@ def stub_panel():
         "_apply_absorbed_visuals",
         "_absorbed_roles",
         "_skipped_roles",
-        "_lead_backend_name",
         "_restore_text_color",
     )
     shim._controller = MagicMock(name="controller")
@@ -62,19 +58,17 @@ def stub_panel():
 
 
 class TestAbsorbVisual:
-    def test_absorbed_layer_shows_effective_backend(self, stub_panel) -> None:
-        """吸収中は「どの backend が実際に動くか」をステータス欄に出す。"""
+    def test_absorbed_layer_clears_status_text(self, stub_panel) -> None:
+        """吸収中のステータス欄は空表示(無効化されたプルダウンで伝わるため文言なし)。"""
         shim, row_label, status_label, _, _ = stub_panel
         shim._controller.get_absorbed_roles.return_value = {
             LayerKind.TRANSLATOR: LayerKind.ASR
         }
-        shim._controller.get_setting.return_value = "faster_whisper_translate"
 
         shim._apply_absorbed_visuals()
 
         status_label.configure.assert_called_with(
-            text=absorbed_status_text(LayerKind.ASR, "faster_whisper_translate"),
-            text_color=DISABLED_TEXT,
+            text="", text_color=DISABLED_TEXT,
         )
         row_label.configure.assert_called_with(text_color=DISABLED_TEXT)
         assert shim._status_overridden == {LayerKind.TRANSLATOR}

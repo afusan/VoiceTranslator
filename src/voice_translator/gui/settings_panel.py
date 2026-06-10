@@ -34,7 +34,6 @@ from .logic.backend_display import (
     SKIPPED_STATUS_TEXT,
     TTS_NONE_DISPLAY,
     TTS_NONE_INTERNAL,
-    absorbed_status_text,
     backend_display_to_internal,
     backend_internal_to_display,
     capture_internal_to_display,
@@ -517,30 +516,20 @@ class SettingsPanel(ctk.CTkFrame):
             pass
         return set()
 
-    def _lead_backend_name(self, lead: LayerKind) -> str:
-        """吸収先レイヤで実際に動く backend 名(取得失敗は空文字 = 文言が縮退)。"""
-        try:
-            return str(
-                self._controller.get_setting("backends", lead.value, default="") or ""
-            )
-        except Exception:  # noqa: BLE001
-            return ""
-
     def _apply_absorbed_visuals(self) -> None:
         """編成上「動かないレイヤ」の行に実態を表示する。
 
-        - 複合 backend に吸収: ステータス欄に「(〜側で実行: <backend>)」+ グレー表示。
-          プルダウンと設定ボタンは disabled(選択値は保存されるが Start 時は無視。
-          複合をやめた時の選択を保持するため、値自体は維持される)。
+        - 複合 backend に吸収: ステータス欄は**空表示**(使われないレイヤであることは
+          プルダウン/設定ボタンの disabled で伝わるため文言は出さない。どの backend が
+          代行するかは動作タブのステータス集約に出る)。プルダウンと設定ボタンは
+          disabled(選択値は保存されるが Start 時は無視。複合をやめた時の選択を
+          保持するため、値自体は維持される)。
         - 編成対象外(text_only の TTS/Output): ステータス欄に「(なし)」。
           プルダウン/設定ボタンの disable は `_apply_tts_none_visual` が担当。
         - 解除されたレイヤ: 行ラベルの色と widget 状態と実ステータス表示に戻す。
         """
         absorbed = self._absorbed_roles()
-        overrides: dict[LayerKind, str] = {
-            layer: absorbed_status_text(lead, self._lead_backend_name(lead))
-            for layer, lead in absorbed.items()
-        }
+        overrides: dict[LayerKind, str] = {layer: "" for layer in absorbed}
         for layer in self._skipped_roles():
             overrides.setdefault(layer, SKIPPED_STATUS_TEXT)
 

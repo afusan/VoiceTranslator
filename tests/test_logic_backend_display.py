@@ -87,22 +87,13 @@ class TestLayerDispatch:
         assert backend_internal_to_display(LayerKind.ASR, "faster_whisper") == "faster_whisper"
 
 
-class TestAbsorbedStatusText:
-    """編成表示の固定文言(変更はふるまい変更としてここに現れる)。"""
+class TestSkippedStatusText:
+    """編成表示の固定文言(変更はふるまい変更としてここに現れる)。
 
-    def test_absorbed_with_backend_name_shows_effective_runner(self) -> None:
-        from voice_translator.gui.logic.backend_display import absorbed_status_text
-
-        assert (
-            absorbed_status_text(LayerKind.ASR, "faster_whisper_translate")
-            == "(ASR 側で実行: faster_whisper_translate)"
-        )
-
-    def test_absorbed_without_backend_name_falls_back(self) -> None:
-        from voice_translator.gui.logic.backend_display import absorbed_status_text
-
-        assert absorbed_status_text(LayerKind.ASR) == "(ASR に吸収済み)"
-        assert absorbed_status_text(LayerKind.CAPTURE) == "(音声取得 に吸収済み)"
+    吸収レイヤのステータス欄文言(absorbed_status_text)は撤去済み: 設定パネルでは
+    プルダウン無効化 + 空表示で伝え、代行 backend 名の明示はステータス集約
+    (status_summary)に一本化した。
+    """
 
     def test_skipped_status_text(self) -> None:
         from voice_translator.gui.logic.backend_display import SKIPPED_STATUS_TEXT
