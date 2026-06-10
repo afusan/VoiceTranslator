@@ -161,9 +161,14 @@ class SettingsPanel(ctk.CTkFrame):
         body = section.body
         # 6 レイヤ行を保持(TTS=(なし) 時にグレーアウトするため参照を残す)
         self._backend_rows: dict[LayerKind, list[ctk.CTkBaseClass]] = {}
+        # グレーアウト解除時の復元色。ctk は text_color=None を受け付けない
+        # (ValueError)ため、構築時の既定値を保存しておき復元に使う。
+        self._default_row_text_color: object | None = None
         row = 0
         for layer, label in _LAYER_LABELS:
             label_widget = ctk.CTkLabel(body, text=f"{label}:")
+            if self._default_row_text_color is None:
+                self._default_row_text_color = label_widget.cget("text_color")
             label_widget.grid(row=row, column=0, sticky="w", padx=4, pady=2)
             internal_names = self._controller.list_backends(layer) or ["(未登録)"]
             # 表示用候補(layer ごとに display フォーマットを変換)
@@ -280,7 +285,9 @@ class SettingsPanel(ctk.CTkFrame):
                 if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
                     w.configure(state="disabled" if is_none else "normal")
                 elif isinstance(w, ctk.CTkLabel):
-                    w.configure(text_color=DISABLED_TEXT if is_none else None)
+                    w.configure(
+                        text_color=DISABLED_TEXT if is_none else self._restore_text_color()
+                    )
             except Exception:  # noqa: BLE001 - widget 破棄 / プロパティ未対応で UI を止めない
                 pass
 
@@ -289,12 +296,18 @@ class SettingsPanel(ctk.CTkFrame):
         for w in tts_widgets:
             try:
                 if isinstance(w, ctk.CTkLabel):
-                    w.configure(text_color=DISABLED_TEXT if is_none else None)
+                    w.configure(
+                        text_color=DISABLED_TEXT if is_none else self._restore_text_color()
+                    )
                 elif isinstance(w, ctk.CTkButton):
                     # 設定ボタンは TTS=(なし) のとき意味がない → disable
                     w.configure(state="disabled" if is_none else "normal")
             except Exception:  # noqa: BLE001
                 pass
+
+    def _restore_text_color(self) -> object:
+        """グレーアウト解除時に戻す既定の文字色(構築時に保存した値)。"""
+        return self._default_row_text_color
 
     # ----------------------------------------------------------
     # セクション 2: デバイス
@@ -516,11 +529,12 @@ class SettingsPanel(ctk.CTkFrame):
                         pass
 
         # 吸収が解除されたレイヤ: 行ラベル色を戻し、実ステータスで上書きする
+        # (ctk は text_color=None を受け付けないため、保存済みの既定色で戻す)
         for layer in prev - set(absorbed):
             for w in rows.get(layer, []):
                 if isinstance(w, ctk.CTkLabel):
                     try:
-                        w.configure(text_color=None)
+                        w.configure(text_color=self._restore_text_color())
                     except Exception:  # noqa: BLE001
                         pass
             try:
