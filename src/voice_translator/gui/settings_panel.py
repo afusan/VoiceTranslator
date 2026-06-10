@@ -45,6 +45,7 @@ from .logic.language_choices import (
     format_src_fallback_message,
     format_tgt_fallback_message,
     format_tts_warning_message,
+    restrict_to_tts,
     tts_warning_needed,
 )
 from .logic.palette import DISABLED_TEXT, STATUS_COLOR_DEFAULT, STATUS_COLORS
@@ -611,9 +612,11 @@ class SettingsPanel(ctk.CTkFrame):
         # Translator backend 切替時は出力言語プルダウンを再構築
         if layer == LayerKind.TRANSLATOR:
             self._refresh_target_language_choices(notify_fallback=True)
-        # TTS backend 切替: Output 行のグレーアウト連動 + 言語互換チェック
+        # TTS backend 切替: Output 行のグレーアウト連動 + 出力言語候補の再構築
+        # (候補は 翻訳 ∩ TTS のため、TTS が変わると候補も変わる)+ 言語互換チェック
         if layer == LayerKind.TTS:
             self._apply_tts_none_visual()
+            self._refresh_target_language_choices(notify_fallback=True)
             if internal_value != TTS_NONE_INTERNAL:
                 self._check_tts_output_lang_compatibility(notify_fallback=True)
         # CAPTURE backend 切替: 入力デバイスプルダウンを新 backend の `list_sources` で再列挙
@@ -695,10 +698,13 @@ class SettingsPanel(ctk.CTkFrame):
     # 出力言語プルダウンの連動(Translator backend ごとに対応言語が違う)
     # ============================================================
     def _refresh_target_language_choices(self, *, notify_fallback: bool) -> None:
-        """出力言語プルダウンを「翻訳ロールを実際に担う backend」の対応言語で再構築する。
+        """出力言語プルダウンを「翻訳 ∩ TTS」の対応言語で再構築する。
 
-        通常は Translator backend、翻訳ロールが複合(ASR+翻訳)に吸収されている
-        場合は複合 backend が候補を決める。候補・fallback(ja > en > 先頭)の判断は
+        候補のベースは「翻訳ロールを実際に担う backend」(通常は Translator、
+        複合(ASR+翻訳)に吸収されている場合は複合 backend)の対応言語。
+        TTS が有効(audio モード)なら、さらに TTS の読み上げ可能言語との積(AND)に
+        絞る(TTS の対応言語が不明な backend は絞らない。積が空になる組合せは
+        絞らずに従来の警告に委ねる)。候補・fallback(ja > en > 先頭)の判断は
         `gui/logic/language_choices.py` に委譲。ここは controller への問い合わせ、
         widget への反映、設定の書き戻し、通知バナーの発火、fallback 後の TTS 互換
         チェック連鎖だけを行う。
@@ -706,12 +712,13 @@ class SettingsPanel(ctk.CTkFrame):
         if self._tgt_dropdown is None:
             return
 
+        tts_langs = self._active_tts_languages()
         sel = compute_tgt_selection(
-            self._effective_target_languages(),
+            restrict_to_tts(self._effective_target_languages(), tts_langs),
             current=str(
                 self._controller.get_setting("languages", "tgt", default="ja")
             ),
-            fallback_pool=_TGT_LANG_CHOICES,
+            fallback_pool=restrict_to_tts(_TGT_LANG_CHOICES, tts_langs),
         )
 
         self._tgt_dropdown.configure(values=[format_language(c) for c in sel.codes])
@@ -747,6 +754,27 @@ class SettingsPanel(ctk.CTkFrame):
                 ) or ""
             )
             return list(self._controller.get_supported_target_languages(name))
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _active_tts_languages(self) -> list[str]:
+        """現在有効な TTS の読み上げ可能言語(候補の AND 用の入力収集)。
+
+        TTS なし(text_only)/ backend 不明 / 取得失敗は [] を返し、
+        `restrict_to_tts` 側で「制限しない」と解釈される。
+        """
+        try:
+            tts_name = str(
+                self._controller.get_setting(
+                    "backends", LayerKind.TTS.value, default="",
+                ) or ""
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        if not tts_name or tts_name == TTS_NONE_INTERNAL:
+            return []
+        try:
+            return list(self._controller.get_supported_output_languages(tts_name))
         except Exception:  # noqa: BLE001
             return []
 

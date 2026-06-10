@@ -117,6 +117,7 @@ def stub_tgt_panel():
         "_notify_warning",
         "_effective_target_languages",
         "_tgt_provider_name",
+        "_active_tts_languages",
     )
     shim._tgt_dropdown = MagicMock(name="tgt_dropdown")
     shim._tgt_var = MagicMock(name="tgt_var")
@@ -162,6 +163,54 @@ class TestTgtLanguageWiring:
     def test_dropdown_missing_is_noop(self, stub_tgt_panel) -> None:
         stub_tgt_panel._tgt_dropdown = None
         stub_tgt_panel._refresh_target_language_choices(notify_fallback=True)
+
+    def test_candidates_are_intersection_of_translator_and_tts(
+        self, stub_tgt_panel,
+    ) -> None:
+        """TTS が有効なら候補は 翻訳 ∩ TTS。積に無い現在値は fallback される。"""
+        def _get_setting(*keys, default=None):
+            if keys[:2] == ("backends", "tts"):
+                return "sapi"
+            if keys[:2] == ("languages", "tgt"):
+                return "fr"  # 翻訳は対応するが TTS が読めない言語
+            return default
+
+        stub_tgt_panel._controller.get_setting.side_effect = _get_setting
+        stub_tgt_panel._controller.get_effective_target_languages.return_value = [
+            "en", "ja", "fr",
+        ]
+        stub_tgt_panel._controller.get_supported_output_languages.return_value = [
+            "ja", "en",
+        ]
+
+        stub_tgt_panel._refresh_target_language_choices(notify_fallback=False)
+
+        labels = stub_tgt_panel._tgt_dropdown.configure.call_args.kwargs["values"]
+        assert labels == ["en (English)", "ja (Japanese)"]  # fr は TTS 非対応で除外
+        stub_tgt_panel._controller.set_setting.assert_called_with(
+            "languages", "tgt", "ja"
+        )
+
+    def test_unknown_tts_languages_do_not_restrict(self, stub_tgt_panel) -> None:
+        """TTS の対応言語が不明(空リスト)なら絞らない(誤って候補を削らない)。"""
+        def _get_setting(*keys, default=None):
+            if keys[:2] == ("backends", "tts"):
+                return "some_tts"
+            if keys[:2] == ("languages", "tgt"):
+                return "fr"
+            return default
+
+        stub_tgt_panel._controller.get_setting.side_effect = _get_setting
+        stub_tgt_panel._controller.get_effective_target_languages.return_value = [
+            "en", "ja", "fr",
+        ]
+        stub_tgt_panel._controller.get_supported_output_languages.return_value = []
+
+        stub_tgt_panel._refresh_target_language_choices(notify_fallback=False)
+
+        labels = stub_tgt_panel._tgt_dropdown.configure.call_args.kwargs["values"]
+        assert "fr (French)" in labels
+        stub_tgt_panel._controller.set_setting.assert_not_called()
 
     def test_absorbed_translator_uses_composite_languages(
         self, stub_tgt_panel,
