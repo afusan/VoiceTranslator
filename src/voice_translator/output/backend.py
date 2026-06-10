@@ -12,7 +12,8 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from voice_translator.common.backend_base import BackendBase
-from voice_translator.common.types import BackendCapabilities, OutputDevice
+from voice_translator.common.messages import PayloadKind
+from voice_translator.common.types import BackendCapabilities, LayerKind, OutputDevice
 
 
 class AudioOutputBackend(BackendBase, ABC):
@@ -42,6 +43,22 @@ class AudioOutputBackend(BackendBase, ABC):
     @abstractmethod
     def stop(self) -> None:
         """再生セッションを閉じる。複数回呼ばれても安全。"""
+
+    # ---- パイプライン編成への申告(複合 backend はオーバーライド) ----
+    @classmethod
+    def covers_roles(cls) -> tuple[LayerKind, ...]:
+        """この backend が担うロール(パイプライン順で連続していること)。"""
+        return (LayerKind.OUTPUT,)
+
+    @classmethod
+    def consumes_payload(cls) -> PayloadKind:
+        """入力の payload 形式。"""
+        return PayloadKind.SYNTHESIZED
+
+    @classmethod
+    def produces_payload(cls) -> PayloadKind:
+        """出力の payload 形式。Output は編成の終端なので NONE。"""
+        return PayloadKind.NONE
 
     def capabilities(self) -> BackendCapabilities:
         """このバックエンドのメタ情報。既定は空。"""

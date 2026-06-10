@@ -13,7 +13,8 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from voice_translator.common.backend_base import BackendBase
-from voice_translator.common.types import BackendCapabilities
+from voice_translator.common.messages import PayloadKind
+from voice_translator.common.types import BackendCapabilities, LayerKind
 
 
 class AsrBackend(BackendBase, ABC):
@@ -54,6 +55,22 @@ class AsrBackend(BackendBase, ABC):
         既定 False。自動検出を持つ backend(Whisper 系等)は True を返すこと。
         """
         return False
+
+    # ---- パイプライン編成への申告(複合 backend はオーバーライド) ----
+    @classmethod
+    def covers_roles(cls) -> tuple[LayerKind, ...]:
+        """この backend が担うロール(パイプライン順で連続していること)。"""
+        return (LayerKind.ASR,)
+
+    @classmethod
+    def consumes_payload(cls) -> PayloadKind:
+        """入力の payload 形式。"""
+        return PayloadKind.RAW
+
+    @classmethod
+    def produces_payload(cls) -> PayloadKind:
+        """出力の payload 形式。"""
+        return PayloadKind.TRANSCRIBED
 
     def capabilities(self) -> BackendCapabilities:
         """対応言語等のメタ情報。"""
