@@ -30,7 +30,8 @@ def _make_coord(
 ) -> PipelineCoordinator:
     """テスト用に最小構成の PipelineCoordinator を作る。
 
-    各 backend は MagicMock。`_call_with_retry` の動作だけを確認するため、
+    各 backend は MagicMock(申告 I/F を持たないため、編成上はレイヤ既定の
+    単体 backend とみなされる)。`_call_with_retry` の動作だけを確認するため、
     スレッドは起動しない。バックオフは現実的に短く(0.01s)。
     """
     logger = logging.getLogger("vt_test")
@@ -47,8 +48,6 @@ def _make_coord(
         retry_base_sec=retry_base_sec,
         retry_max_sec=retry_max_sec,
     )
-    # stop_event は __init__ では未初期化なので、ここで足す
-    coord._stop_event = threading.Event()
     return coord
 
 

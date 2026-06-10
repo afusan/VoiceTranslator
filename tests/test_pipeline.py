@@ -15,7 +15,9 @@ from voice_translator.common.error_handler import ErrorHandler
 from voice_translator.common.errors import FatalError, SkipError
 from voice_translator.common.ledger import UtteranceLedger
 from voice_translator.common.logger import TextLogger
+from voice_translator.common.messages import PayloadKind
 from voice_translator.common.pipeline import PipelineCoordinator
+from voice_translator.common.pipeline_plan import PlanError
 from voice_translator.common.sequence import SequenceGenerator
 from voice_translator.common.types import CaptureSource, OutputDevice, PcmChunk
 from voice_translator.output.backend import AudioOutputBackend
@@ -1201,3 +1203,36 @@ class TestPipelineErrorContext:
         assert target
         for r in target:
             assert "seq=" not in r.message  # 発行前なので付かない
+
+
+# ============================================================
+# 編成表駆動の組み立て
+# ============================================================
+class TestPlanDrivenAssembly:
+    """編成表(PipelinePlan)からの組み立てと構築時の起動拒否。"""
+
+    def test_standard_layout_exposes_plan(self) -> None:
+        coord, _ = _build()
+        labels = [s.label for s in coord.plan.stages]
+        assert labels == ["Input", "ASR", "Translator", "TTS", "Output"]
+        assert coord.plan.output_mode == "audio"
+        assert coord.plan.absorbed == ()
+
+    def test_mismatched_declaration_rejected_at_build(self) -> None:
+        """隣接 payload 型が合わない申告は構築時に PlanError(起動拒否)。"""
+
+        class MisdeclaredTts(FakeTts):
+            @classmethod
+            def consumes_payload(cls) -> PayloadKind:
+                return PayloadKind.TRANSCRIBED
+
+        with pytest.raises(PlanError, match="一致しません"):
+            PipelineCoordinator(
+                capture=FakeCapture([]),
+                vad=FakeVad(every_n_chunks=1),
+                asr=FakeAsr(),
+                translator=FakeTranslator(),
+                tts=MisdeclaredTts(),
+                output=FakeOutput(),
+                error_handler=ErrorHandler(),
+            )

@@ -54,6 +54,13 @@ from .logger import TextLogger, TranslationLogger
 from .notification_throttle import NotificationThrottle
 from .process_time_logger import ProcessTimeLogger
 from .pipeline import PipelineCoordinator
+from .pipeline_plan import (
+    DEFAULT_DECLARATIONS,
+    PipelinePlan,
+    RoleDeclaration,
+    build_pipeline_plan,
+    declaration_of,
+)
 from .sequence import SequenceGenerator
 from .stage_dump import NullStageDumpWriter, StageDumpWriter
 from .types import (
@@ -611,17 +618,35 @@ class AppController:
             return "text_only"
         return "audio"
 
-    def _active_layers(self) -> list[LayerKind]:
-        """現在の出力モードでロード/起動対象となるレイヤ一覧を返す。
+    def _current_plan(self) -> PipelinePlan:
+        """現在の設定(backends.*)から編成表を組む(backend 未ロードでも可)。
 
-        text_only モードでは TTS / Output を除外する。
+        申告は registry に登録された backend クラスの classmethod から取る。
+        `backend_cls` 未登録 / 申告 I/F を持たないクラスはレイヤ既定(単体ロール)
+        とみなす。組めない設定は PlanError(start 時の起動拒否と同じ例外)。
         """
-        if self.output_mode == "text_only":
-            return [
-                layer for layer in LayerKind
-                if layer not in (LayerKind.TTS, LayerKind.OUTPUT)
-            ]
-        return list(LayerKind)
+        text_only = self.output_mode == "text_only"
+        decls: dict[LayerKind, RoleDeclaration] = {}
+        for layer in LayerKind:
+            if text_only and layer in (LayerKind.TTS, LayerKind.OUTPUT):
+                continue
+            name = self._config.get("backends", layer.value, default=None)
+            cls = (
+                self._registry.get_backend_class(layer, str(name)) if name else None
+            )
+            if cls is not None and callable(getattr(cls, "covers_roles", None)):
+                decls[layer] = declaration_of(cls)
+            else:
+                decls[layer] = DEFAULT_DECLARATIONS[layer]
+        return build_pipeline_plan(decls, text_only=text_only)
+
+    def _active_layers(self) -> list[LayerKind]:
+        """ロード/起動/認証 gate の対象レイヤ(= 編成表の lead)を返す。
+
+        text_only モードの TTS / Output、複合 backend に吸収されたロールは含まれない
+        (どちらも「編成表に載らない」の一例)。
+        """
+        return list(self._current_plan().lead_layers)
 
     def load_models(self) -> None:
         """全レイヤのバックエンドを生成しキャッシュする(冪等)。
@@ -1066,7 +1091,9 @@ class AppController:
                 capture=self._backends[LayerKind.CAPTURE],
                 vad=self._backends[LayerKind.VAD],
                 asr=self._backends[LayerKind.ASR],
-                translator=self._backends[LayerKind.TRANSLATOR],
+                # 複合 backend に吸収されたレイヤはロードされない(.get → None)。
+                # 編成の整合は Coordinator 構築時の plan 検証が保証する。
+                translator=self._backends.get(LayerKind.TRANSLATOR),
                 tts=tts_backend,
                 output=output_backend,
                 error_handler=error_handler,
