@@ -115,6 +115,60 @@ class TestSkippedVisual:
         assert shim._status_overridden == {LayerKind.TTS, LayerKind.OUTPUT}
 
 
+class TestTtsNoneVisualScope:
+    """_apply_tts_none_visual はステータスラベルに触らない(状態色を消さない)。"""
+
+    def _shim_with_rows(self, *, tts_setting: str):
+        from voice_translator.gui.settings_panel import SettingsPanel
+
+        shim = MagicMock(spec=SettingsPanel)
+        _bind(shim, "_apply_tts_none_visual", "_restore_text_color")
+        shim._controller = MagicMock(name="controller")
+        shim._controller.get_setting.return_value = tts_setting
+        shim._default_row_text_color = _DEFAULT_COLOR
+
+        out_row_label = MagicMock(spec=ctk.CTkLabel, name="out_row_label")
+        out_status = MagicMock(spec=ctk.CTkLabel, name="out_status")
+        out_option = MagicMock(spec=ctk.CTkOptionMenu, name="out_option")
+        tts_row_label = MagicMock(spec=ctk.CTkLabel, name="tts_row_label")
+        tts_status = MagicMock(spec=ctk.CTkLabel, name="tts_status")
+        shim._backend_rows = {
+            LayerKind.OUTPUT: [out_row_label, out_option, out_status],
+            LayerKind.TTS: [tts_row_label, tts_status],
+        }
+        shim._status_labels = {
+            LayerKind.OUTPUT: out_status, LayerKind.TTS: tts_status,
+        }
+        return shim, out_row_label, out_status, out_option, tts_status
+
+    def test_status_labels_untouched_on_restore(self) -> None:
+        """TTS=実 backend のとき: 行ラベル色と widget 状態は戻すが、ステータス欄は触らない
+        (直前に _apply_status が塗った Loaded(緑)等の状態色を消さないため)。"""
+        shim, out_row_label, out_status, out_option, tts_status = (
+            self._shim_with_rows(tts_setting="sapi")
+        )
+
+        shim._apply_tts_none_visual()
+
+        out_status.configure.assert_not_called()
+        tts_status.configure.assert_not_called()
+        out_row_label.configure.assert_called_with(text_color=_DEFAULT_COLOR)
+        out_option.configure.assert_called_with(state="normal")
+
+    def test_status_labels_untouched_on_none(self) -> None:
+        """TTS=(なし) のときも同様(「(なし)」表示は編成表示側の管轄)。"""
+        shim, out_row_label, out_status, out_option, tts_status = (
+            self._shim_with_rows(tts_setting="none")
+        )
+
+        shim._apply_tts_none_visual()
+
+        out_status.configure.assert_not_called()
+        tts_status.configure.assert_not_called()
+        out_row_label.configure.assert_called_with(text_color=DISABLED_TEXT)
+        out_option.configure.assert_called_with(state="disabled")
+
+
 class TestRestoreVisual:
     def test_unabsorbed_layer_restores_default_color_not_none(self, stub_panel) -> None:
         """復帰時は保存済み既定色で戻す(None を渡すと ctk が拒否して残留する)。"""

@@ -276,18 +276,23 @@ class SettingsPanel(ctk.CTkFrame):
         TTS の StringVar 自体は維持(ユーザが「(なし)」を選んだら表示は「(なし)」のまま)。
         Output 行は完全に disable して触れないようにする。TTS 自身は「(なし) を解除する」
         ためにプルダウンだけ enable のままにする。
+
+        **ステータスラベルには触らない**: ステータス欄のテキスト・色は編成表示
+        (`_apply_absorbed_visuals` の「(なし)」上書き)と `_apply_status`(実状態の
+        色付き再描画)の管轄。ここで色を初期化すると Loaded(緑)等の状態色を消してしまう。
         """
         is_none = self._controller.get_setting(
             "backends", LayerKind.TTS.value, default="",
         ) == TTS_NONE_INTERNAL
         rows = getattr(self, "_backend_rows", {})
 
-        # Output 行: TTS=(なし) なら全要素 disable / グレーアウト
+        # Output 行: TTS=(なし) なら全要素 disable / グレーアウト(ステータス欄を除く)
+        out_status = self._status_labels.get(LayerKind.OUTPUT)
         for w in rows.get(LayerKind.OUTPUT, []):
             try:
                 if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
                     w.configure(state="disabled" if is_none else "normal")
-                elif isinstance(w, ctk.CTkLabel):
+                elif isinstance(w, ctk.CTkLabel) and w is not out_status:
                     w.configure(
                         text_color=DISABLED_TEXT if is_none else self._restore_text_color()
                     )
@@ -295,10 +300,10 @@ class SettingsPanel(ctk.CTkFrame):
                 pass
 
         # TTS 行: ラベル行頭の色だけグレーアウト(プルダウン自体は触れる必要があるので enable)
-        tts_widgets = rows.get(LayerKind.TTS, [])
-        for w in tts_widgets:
+        tts_status = self._status_labels.get(LayerKind.TTS)
+        for w in rows.get(LayerKind.TTS, []):
             try:
-                if isinstance(w, ctk.CTkLabel):
+                if isinstance(w, ctk.CTkLabel) and w is not tts_status:
                     w.configure(
                         text_color=DISABLED_TEXT if is_none else self._restore_text_color()
                     )
