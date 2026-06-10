@@ -41,15 +41,6 @@
   .arrow {
     color: #2563eb; font-weight: bold; font-size: 1.3em;
   }
-  .ctrl-band {
-    margin: 1.2em auto 0; background: #ecfeff; border: 2px dashed #0e7490;
-    border-radius: 8px; padding: 6px 12px; text-align: center; max-width: 80%;
-    color: #155e75; font-weight: 600;
-  }
-  .cross-row {
-    display: flex; gap: 1em; justify-content: center; margin-top: 1.8em;
-    flex-wrap: wrap;
-  }
   .cross {
     background: #fae8ff; border: 2px solid #a21caf; border-radius: 8px;
     padding: 8px 14px; min-width: 130px; text-align: center;
@@ -59,6 +50,30 @@
   .cross.gui { background:#fef3c7; border-color:#d97706; }
   .cross.gui .name { color: #92400e; }
   .cross.gui .sub { color: #78350f; }
+  .cross.ctrl { background:#cffafe; border-color:#0e7490; }
+  .cross.ctrl .name { color: #155e75; }
+  .cross.ctrl .sub { color: #164e63; }
+  .cross.exec { background:#dbeafe; border-color:#1d4ed8; }
+  .cross.exec .name { color: #1e3a8a; }
+  .cross.exec .sub { color: #1e40af; }
+
+  /* 役割グループの帯(レイヤ図) */
+  .layer-band {
+    border: 2px solid #94a3b8; border-radius: 10px;
+    padding: 10px 14px; margin: 0 auto; width: 96%;
+    box-sizing: border-box;
+  }
+  .layer-band .band-label { font-weight: 700; font-size: 0.88em; color: #334155; margin-bottom: 8px; }
+  .layer-band .boxes { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .layer-band.gui-band  { background:#fffbeb; border-color:#d97706; }
+  .layer-band.gui-band .band-label { color:#92400e; }
+  .layer-band.ctrl2-band { background:#ecfeff; border-color:#0e7490; }
+  .layer-band.ctrl2-band .band-label { color:#155e75; }
+  .layer-band.exec-band { background:#eff6ff; border-color:#1d4ed8; }
+  .layer-band.exec-band .band-label { color:#1e3a8a; }
+  .layer-band.util-band { background:#faf5ff; border-color:#a21caf; }
+  .layer-band.util-band .band-label { color:#6b21a8; }
+  .flowrow { text-align: center; color: #475569; font-size: 0.85em; margin: 6px 0; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -73,44 +88,80 @@
 <h2>1. 全体レイヤ図</h2>
 
 <p>
-本アプリは「音声を取り込み → 翻訳して → 別デバイスに再生する」までを、
-役割ごとに分割した6つのレイヤで構成する。各レイヤは抽象I/Fと1つの具象実装で構成し、後から差し替え可能とする(MVPでは各1実装のみ)。
+本アプリは「音声を取り込み → 翻訳して → 別デバイスに再生する」処理を、役割ごとに分割した
+<strong>6 つのパイプラインレイヤ</strong>(抽象 I/F + 差し替え可能な具象実装)で行う。
+その周囲は <strong>GUI 層 → アプリ制御層(中間層) → パイプライン実行層</strong> の 3 つの帯と、
+どの層からも使う<strong>ユーティリティ</strong>で構成する。上の帯は下の帯だけに依存し、
+逆方向はイベント購読(Subscription)で表現する。
 </p>
 
-<div class="pipeline">
-  <div class="row">
-    <div class="stage"><div class="name">音声取得</div><div class="sub">AudioCapture</div></div>
-    <div class="arrow">→</div>
-    <div class="stage"><div class="name">発話区切り</div><div class="sub">VAD</div></div>
-    <div class="arrow">→</div>
-    <div class="stage"><div class="name">書き起こし</div><div class="sub">ASR</div></div>
-    <div class="arrow">→</div>
-    <div class="stage"><div class="name">翻訳</div><div class="sub">Translator</div></div>
-    <div class="arrow">→</div>
-    <div class="stage"><div class="name">音声合成</div><div class="sub">TTS</div></div>
-    <div class="arrow">→</div>
-    <div class="stage"><div class="name">音声出力</div><div class="sub">AudioOutput</div></div>
+<div class="pipeline" style="gap: 0;">
+  <div class="layer-band gui-band">
+    <div class="band-label">GUI 層(操作・表示)</div>
+    <div class="boxes">
+      <div class="cross gui"><div class="name">View(Panel / Dialog)</div><div class="sub">widget 組立 + 入力収集 + 計算結果を塗る</div></div>
+      <div class="cross gui"><div class="name">gui/logic</div><div class="sub">「状態 → 表示すべき値」の純関数(§9)</div></div>
+    </div>
   </div>
 
-  <div class="cross-row">
-    <div class="cross"><div class="name">AppController</div><div class="sub">GUI と内部の仲介</div></div>
-    <div class="cross"><div class="name">PipelineCoordinator</div><div class="sub">各レイヤの起動/停止と連携</div></div>
-    <div class="cross"><div class="name">UtteranceLedger</div><div class="sub">発話メタ情報の中央管理</div></div>
-    <div class="cross"><div class="name">SequenceGenerator</div><div class="sub">発話への一意IDの発行</div></div>
-    <div class="cross"><div class="name">ConfigStore</div><div class="sub">設定の永続化</div></div>
-    <div class="cross"><div class="name">Logger / TextLogger</div><div class="sub">各種ログの出力</div></div>
-    <div class="cross"><div class="name">ErrorHandler</div><div class="sub">例外の重大度別分類</div></div>
-    <div class="cross"><div class="name">process_enumerator</div><div class="sub">WASAPI セッション列挙 + 試聴 peak(段階 3)</div></div>
-    <div class="cross gui"><div class="name">GUI</div><div class="sub">設定・動作操作・状態表示</div></div>
+  <div class="flowrow">↓ 操作 = メソッド呼び出し(set_setting / ロード / 起動・停止 / メタ問合せ)&nbsp;&nbsp;&nbsp;↑ 通知 = イベント購読(add_&lt;event&gt;_listener → Subscription)</div>
+
+  <div class="layer-band ctrl2-band">
+    <div class="band-label">アプリ制御層(中間層)— GUI とパイプラインの仲介。動き方は §2「アプリ制御層」参照</div>
+    <div class="boxes">
+      <div class="cross ctrl"><div class="name">AppController</div><div class="sub">ランタイム: 設定反映・backend ロード・起動停止 + イベント emit</div></div>
+      <div class="cross ctrl"><div class="name">BackendCatalog</div><div class="sub">backend クラスのメタ問合せ(状態なし)</div></div>
+      <div class="cross ctrl"><div class="name">CredentialsService</div><div class="sub">認証情報の保管・疎通確認・verified 管理</div></div>
+    </div>
+  </div>
+
+  <div class="flowrow">↓ ロード済み backend から組み立て・起動/停止&nbsp;&nbsp;&nbsp;↑ 発話完了・エラーのコールバック</div>
+
+  <div class="layer-band exec-band">
+    <div class="band-label">パイプライン実行層 — 発話を 5 スレッドで流す</div>
+    <div class="boxes">
+      <div class="cross exec"><div class="name">PipelineCoordinator</div><div class="sub">5 スレッドの起動/停止 + キュー連携</div></div>
+      <div class="cross exec"><div class="name">UtteranceLedger</div><div class="sub">発話メタ情報の中央管理</div></div>
+      <div class="cross exec"><div class="name">SequenceGenerator</div><div class="sub">発話への一意 ID の発行</div></div>
+    </div>
+    <div class="row" style="margin-top: 10px;">
+      <div class="stage"><div class="name">音声取得</div><div class="sub">AudioCapture</div></div>
+      <div class="arrow">→</div>
+      <div class="stage"><div class="name">発話区切り</div><div class="sub">VAD</div></div>
+      <div class="arrow">→</div>
+      <div class="stage"><div class="name">書き起こし</div><div class="sub">ASR</div></div>
+      <div class="arrow">→</div>
+      <div class="stage"><div class="name">翻訳</div><div class="sub">Translator</div></div>
+      <div class="arrow">→</div>
+      <div class="stage"><div class="name">音声合成</div><div class="sub">TTS</div></div>
+      <div class="arrow">→</div>
+      <div class="stage"><div class="name">音声出力</div><div class="sub">AudioOutput</div></div>
+    </div>
+  </div>
+
+  <div class="flowrow">— どの層からも利用される —</div>
+
+  <div class="layer-band util-band">
+    <div class="band-label">ユーティリティ(横断)</div>
+    <div class="boxes">
+      <div class="cross"><div class="name">ConfigStore</div><div class="sub">設定の永続化</div></div>
+      <div class="cross"><div class="name">Logger / TextLogger / JsonlLogger</div><div class="sub">各種ログの出力</div></div>
+      <div class="cross"><div class="name">ErrorHandler + NotificationThrottle</div><div class="sub">例外の重大度別分類 + 通知抑制</div></div>
+      <div class="cross"><div class="name">DeviceValidator</div><div class="sub">入出力デバイス分離の保証</div></div>
+      <div class="cross"><div class="name">cache_check</div><div class="sub">モデルキャッシュの軽量判定</div></div>
+      <div class="cross"><div class="name">process_enumerator</div><div class="sub">WASAPI セッション列挙 + 試聴 peak</div></div>
+    </div>
   </div>
 </div>
 
 <p class="small">
-青ブロック: パイプラインの各レイヤ。 紫: 横断機能。 黄: UI。
+青ブロック: パイプラインの各レイヤ(差し替え可能な backend)。帯 = 役割グループ。各グループの詳細は §2。
 </p>
 
 <!-- =================================================== -->
-<h2>2. 各レイヤの役割</h2>
+<h2>2. 各レイヤ・各グループの役割</h2>
+
+<h3>パイプラインの 6 レイヤ(差し替え可能な backend)</h3>
 
 <table>
   <tr><th>レイヤ</th><th>役割</th></tr>
@@ -140,13 +191,72 @@
   </tr>
 </table>
 
-<h3>横断機能</h3>
+<p>
+パイプラインの 6 レイヤ以外のモジュールは、レイヤ図の帯と同じ <strong>4 グループ</strong>に分けて整理する:
+<strong>GUI 層</strong>(操作・表示)/ <strong>アプリ制御層</strong>(GUI とパイプラインの中間層)/
+<strong>パイプライン実行層</strong>(発話を流す)/ <strong>ユーティリティ</strong>(どの層からも使う道具)。
+</p>
+
+<h3>GUI 層(操作・表示)</h3>
 <table>
   <tr><th>機能</th><th>役割</th></tr>
-  <tr><td><strong>AppController</strong></td><td>GUI と内部モジュールの仲介。バックエンド初期化、モデル状態の発信、設定操作の窓口、ドロップ通知の受け口を担う。</td></tr>
-  <tr><td><strong>PipelineCoordinator</strong></td><td>各レイヤの起動・停止と、レイヤ間キューの管理を担う。</td></tr>
+  <tr><td><strong>View(Panel / Dialog)</strong></td><td>widget の組立と「入力収集 → logic 呼び出し → 計算結果を widget に塗る」の配線。設定変更・動作開始停止・直近状態・モデルステータスを可視化する。</td></tr>
+  <tr><td><strong>gui/logic</strong></td><td>「現在の状態 → UI に表示すべき値」を計算する純関数集(ボタン文言・言語候補・整形・色 等)。内部構成と規約は §9 を参照。</td></tr>
+</table>
+
+<h3>アプリ制御層(中間層)</h3>
+<p>
+GUI とパイプラインの間に立つ仲介層。<strong>GUI は backend や Coordinator を直接知らず、
+この層だけを相手にする</strong>(結合を断つことで、UI の差し替え・GUI なしテスト・
+スクリプト駆動を可能にする)。
+</p>
+<table>
+  <tr><th>機能</th><th>役割</th></tr>
+  <tr><td><strong>AppController</strong></td><td><strong>ランタイム</strong>: 設定の反映・backend のロード/キャッシュ(<code>_backends</code> に常駐)・パイプラインの起動/停止。UI への通知はすべて <code>add_&lt;event&gt;_listener</code>(Subscription)の emit で行う。</td></tr>
+  <tr><td><strong>BackendCatalog</strong></td><td>backend クラスの<strong>メタ情報問合せ口(状態なし)</strong>。capture_kind / 対応言語 / credential_spec / capability hint を<strong>インスタンス化せずに</strong>引く(プルダウン構築や設定ダイアログで重いモデルロードを発生させないため)。未登録・例外時は安全側既定値に縮退。<code>AppController.catalog</code> で公開。</td></tr>
+  <tr><td><strong>CredentialsService</strong></td><td>クラウド backend の認証情報の保管(keyring / 平文 fallback)・疎通確認(<code>verify_and_save</code>)・verified フラグ管理。backend キャッシュには触らない(認証成功後の reload はランタイム側)。<code>AppController.credentials</code> で公開。</td></tr>
+</table>
+
+<h4>中間層の動き方(3 つの流れ)</h4>
+<ol>
+  <li><strong>下り(操作)</strong> — GUI のイベントハンドラが AppController のメソッドを呼ぶ。
+    設定は <code>set_setting</code>、ロードは <code>load_models_async</code>、起動停止は
+    <code>start_pipeline_async / stop_pipeline</code>。プルダウン構築などの軽い問い合わせは
+    <code>catalog</code>(モデルをロードしない)、API キーの保存・検証は <code>credentials</code> を使う。</li>
+  <li><strong>上り(通知)</strong> — 内部で起きたことはすべてイベントとして emit され、GUI は購読で受ける。
+    イベント種は 7 つ: <code>status</code>(レイヤ状態変化)/ <code>text_ready</code>(翻訳テキスト確定)/
+    <code>utterance_done</code>(発話完了)/ <code>fatal</code> / <code>warn</code>(エラー)/
+    <code>settings</code>(設定変更)/ <code>restart</code>(自動再起動のライフサイクル)。
+    listener は emit 元スレッドで呼ばれるため、UI 側は <code>after(0, ...)</code> でメインスレッドに戻して反映する。
+    <strong>Panel 同士はこのイベントを介してのみ同期し、互いを直接参照しない</strong>。</li>
+  <li><strong>反応系(設定が書かれたら自分で動く)</strong> — <code>set_setting</code> は書き込むだけでなく、
+    キーに応じて AppController 自身が反応する。GUI 側ハンドラは「書くだけ」でよい:
+    <table>
+      <tr><th>書かれたキー</th><th>AppController の反応</th></tr>
+      <tr><td><code>backends.&lt;layer&gt;</code></td><td>該当レイヤの backend を破棄(INIT 通知)→ 別スレッドで新 backend を再ロード</td></tr>
+      <tr><td><code>languages.src / tgt</code></td><td>動作中なら Coordinator に即反映(次の発話から新言語)</td></tr>
+      <tr><td><code>devices.input / output</code></td><td>動作中なら自動 restart(stop → start)+ restart イベントでバナー表示</td></tr>
+    </table>
+  </li>
+</ol>
+<p class="small">
+具体例 ─ ユーザが ASR backend を切り替えたとき:
+View が <code>set_setting("backends", "asr", 新名)</code> を書く →(反応系)旧 backend 破棄 + 再ロード開始 →
+(上り)status イベント <code>INIT → LOADING → LOADED</code> が両 Panel に届く → 各 Panel が
+gui/logic で表示値を計算して塗る。ControlPanel が SettingsPanel に教える、といった横の連絡は存在しない。
+</p>
+
+<h3>パイプライン実行層</h3>
+<table>
+  <tr><th>機能</th><th>役割</th></tr>
+  <tr><td><strong>PipelineCoordinator</strong></td><td>各レイヤの起動・停止と、レイヤ間キューの管理を担う(5 スレッド構成は §3)。</td></tr>
   <tr><td><strong>UtteranceLedger</strong></td><td>発話ごとのメタ情報(タイミング・言語・テキスト・状態)を中央で集約する。最終段で取り出して履歴ログに書く。スレッドセーフ。</td></tr>
   <tr><td><strong>SequenceGenerator</strong></td><td>発話ごとに一意の通し番号を発行する。各ログにこの番号が載り、レコード間の対応を取れる。</td></tr>
+</table>
+
+<h3>ユーティリティ(横断)</h3>
+<table>
+  <tr><th>機能</th><th>役割</th></tr>
   <tr><td><strong>ConfigStore</strong></td><td>選択中のバックエンド、デバイス、言語ペア、ログ出力先などの設定値を YAML で永続化する。</td></tr>
   <tr><td><strong>Logger</strong></td><td>アプリ全般のログを stdout とファイルに出力する。</td></tr>
   <tr><td><strong>TextLogger</strong></td><td>翻訳前 / 翻訳後 テキストの個別ファイル追記。ON/OFF は src/tgt 個別に切り替え可能。</td></tr>
@@ -155,8 +265,7 @@
   <tr><td><strong>NotificationThrottle</strong></td><td>UI 通知の集約・抑制。<code>(stage, 例外型)</code> をキーに時間窓で rate limit し、抑制された件数を次の通知に乗せる。ログは抑制しない。</td></tr>
   <tr><td><strong>DeviceValidator</strong></td><td>入力デバイスと出力デバイスが同一でないことを起動時に保証する。フィードバック防止のため。</td></tr>
   <tr><td><strong>cache_check</strong></td><td>各バックエンドのモデルがローカルキャッシュにあるかを軽量に判定する。GUI の初期状態表示に使う。</td></tr>
-  <tr><td><strong>process_enumerator</strong></td><td>Windows WASAPI AudioSession の列挙とプロセス単位 peak メータ供給のヘルパー(段階 3)。ProcTap backend と「プロセス選択ダイアログ」が共有して使う。永続 COM ワーカースレッド <code>_PeakWorker</code> を内部に 1 つだけ持ち、列挙(同期)+ 試聴 peak の 5fps 内部 poll(<code>latest_peak()</code> を atomic 保持)を 1 つのスレッドで処理する。GUI スレッドと COM のスレッドモード競合(STA / MTA)を回避するための隔離層。</td></tr>
-  <tr><td><strong>GUI</strong></td><td>設定変更・動作開始停止・直近状態・モデルステータスを可視化する。</td></tr>
+  <tr><td><strong>process_enumerator</strong></td><td>Windows WASAPI AudioSession の列挙とプロセス単位 peak メータ供給のヘルパー。ProcTap backend と「プロセス選択ダイアログ」が共有して使う。永続 COM ワーカースレッド <code>_PeakWorker</code> を内部に 1 つだけ持ち、列挙(同期)+ 試聴 peak の 5fps 内部 poll(<code>latest_peak()</code> を atomic 保持)を 1 つのスレッドで処理する。GUI スレッドと COM のスレッドモード競合(STA / MTA)を回避するための隔離層。</td></tr>
 </table>
 
 <!-- =================================================== -->
@@ -174,9 +283,14 @@
     <td>tkinter mainloop / MainWindow</td>
   </tr>
   <tr>
-    <td><strong>Loader</strong></td>
-    <td>各レイヤのバックエンドを順次初期化する。完了/失敗を UI に通知する。1回限り起動。</td>
-    <td>AppController._loader_body</td>
+    <td><strong>Loader</strong>(vt_loader / vt_auto_loader / vt_reload_*)</td>
+    <td>バックエンドの初期化を UI から切り離す。起動時の auto_load、Start 押下時の未ロード分一括ロード、backend 切替時の単レイヤ再ロードで都度起動。完了/失敗は status イベントで UI に届く。</td>
+    <td>AppController.load_models_async / load_auto_load_layers_async / start_pipeline_async / _safe_load_layer</td>
+  </tr>
+  <tr>
+    <td><strong>vt_restart</strong>(任意)</td>
+    <td>動作中デバイス変更の自動 restart(stop → start を直列実行)。ライフサイクルは restart イベントで UI に届く。多重起動は拒否。</td>
+    <td>AppController.restart_pipeline_async</td>
   </tr>
   <tr>
     <td><strong>Input</strong></td>
@@ -205,7 +319,7 @@
   </tr>
   <tr>
     <td><strong>_PeakWorker</strong>(任意)</td>
-    <td>プロセス選択ダイアログの試聴メータ専用の常駐 COM スレッド(段階 3)。最初の利用時に起動し、プロセス終了まで 1 個常駐。試聴中は内部で <strong>5fps poll</strong> し peak を atomic 保持(GUI スレッドはそれを atomic 読みするだけ)。本番パイプラインと完全独立で WASAPI ストリームは開かない。</td>
+    <td>プロセス選択ダイアログの試聴メータ専用の常駐 COM スレッド。最初の利用時に起動し、プロセス終了まで 1 個常駐。試聴中は内部で <strong>5fps poll</strong> し peak を atomic 保持(GUI スレッドはそれを atomic 読みするだけ)。本番パイプラインと完全独立で WASAPI ストリームは開かない。</td>
     <td>capture.process_enumerator._PeakWorker</td>
   </tr>
 </table>
@@ -376,6 +490,58 @@ translations.jsonl:
   <li><strong>シーケンスID</strong>: 全発話に一意IDを発行し、すべてのログに付与してレコード間追跡を可能にする。</li>
   <li><strong>停止/再開のクリーンさ</strong>: stop_event ベースの協調停止、再start時にキュー + ledger を drain。</li>
 </ul>
+
+<!-- =================================================== -->
+<h2>9. GUI 内部構成と UI 実装規約</h2>
+
+<p>
+UI まわりの肥大化(判断ロジックの widget 同居・通知経路の乱立・AppController への機能集中)を
+防ぐための構成。<strong>新しい UI 機能はこの構成に従って置き場を決める</strong>。
+</p>
+
+<h3>9-1. 役割の 3 分割</h3>
+<table>
+  <tr><th>置き場</th><th>役割</th><th>書いてよいもの / 禁止</th></tr>
+  <tr>
+    <td><strong>View</strong><br><code>gui/*.py</code>(Panel / Dialog)</td>
+    <td>widget の組立と「入力収集 → logic 呼び出し → 計算結果を widget に塗る」の配線</td>
+    <td>イベントハンドラ・<code>after(0)</code> marshalling・controller への問い合わせ(失敗時の縮退含む)は OK。<strong>条件分岐による表示の判断・文言の組み立ては書かない</strong>(logic へ)</td>
+  </tr>
+  <tr>
+    <td><strong>判断</strong><br><code>gui/logic/*.py</code></td>
+    <td>「現在の状態 → UI に表示すべき値」の計算(ボタン文言/有効無効、言語候補と fallback、表示変換、ステータス整形、バナー文言、色)</td>
+    <td><strong>状態を持たない純関数のみ</strong>。widget / AppController / ConfigStore / customtkinter に依存しない(依存は common の純粋モジュールと標準ライブラリ)。GUI 不要の small テストで全分岐を検証する。表示文言は固定文字列テスト(集約テキストは golden)で守る</td>
+  </tr>
+  <tr>
+    <td><strong>ランタイム</strong><br><code>common/app_controller.py</code></td>
+    <td>設定の反映・backend ロード/キャッシュ・パイプライン起動/停止 + イベント emit</td>
+    <td>メタ問合せは <code>BackendCatalog</code>、認証は <code>CredentialsService</code>、表示用整形は <code>gui/logic</code> へ。<strong>AppController 本体にこれらを足さない</strong></td>
+  </tr>
+</table>
+
+<h3>9-2. 通知の規約(1 系統)</h3>
+<ul>
+  <li>UI への通知はすべて <code>AppController.add_&lt;event&gt;_listener(callback) → Subscription</code>。
+    イベント種: <code>status / text_ready / utterance_done / fatal / warn / settings / restart</code>。</li>
+  <li>listener は emit 元スレッドで呼ばれる。UI 側は必ず <code>widget.after(0, ...)</code> でメインスレッドへ戻す。</li>
+  <li><strong>Panel 同士は互いを参照しない</strong>(逆参照の後注入・転送・直接メソッド呼び出しの禁止)。
+    Panel 間で同期が必要になったら、それは AppController の状態変化のはず — 既存イベントを購読するか、イベント種を追加する。</li>
+  <li>「実行条件が変わったら反応する」は <code>set_setting</code> の反応系に置く(backends → evict+再ロード、
+    languages → 動作中反映、devices → 動作中 restart)。UI 側ハンドラに反応ロジックを書かない。</li>
+</ul>
+
+<h3>9-3. 肥大化を防ぐチェック(新機能を入れる前に)</h3>
+<ul>
+  <li>新しい「モード」「gate」「表示分岐」を入れるとき: 判断関数を <code>gui/logic</code> に 1 つ追加し、View は塗りの 1 行だけになっているか。</li>
+  <li>AppController にメソッドを足そうとしたとき: それはメタ問合せ(→ catalog)/ 認証(→ credentials)/ 整形(→ gui/logic)ではないか。</li>
+  <li>「モックが来ても落ちないように」の <code>try/except Exception</code> を本番コードに足そうとしたとき: それはテストの書き方の問題(logic 直テスト + 配線 smoke にする)。</li>
+  <li>poll や後注入で「とりあえず同期」しようとしたとき: イベント購読で表現できないか。</li>
+</ul>
+
+<p class="small">
+経緯と判断の記録: <code>docs/design/refactor-ui-3move/</code>(Roadmap / behavioral-contract、マージ後は done/ 配下)。
+旧 MVC 案・MVVM 案との比較検討は同フォルダの Roadmap §6 を参照。
+</p>
 
 <p class="small">
 詳細(クラス名/メソッド/バックエンド一覧/GUIクラス階層 等)は <a href="Class.md">Class.md</a> を参照。

@@ -145,7 +145,7 @@
 | # | ふるまい | 関連ファイル | 備考 |
 |---|---|---|---|
 | 10.1 | 設定変更は ConfigStore に即時書き込み、ファイル保存は「設定を保存」ボタンで明示的に行う | `config_store.py:save` | **現状維持**。auto-persist 化(保存ボタン撤去)は pendList 起票(2026-06-10)で保留 |
-| 10.2 | 「設定を再読込」ボタンで外部編集の取り込み(全 backend キャッシュ破棄 + INIT に戻る) | `app_controller.py:load_settings` | 維持 |
+| 10.2 | 「設定を再読込」ボタンで外部編集の取り込み(全 backend キャッシュ破棄 + INIT に戻る)。❌ 追加制約(2026-06-10 ドッグフーディング): **動作中 / ロード中は実行を拒否**し警告バナーを出す | `app_controller.py:load_settings` + `settings_panel.py:_reload_blocked` | 差分 evict 化は pendList 起票 |
 | 10.3 | 「デバイス再列挙」ボタンで入出力プルダウンを再構築 | `settings_panel.py:_populate_devices_into_dropdowns` | 維持 |
 | 10.4 | PROCESS kind capture の `devices.input` は **save しない**(セッション間で持ち越さない) | `app_controller.py:_strip_volatile_inputs_before_save` | 維持 |
 | 10.5 | アプリ起動時、`auto_load=True` 指定の backend だけ先行ロード(その他は INIT のまま) | `main_window.py` + `app_controller.py:load_auto_load_layers_async` | 維持 |
@@ -236,3 +236,13 @@ P2 で新たに自動テスト化(✅)された項目:
 
 🧪 手動チェック(§3.11 の実機確認: 動作中にデバイスを切り替えて「再開中…」→ 復帰)は
 **未実施 — ユーザのドッグフーディングでの確認待ち**。
+
+### P3: controller-slim(2026-06-10)
+
+実装の置き場が変わっただけでふるまい変更ゼロの Phase。確認記録:
+
+| 項目 | 確認 |
+|---|---|
+| §2(モデルステータス表示)/ §8(認証フロー)全章 | ✅ 既存テストが**無修正で全 pass**(互換窓経由 = 委譲の正しさの検証)。特に `tests/test_credential_flow.py`(認証契約 22 件)無修正 pass |
+| 縮退規約(未登録 / 例外 → 安全側既定値) | ✅ `tests/test_backend_catalog.py` / `tests/test_credentials_service.py`(実体直叩きで移植) |
+| §8.3(認証成功 → MISSING_CREDENTIALS なら reload) | ✅ Phase F1 後処理はランタイム側に残置。`tests/test_app_controller.py` の既存テスト無修正 pass |

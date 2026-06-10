@@ -4,6 +4,24 @@
 
 ---
 
+## [2026-06-10] 「設定を再読込」のスマート化(差分 evict + セッション内 PID 維持)
+- **内容**: `AppController.load_settings()` は現在、ファイル側で backend が変わっている可能性に
+  備えて**全 backend キャッシュを無条件 evict** する(全レイヤ INIT に戻る)。これを
+  「再読込前後で `backends.<layer>` と選択 backend の `backends_config.<name>.*` が変わらない
+  レイヤは evict しない」差分方式にする。あわせて、capture backend が変わらない場合は
+  セッション内の PID 選択(`devices.input`)も維持できると望ましい(A-7 の揮発正規化は
+  ファイル保存・起動時のみに限定する形)。
+- **背景**: ドッグフーディング(2026-06-10)で「再読込のたびにロード済みモデルが破棄され、
+  PID 選択も消える」点が指摘された。動作中の再読込は同日ガードを入れて拒否済み
+  (settings_panel `_reload_blocked`)。停止中の再読込での体験改善が本件。
+- **対応の見送り理由**: 差分判定は backends 名だけでなく backends_config(モデルサイズ等)・
+  認証情報の変化とも整合させる必要があり中規模。再読込の頻度は低く、ロードし直しで
+  実害は時間コストのみ(ユーザ合意: 「そこまで困らないので pend 行きでもよい」)。
+- **再検討トリガ**: 再読込を多用する運用が出てきたとき / 設定ファイルの手編集ワークフローを
+  正式サポートするとき / refactor-ui-3move P4 に着手するとき(同時に扱うと安い)。
+
+---
+
 ## [2026-06-10] 「設定を保存」ボタンの auto-persist 化(停止 MVVM 計画からの引き継ぎ)
 - **内容**: 設定変更を debounce 付きで自動保存し、「設定を保存」ボタンを撤去する UX 変更。
 - **背景**: 停止した MVVM 再構築計画(behavioral-contract 旧 §13.1)で予定されていた項目。
@@ -441,7 +459,17 @@
 
 ---
 
-## [2026-05-29] AppController の責務分離(リファクタ予約)
+## [✅完了 2026-06-10] AppController の責務分離(リファクタ予約)
+- **解決**: `refactor-ui-3move`(P1〜P3)で対応。ただし採用形は当時の方針案と異なる:
+  - UI 判断ロジックは `gui/logic/` の純関数へ(P1)、通知は `add_<event>_listener`
+    (Subscription)1 本に統一(P2)、メタ問合せ → `BackendCatalog` / 認証 →
+    `CredentialsService` に分離(P3)
+  - `ModelLoaderService` / `StatusBroadcaster` / `LatencyBuffer` は**不採用**
+    (ロード・起動停止は `_load_lock` / `_backends` を共有しており、切ると配線が純増するため
+    ランタイムとして AppController に残す判断。Roadmap §1「やらないこと」参照)
+- **確立した規約**: `Architecture.html §9`(GUI 内部構成と UI 実装規約)+ CLAUDE.md
+- **経緯の記録**: `docs/design/refactor-ui-3move/`(マージ後は done/ 配下)
+- 以下は起票時の記録:
 - **背景**: `feature/backend-mgmt` の Phase A2 で AppController に layer 単位 load / multi-listener / 処理時間 buffer 等の orchestration 責務が追加される。R2-1 解消の分散化で `_model_status` dict は消えるものの、全体としては引き続き肥大化傾向
 - **方針案**(将来のリファクタ時):
   - `ModelLoaderService`(ロード処理)

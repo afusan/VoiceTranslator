@@ -1302,10 +1302,11 @@ class TestPhaseDCredentials:
         monkeypatch.chdir(tmp_path)
         config.set("credentials", "use_local_file", True)
         ctrl = AppController(registry=populated_registry, config=config)
-        # 初回 set で内部 store が生成される
+        # 初回 set で内部 store が生成される(P3: 実体は CredentialsService 側)
         ctrl.set_credential("deepl", "api_key", "v")
-        assert ctrl._credentials is not None
-        assert ctrl._credentials.mode == "file"
+        store = ctrl.credentials._store  # noqa: SLF001
+        assert store is not None
+        assert store.mode == "file"
 
 
 class TestPhaseE2CredentialFlow:
@@ -1825,3 +1826,34 @@ class TestP2DeviceRestartReactive:
         ctrl.restart_pipeline_async = MagicMock()
         ctrl.set_setting("ui", "collapsed", "backends", True)
         ctrl.restart_pipeline_async.assert_not_called()
+
+
+class TestP3CatalogAndCredentialsProperties:
+    """P3: メタ問合せ / 認証の実体が catalog / credentials プロパティで公開される。
+
+    既存の同名メソッドは互換窓(1 行委譲)であり、本クラス以外の既存テストが
+    無修正で通ること自体が委譲の正しさの検証になっている。
+    """
+
+    def test_properties_expose_real_instances(
+        self, populated_registry, config
+    ) -> None:
+        from voice_translator.common.backend_catalog import BackendCatalog
+        from voice_translator.common.credentials_service import CredentialsService
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        assert isinstance(ctrl.catalog, BackendCatalog)
+        assert isinstance(ctrl.credentials, CredentialsService)
+
+    def test_delegates_hit_same_instances(self, populated_registry, config) -> None:
+        """互換窓が catalog / credentials と同じ実体に届く(別状態を持たない)。"""
+        from tests._fixtures import InMemoryKeyring
+        import keyring
+        keyring.set_keyring(InMemoryKeyring())
+
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_credential("a", "k", "v")  # 互換窓で書く
+        assert ctrl.credentials.get("a", "k") == "v"  # 実体から読める
+        assert ctrl.catalog.get_capture_kind("soundcard") == ctrl.get_capture_kind(
+            "soundcard"
+        )

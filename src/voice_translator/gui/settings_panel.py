@@ -891,6 +891,15 @@ class SettingsPanel(ctk.CTkFrame):
             self._show_message("設定を保存しました")
 
     def _on_reload(self) -> None:
+        # 動作中 / ロード中の再読込は拒否する(2026-06-10 ドッグフーディング起票)。
+        # 再読込は全 backend キャッシュを evict するため、動作中に走らせると
+        # Coordinator が旧インスタンスを掴んだまま表示状態だけ INIT に戻り、
+        # 表示と実行状態が食い違う。
+        if self._reload_blocked():
+            self._notify_warning(
+                "動作中は設定を再読込できません(停止してから実行してください)"
+            )
+            return
         try:
             self._controller.load_settings()
         except Exception as e:  # noqa: BLE001
@@ -899,6 +908,15 @@ class SettingsPanel(ctk.CTkFrame):
             self._populate_devices_into_dropdowns()
             self._sync_all_status_labels()
             self._show_message("設定を再読込しました")
+
+    def _reload_blocked(self) -> bool:
+        """再読込を拒否すべき状態(動作中 / ロード中)か。取得失敗は許可側に縮退。"""
+        try:
+            return bool(self._controller.is_running) or bool(
+                self._controller.is_loading
+            )
+        except Exception:  # noqa: BLE001
+            return False
 
     def _show_message(self, msg: str) -> None:
         print(f"[SettingsPanel] {msg}")

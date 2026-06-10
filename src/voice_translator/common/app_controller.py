@@ -43,9 +43,10 @@ from voice_translator.capture.backend import AudioCaptureBackend
 from voice_translator.output.backend import AudioOutputBackend
 
 from .backend_base import Subscription
+from .backend_catalog import BackendCatalog
 from .backend_registry import BackendRegistry
 from .config_store import ConfigStore
-from .credentials import CredentialsStore
+from .credentials_service import CredentialsService
 from .device_validator import DeviceValidator
 from .error_handler import ErrorHandler
 from .ledger import UtteranceLedger
@@ -118,9 +119,23 @@ class AppController:
             layer: deque(maxlen=_RECENT_DURATIONS_MAXLEN) for layer in LayerKind
         }
 
-        # Phase D: クラウド backend 認証情報の保管。初回利用時に遅延初期化する
-        # (テスト時の `keyring.set_keyring(InMemoryKeyring())` のタイミングを尊重)。
-        self._credentials: CredentialsStore | None = None
+        # P3(refactor-ui-3move): 無状態の 2 切片。
+        # メタ問合せは catalog、認証は credentials に実体がある。本クラスの同名
+        # メソッドは互換窓(1 行委譲)で、新規コードは直接こちらを使うこと。
+        self._catalog = BackendCatalog(registry, self._logger)
+        self._credentials_service = CredentialsService(
+            registry=registry, config=config, logger=self._logger,
+        )
+
+    @property
+    def catalog(self) -> BackendCatalog:
+        """backend クラスのメタ情報問合せ口(状態なし)。"""
+        return self._catalog
+
+    @property
+    def credentials(self) -> CredentialsService:
+        """認証情報の保管・疎通確認・verified 管理。"""
+        return self._credentials_service
 
     # ============================================================
     # UI イベント購読(R2-6 の Subscription 機構を全イベント種に適用、P2)
@@ -262,172 +277,63 @@ class AppController:
         return f" (~{size:.1f}GB)"
 
     # ============================================================
-    # 認証情報(Phase D)
+    # 互換窓: メタ問合せ(実体は BackendCatalog)/ 認証(実体は CredentialsService)
     # ============================================================
-    def _credentials_store(self) -> CredentialsStore:
-        """`CredentialsStore` を遅延初期化して返す。
-
-        ConfigStore の `credentials.use_local_file` フラグを反映。テスト時に
-        `keyring.set_keyring(InMemoryKeyring())` した直後の状態を捕捉できるよう、
-        ロード/初回呼び出しのタイミングで生成する。
-        """
-        if self._credentials is None:
-            use_local = bool(
-                self._config.get("credentials", "use_local_file", default=False)
-            )
-            self._credentials = CredentialsStore(use_local_file=use_local)
-        return self._credentials
-
+    # P3(refactor-ui-3move): 実装は catalog / credentials に移管済み。以下は既存
+    # 呼び出し元(GUI / テスト)互換の 1 行委譲。新規コードは
+    # `controller.catalog.…` / `controller.credentials.…` を直接使うこと。
+    # 互換窓の削除(参照の全付け替え)は P4(任意)で判断する。
     def get_credential(self, backend: str, key: str) -> str | None:
-        """指定 backend / key の認証情報を返す。未設定なら None。"""
-        return self._credentials_store().get(backend, key)
+        """互換窓 → `CredentialsService.get`。"""
+        return self._credentials_service.get(backend, key)
 
     def set_credential(self, backend: str, key: str, value: str) -> None:
-        """指定 backend / key に認証情報を保存する。空文字は delete と同義。
-
-        Phase E-2: キーが変わったら `verified` フラグを自動で False に戻す
-        (再認証必須にして、古い verified 状態を引きずらない)。
-        """
-        self._credentials_store().set(backend, key, value)
-        self._config.set("credentials", "verified", backend, False)
+        """互換窓 → `CredentialsService.set`(verified を False に戻す)。"""
+        self._credentials_service.set(backend, key, value)
 
     def delete_credential(self, backend: str, key: str) -> None:
-        """指定 backend / key の認証情報を削除する。"""
-        self._credentials_store().delete(backend, key)
+        """互換窓 → `CredentialsService.delete`。"""
+        self._credentials_service.delete(backend, key)
 
     def has_credential(self, backend: str, key: str) -> bool:
-        """指定 backend / key の認証情報が設定済みか。"""
-        return self._credentials_store().get(backend, key) is not None
-
-    def get_backend_capability_hint(self, layer: LayerKind, name: str):
-        """登録時に指定された capability ヒントを返す(Phase D)。
-
-        backend 未生成でも `is_cloud` / `requires_credentials` 等を引ける。
-        ヒントが無ければ None(GUI は「不明だが既定 OFF 扱い」で動かす想定)。
-        """
-        return self._registry.get_capability_hint(layer, name)
-
-    # ---- 音声取得 backend の取得単位 ----
-    def get_capture_kind(self, backend_name: str):
-        """指定 capture backend の取得単位(`CaptureKind`)を返す。
-
-        backend 未登録 / 例外時は `CaptureKind.DEVICE`(安全側 = 従来挙動)を返す。
-        backend クラスの `capture_kind()` クラスメソッドを呼ぶだけ(インスタンス化しない)。
-        """
-        from .types import CaptureKind
-
-        cls = self._registry.get_backend_class(LayerKind.CAPTURE, backend_name)
-        if cls is None:
-            return CaptureKind.DEVICE
-        try:
-            kind = cls.capture_kind()
-        except Exception:  # noqa: BLE001
-            self._logger.exception(
-                "capture_kind の呼び出し失敗 backend=%s", backend_name
-            )
-            return CaptureKind.DEVICE
-        return kind
-
-    # ---- ASR 対応言語の問い合わせ口 ----
-    def get_supported_input_languages(self, backend_name: str) -> list[str]:
-        """指定 ASR backend の対応入力言語(ISO 639-1)を返す。
-
-        backend クラスのクラスメソッド `supported_input_languages()` を呼ぶ。
-        backend 未登録 / メソッド未実装 / 例外時は空リスト(UI 側で fallback)。
-        backend ロードは発生しない(設定ダイアログを開いただけで重い import を
-        引きずらないため)。
-        """
-        cls = self._registry.get_backend_class(LayerKind.ASR, backend_name)
-        if cls is None:
-            return []
-        try:
-            return list(cls.supported_input_languages())
-        except Exception:  # noqa: BLE001
-            self._logger.exception(
-                "supported_input_languages の呼び出し失敗 backend=%s", backend_name
-            )
-            return []
-
-    def supports_auto_detect(self, backend_name: str) -> bool:
-        """指定 ASR backend が言語自動検出に対応するか。
-
-        backend 未登録 / 例外時は False(安全側 = "auto" を選ばせない)。
-        """
-        cls = self._registry.get_backend_class(LayerKind.ASR, backend_name)
-        if cls is None:
-            return False
-        try:
-            return bool(cls.supports_auto_detect())
-        except Exception:  # noqa: BLE001
-            self._logger.exception(
-                "supports_auto_detect の呼び出し失敗 backend=%s", backend_name
-            )
-            return False
-
-    # ---- Translator 対応出力言語の問い合わせ口 ----
-    def get_supported_target_languages(self, backend_name: str) -> list[str]:
-        """指定 Translator backend の対応出力言語(ISO 639-1)を返す。
-
-        backend クラスのクラスメソッド `supported_target_languages()` を呼ぶ。
-        backend 未登録 / メソッド未実装 / 例外時は空リスト(UI 側で fallback)。
-        backend ロードは発生しない(ASR の get_supported_input_languages と対称)。
-        """
-        cls = self._registry.get_backend_class(LayerKind.TRANSLATOR, backend_name)
-        if cls is None:
-            return []
-        try:
-            return list(cls.supported_target_languages())
-        except Exception:  # noqa: BLE001
-            self._logger.exception(
-                "supported_target_languages の呼び出し失敗 backend=%s", backend_name
-            )
-            return []
-
-    # ---- TTS 対応出力言語の問い合わせ口 ----
-    def get_supported_output_languages(self, backend_name: str) -> list[str]:
-        """指定 TTS backend の対応読み上げ言語(ISO 639-1)を返す。
-
-        backend クラスのクラスメソッド `supported_output_languages()` を呼ぶ。
-        backend 未登録 / メソッド未実装 / 例外時は空リスト(UI 側は「未知 = 警告
-        しない」として扱う)。backend ロードは発生しない。
-        """
-        cls = self._registry.get_backend_class(LayerKind.TTS, backend_name)
-        if cls is None:
-            return []
-        try:
-            return list(cls.supported_output_languages())
-        except Exception:  # noqa: BLE001
-            self._logger.exception(
-                "supported_output_languages の呼び出し失敗 backend=%s", backend_name
-            )
-            return []
-
-    # ---- Phase E-2: 認証フロー(spec / verify / verified 管理) ----
-    def get_credential_spec(self, layer: LayerKind, name: str) -> list[CredentialField]:
-        """指定 backend の認証情報スペック。
-
-        backend クラスが登録されていればその `credential_spec()` を呼ぶ。
-        登録なし or 例外時は空リスト(GUI は「認証情報なし」として扱う)。
-        """
-        cls = self._registry.get_backend_class(layer, name)
-        if cls is None:
-            return []
-        try:
-            spec = cls.credential_spec()
-        except Exception:  # noqa: BLE001
-            self._logger.exception("credential_spec の呼び出し失敗 backend=%s", name)
-            return []
-        return list(spec)
+        """互換窓 → `CredentialsService.has`。"""
+        return self._credentials_service.has(backend, key)
 
     def is_backend_verified(self, backend_name: str) -> bool:
-        """指定 backend が認証済みかを返す(ConfigStore で永続化)。
+        """互換窓 → `CredentialsService.is_backend_verified`。"""
+        return self._credentials_service.is_backend_verified(backend_name)
 
-        `set_credential` 後に `verify_and_save_credentials` が成功すると True になる。
-        キー再入力 / `invalidate_verification` で False に戻る。
-        """
-        return bool(
-            self._config.get("credentials", "verified", backend_name, default=False)
-        )
+    def invalidate_verification(self, backend_name: str) -> None:
+        """互換窓 → `CredentialsService.invalidate_verification`。"""
+        self._credentials_service.invalidate_verification(backend_name)
+
+    def get_backend_capability_hint(self, layer: LayerKind, name: str):
+        """互換窓 → `BackendCatalog.get_capability_hint`。"""
+        return self._catalog.get_capability_hint(layer, name)
+
+    def get_capture_kind(self, backend_name: str):
+        """互換窓 → `BackendCatalog.get_capture_kind`。"""
+        return self._catalog.get_capture_kind(backend_name)
+
+    def get_supported_input_languages(self, backend_name: str) -> list[str]:
+        """互換窓 → `BackendCatalog.get_supported_input_languages`。"""
+        return self._catalog.get_supported_input_languages(backend_name)
+
+    def supports_auto_detect(self, backend_name: str) -> bool:
+        """互換窓 → `BackendCatalog.supports_auto_detect`。"""
+        return self._catalog.supports_auto_detect(backend_name)
+
+    def get_supported_target_languages(self, backend_name: str) -> list[str]:
+        """互換窓 → `BackendCatalog.get_supported_target_languages`。"""
+        return self._catalog.get_supported_target_languages(backend_name)
+
+    def get_supported_output_languages(self, backend_name: str) -> list[str]:
+        """互換窓 → `BackendCatalog.get_supported_output_languages`。"""
+        return self._catalog.get_supported_output_languages(backend_name)
+
+    def get_credential_spec(self, layer: LayerKind, name: str) -> list[CredentialField]:
+        """互換窓 → `BackendCatalog.get_credential_spec`。"""
+        return self._catalog.get_credential_spec(layer, name)
 
     def verify_and_save_credentials(
         self,
@@ -435,41 +341,19 @@ class AppController:
         backend_name: str,
         values: dict[str, str],
     ) -> VerifyResult:
-        """backend の `verify_credentials` を呼び、成功なら認証情報を保存する。
+        """認証の疎通確認 + 保存(実体は `CredentialsService.verify_and_save`)に加え、
+        ランタイム側の後処理(Phase F1)を行う互換窓。
 
-        1. backend クラスの `verify_credentials(values)` を呼ぶ
-        2. 成功 → 各キーを `CredentialsStore` に保存、`credentials.verified.<backend>=True`
-        3. 失敗 → 何も保存せず `VerifyResult` を返す(message を UI に表示)
+        Phase F1: 認証成功時、該当レイヤで本 backend が選択中かつ MISSING_CREDENTIALS
+        状態に詰まっていれば、新しい認証情報で生成し直す。これをしないと、認証が通っても
+        backend インスタンスは「credentials 無しで作られた MISSING_CREDENTIALS」状態の
+        ままなので、Start ボタンの gate(`_check_missing_credentials_gate`)が落ち続ける。
+        backend キャッシュに触るため、この後処理だけはランタイム(本クラス)の責務。
         """
-        cls = self._registry.get_backend_class(layer, backend_name)
-        if cls is None:
-            return VerifyResult(
-                ok=False,
-                message=f"backend クラス未登録: layer={layer.value}, name={backend_name}",
-            )
-        try:
-            result = cls.verify_credentials(values)
-        except Exception as e:  # noqa: BLE001
-            self._logger.exception(
-                "verify_credentials で例外 backend=%s", backend_name
-            )
-            return VerifyResult(ok=False, message=f"検証中に例外: {e}")
-
+        result = self._credentials_service.verify_and_save(layer, backend_name, values)
         if not result.ok:
             return result
 
-        # 保存。`set_credential` は内部で verified=False に戻すので、後で True を立て直す。
-        for key_name, value in values.items():
-            if value == "":
-                # 空欄(=未編集)はスキップ。既存値を消さない
-                continue
-            self.set_credential(backend_name, key_name, value)
-        self._config.set("credentials", "verified", backend_name, True)
-
-        # Phase F1: 該当レイヤで本 backend が選択中かつ MISSING_CREDENTIALS 状態に
-        # 詰まっていれば、新しい認証情報で生成し直す。これをしないと、認証が通っても
-        # backend インスタンスは「credentials 無しで作られた MISSING_CREDENTIALS」状態の
-        # ままなので、Start ボタンの gate(`_check_missing_credentials_gate`)が落ち続ける。
         current_choice = self._config.get("backends", layer.value, default=None)
         if current_choice == backend_name:
             existing = self._backends.get(layer)
@@ -485,16 +369,6 @@ class AppController:
                         # ロード失敗は backend の record_error / emit_status 側で扱う
                         pass
         return result
-
-    def invalidate_verification(self, backend_name: str) -> None:
-        """サブスク切れ / API 401 等を観測したとき呼ぶ。`verified=False` に戻す。
-
-        backend 実装の例外ハンドラ から呼ばれて、次回 Start を gate する仕組み。
-        起こり得るケース:
-        - 初回認証時は OK だが、課金 / サブスクが切れた → 401/402 で停止 → invalidate
-        - API key がローテーションされた → 401 で停止 → invalidate
-        """
-        self._config.set("credentials", "verified", backend_name, False)
 
     def _collect_recent_errors(self):
         """全 backend の直近エラーを timestamp 新しい順に並べて返す。

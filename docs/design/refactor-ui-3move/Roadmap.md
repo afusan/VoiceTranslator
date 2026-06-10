@@ -35,12 +35,12 @@ P3 完了時点で以下が成立している:
 
 ## 2. Phase 全体俯瞰
 
-| # | Phase | ブランチ | 主な成果物 | 依存 | ふるまい変更 | 想定 PR 数 |
+| # | Phase | ブランチ | 主な成果物 | 依存 | ふるまい変更 | 状態 |
 |---|---|---|---|---|---|---|
-| P1 | **logic-extract** | `refactor/ui-phase1-logic-extract` | `gui/logic/`(ready_state / language_choices / backend_display / status_summary / accel_summary / palette)+ Panel の塗り直し + shim テストの純 small 化 | — | **ゼロ**(表示文字列まで同一) | 1 |
-| P2 | **event-unify** | `refactor/ui-phase2-event-unify` | `set_callbacks` 廃止 → Subscription 統一 / Panel 間逆参照・転送の撤去 / 動作中デバイス変更 restart の AppController 移管 / 3 秒 poll 廃止 | P1 | **restart の発火条件のみ**(契約 §3.11 の書き換え、§4 判断点参照) | 1 |
-| P3 | **controller-slim** | `refactor/ui-phase3-controller-slim` | `common/backend_catalog.py`(メタ問合せ)+ `common/credentials_service.py`(認証)分離。AppController 1,244 → 約 700 行 | P1(P2 と並行可) | ゼロ | 1 |
-| P4 | **(任意)view-split 等** | 着手時に命名 | StatusPanel / HistoryPanel の物理分割。PipelineRunner 切り出し | P1, P2 | ゼロ | 着手時判断 |
+| P1 | **logic-extract** | `refactor/ui-phase1-logic-extract` | `gui/logic/`(ready_state / language_choices / backend_display / status_summary / accel_summary / palette)+ Panel の塗り直し + shim テストの純 small 化 | — | **ゼロ**(表示文字列まで同一) | ✅ 実装完了 2026-06-10(マージは全 Phase 完了後にまとめて、のユーザ方針で保留) |
+| P2 | **event-unify** | `refactor/ui-phase2-event-unify` | `set_callbacks` 廃止 → Subscription 統一 / Panel 間逆参照・転送の撤去 / 動作中デバイス変更 restart の AppController 移管 / poll は 30 秒に縮小(判断点の決定: エラー履歴の遅延表示専用として存続) | P1 | **restart の発火条件のみ**(契約 §3.11 を ❌ 書き換え済み) | ✅ 実装完了 2026-06-10(P1 からのスタックブランチ) |
+| P3 | **controller-slim** | `refactor/ui-phase3-controller-slim` | `common/backend_catalog.py`(メタ問合せ)+ `common/credentials_service.py`(認証)分離。AppController の既存メソッドは 1 行委譲の互換窓として残置 | P1 | ゼロ | ✅ 実装完了 2026-06-10(P2 からのスタックブランチ) |
+| P4 | **(任意)** | 着手時に命名 | ① StatusPanel / HistoryPanel の物理分割 ② GUI 参照の catalog / credentials 直付け替え + 互換窓削除 ③ backend エラーのイベント化 + 30 秒 poll 完全廃止 ④ PipelineRunner 切り出し(複合バックエンド着手時) | P1〜P3 | ゼロ | 未着手(痛み / 必要が出たら) |
 
 **合計 3〜4 PR**。各 Phase は単独でマージ可能・単独で価値が残ることを成立条件とする
 (P1 だけで止めても、テスト簡素化と「税金の着地点」が残る)。

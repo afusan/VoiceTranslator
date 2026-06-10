@@ -76,6 +76,17 @@
 <body>
 
 <h1>AppController 責務マップと分割案</h1>
+
+<div style="background:#fef3c7; border-left:6px solid #d97706; padding:0.8em 1em; margin:1em 0; color:#78350f;">
+<strong>⚠ 歴史的資料(2026-06-10 注記)</strong>: 本ドキュメントはリファクタリング前の分析。
+肥大化は <strong>refactor-ui-3move</strong>(P1〜P3)で解消済みで、ここに書かれた
+<code>set_callbacks</code> / <code>get_status_summary</code> / 3 秒 poll / 5 コラボレータ +
+Facade 案(StatusBroadcaster 等)は現在のコードに存在しない。
+採用された最終形(gui/logic への判断抽出 / Subscription 統一 / BackendCatalog +
+CredentialsService 分離)は <a href="../Architecture.html">Architecture.html §9</a> と
+<a href="../Class.md">Class.md</a> を参照。本ファイルは分析の経緯として残す。
+</div>
+
 <p class="small">
 作成: 2026-06-05。<code>src/voice_translator/common/app_controller.py</code>(約 1,361 行)を読み出して責務をグルーピングしたもの。
 将来のリファクタ判断材料として整理する(pendList <em>「AppController の責務分離(リファクタ予約)」</em> 参照)。
