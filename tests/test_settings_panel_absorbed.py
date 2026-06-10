@@ -51,16 +51,20 @@ def stub_panel():
 
     row_label = MagicMock(spec=ctk.CTkLabel, name="row_label")
     status_label = MagicMock(spec=ctk.CTkLabel, name="status_label")
-    shim._backend_rows = {LayerKind.TRANSLATOR: [row_label, status_label]}
+    option_menu = MagicMock(spec=ctk.CTkOptionMenu, name="option_menu")
+    cfg_button = MagicMock(spec=ctk.CTkButton, name="cfg_button")
+    shim._backend_rows = {
+        LayerKind.TRANSLATOR: [row_label, option_menu, status_label, cfg_button]
+    }
     shim._status_labels = {LayerKind.TRANSLATOR: status_label}
     shim._status_overridden = set()
-    return shim, row_label, status_label
+    return shim, row_label, status_label, option_menu, cfg_button
 
 
 class TestAbsorbVisual:
     def test_absorbed_layer_shows_effective_backend(self, stub_panel) -> None:
         """吸収中は「どの backend が実際に動くか」をステータス欄に出す。"""
-        shim, row_label, status_label = stub_panel
+        shim, row_label, status_label, _, _ = stub_panel
         shim._controller.get_absorbed_roles.return_value = {
             LayerKind.TRANSLATOR: LayerKind.ASR
         }
@@ -75,11 +79,24 @@ class TestAbsorbVisual:
         row_label.configure.assert_called_with(text_color=DISABLED_TEXT)
         assert shim._status_overridden == {LayerKind.TRANSLATOR}
 
+    def test_absorbed_layer_disables_option_menu_and_button(self, stub_panel) -> None:
+        """吸収中はコンボボックスと設定ボタンを disabled にする(選択値は保持)。"""
+        shim, _, _, option_menu, cfg_button = stub_panel
+        shim._controller.get_absorbed_roles.return_value = {
+            LayerKind.TRANSLATOR: LayerKind.ASR
+        }
+        shim._controller.get_setting.return_value = "faster_whisper_translate"
+
+        shim._apply_absorbed_visuals()
+
+        option_menu.configure.assert_called_with(state="disabled")
+        cfg_button.configure.assert_called_with(state="disabled")
+
 
 class TestSkippedVisual:
     def test_text_only_marks_tts_output_as_none(self, stub_panel) -> None:
         """text_only では TTS / Output のステータス欄が「(なし)」になる。"""
-        shim, _, _ = stub_panel
+        shim, _, _, _, _ = stub_panel
         shim._controller.get_absorbed_roles.return_value = {}
         shim._controller.output_mode = "text_only"
         tts_label = MagicMock(spec=ctk.CTkLabel, name="tts_status")
@@ -101,7 +118,7 @@ class TestSkippedVisual:
 class TestRestoreVisual:
     def test_unabsorbed_layer_restores_default_color_not_none(self, stub_panel) -> None:
         """復帰時は保存済み既定色で戻す(None を渡すと ctk が拒否して残留する)。"""
-        shim, row_label, status_label = stub_panel
+        shim, row_label, status_label, _, _ = stub_panel
         shim._status_overridden = {LayerKind.TRANSLATOR}
         shim._controller.get_absorbed_roles.return_value = {}
         shim._controller.get_model_status.return_value = ModelStatus.LOADED
@@ -117,3 +134,19 @@ class TestRestoreVisual:
             LayerKind.TRANSLATOR, ModelStatus.LOADED
         )
         assert shim._status_overridden == set()
+
+    def test_unabsorbed_layer_reenables_option_menu_and_button(
+        self, stub_panel,
+    ) -> None:
+        """復帰時はコンボボックスと設定ボタンを normal に戻す。"""
+        shim, _, _, option_menu, cfg_button = stub_panel
+        shim._status_overridden = {LayerKind.TRANSLATOR}
+        shim._controller.get_absorbed_roles.return_value = {}
+        shim._controller.get_model_status.return_value = ModelStatus.LOADED
+
+        shim._apply_absorbed_visuals()
+
+        option_menu.configure.assert_called_with(state="normal")
+        cfg_button.configure.assert_called_with(state="normal")
+        # TTS=(なし) 連動の再適用も走る(復帰直後の表示崩れ防止)
+        shim._apply_tts_none_visual.assert_called_once()

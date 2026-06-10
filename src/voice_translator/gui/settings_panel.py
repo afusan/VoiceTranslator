@@ -525,10 +525,11 @@ class SettingsPanel(ctk.CTkFrame):
         """編成上「動かないレイヤ」の行に実態を表示する。
 
         - 複合 backend に吸収: ステータス欄に「(〜側で実行: <backend>)」+ グレー表示。
-          プルダウンは選べるまま残す(選択は保存されるが Start 時は無視される。
-          複合をやめた時の選択を保持するため)。
+          プルダウンと設定ボタンは disabled(選択値は保存されるが Start 時は無視。
+          複合をやめた時の選択を保持するため、値自体は維持される)。
         - 編成対象外(text_only の TTS/Output): ステータス欄に「(なし)」。
-        - 解除されたレイヤ: 行ラベルの色と実ステータス表示に戻す。
+          プルダウン/設定ボタンの disable は `_apply_tts_none_visual` が担当。
+        - 解除されたレイヤ: 行ラベルの色と widget 状態と実ステータス表示に戻す。
         """
         absorbed = self._absorbed_roles()
         overrides: dict[LayerKind, str] = {
@@ -549,28 +550,40 @@ class SettingsPanel(ctk.CTkFrame):
                     status_label.configure(text=text, text_color=DISABLED_TEXT)
                 except Exception:  # noqa: BLE001 - widget 破棄で UI を止めない
                     pass
-            # 吸収レイヤは行ラベルもグレーに(対象外レイヤは _apply_tts_none_visual が担当)
+            # 吸収レイヤ: 行ラベルもグレー + プルダウン/設定ボタンを disable
+            # (対象外レイヤの widget disable は _apply_tts_none_visual が担当)
             if layer in absorbed:
                 for w in rows.get(layer, []):
-                    if isinstance(w, ctk.CTkLabel) and w is not status_label:
-                        try:
+                    try:
+                        if isinstance(w, ctk.CTkLabel) and w is not status_label:
                             w.configure(text_color=DISABLED_TEXT)
-                        except Exception:  # noqa: BLE001
-                            pass
+                        elif isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
+                            w.configure(state="disabled")
+                    except Exception:  # noqa: BLE001
+                        pass
 
-        # 表示上書きが解除されたレイヤ: 行ラベル色を戻し、実ステータスで上書きする
+        # 表示上書きが解除されたレイヤ: 行ラベル色 + widget 状態を戻し、実ステータスで再描画する
         # (ctk は text_color=None を受け付けないため、保存済みの既定色で戻す)
         for layer in prev - set(overrides):
             for w in rows.get(layer, []):
-                if isinstance(w, ctk.CTkLabel):
-                    try:
+                try:
+                    if isinstance(w, ctk.CTkLabel):
                         w.configure(text_color=self._restore_text_color())
-                    except Exception:  # noqa: BLE001
-                        pass
+                    elif isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
+                        w.configure(state="normal")
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 self._apply_status(layer, self._controller.get_model_status(layer))
             except Exception:  # noqa: BLE001
                 pass
+
+        # TTS=(なし) 時の TTS/Output 行の disable は専用関数が管理しているため、
+        # 吸収解除で widget を normal に戻したあとで再適用しておく(復帰直後の表示崩れ防止)。
+        try:
+            self._apply_tts_none_visual()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ============================================================
     def _on_backend_change(self, layer: LayerKind, value: str) -> None:
