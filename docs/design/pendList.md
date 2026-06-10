@@ -16,7 +16,16 @@
 
 ---
 
-## [2026-06-08] flaky テスト: `test_set_languages_takes_effect_on_next_utterance`
+## [✅完了 2026-06-10] flaky テスト: `test_set_languages_takes_effect_on_next_utterance`
+
+> **解決(2026-06-10)**: 真因は下記の推定(tk/COM 干渉)ではなく、**テスト自身のレース**だった。
+> `WavReplayCapture` は実時間ペーシング無しの全速再生のため、有限 5 秒 PCM(≈52 発話)では
+> 「最初の done 検出 → `set_languages` 呼び出し」の間に本スレッドが負荷で遅れると、全発話が
+> translator を通過済みになり「切替後の発話」が存在しなくなる。sleep(1.5s) を挟む再現スクリプトで
+> 決定論的に再現できた(単体 pass / 並走負荷時のみ fail の観測とも一致)。
+> 対応: `WavReplayCapture` に `loop=True`(ループ供給)を追加し、当該テストで使用。
+> 切替後の発話が必ず存在するため原理的にレースが消えた(`refactor/ui-phase1-logic-extract` 上で修正)。
+> 以下は経緯の記録として残す。
 - **対象**: `tests/test_pipeline_e2e.py::TestPipelineE2EWithSynthPcm::test_set_languages_takes_effect_on_next_utterance`
 - **症状**: `py -m uv run pytest`(全体実行)で**数十回に 1 回程度**失敗するが、
   単体実行(`pytest <そのテストだけ>`)では必ず pass。

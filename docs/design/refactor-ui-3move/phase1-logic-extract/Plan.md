@@ -43,7 +43,9 @@
 **共通規約**(全モジュールの docstring 冒頭に明記すること):
 - 役割: 「UI に表示すべき値を計算して返す」。**widget / controller / ConfigStore に触らない**
 - 状態を持たない(モジュール変数は定数のみ)。入力は引数、出力は戻り値のみ
-- customtkinter を import しない(`common.types` と標準ライブラリのみ依存可)
+- customtkinter を import しない(依存は common 配下の純粋モジュール
+  `types` / `languages` と標準ライブラリのみ。`languages` は通知文言の
+  `format_language` で使用)
 
 ### 3.1 `gui/logic/palette.py` — 色定数
 

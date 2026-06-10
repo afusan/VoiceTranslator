@@ -32,6 +32,9 @@ from voice_translator.common.app_controller import AppController
 from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
 
 from .collapsible_section import CollapsibleSection
+from .logic.accel_summary import summarize_accel
+from .logic.ready_state import WidgetSpec, compute_ready_state
+from .logic.status_summary import append_gui_events, format_status_summary
 
 
 # ConfigStore のキー: 折り畳み状態の永続化用
@@ -462,25 +465,21 @@ class ControlPanel(ctk.CTkFrame):
     _STATUS_REFRESH_INTERVAL_MS = 3000  # 3 秒ごとにエラー履歴等を再フェッチ
 
     def _refresh_status_text(self) -> None:
-        """`AppController.get_status_summary()` + GUI 操作イベント履歴を表示する。
+        """ステータススナップショット + GUI 操作イベント履歴を整形して表示する。
 
-        構成:
+        構成(整形は `gui/logic/status_summary.py` に委譲):
           1. レイヤ別 backend 状態
           2. 最近の backend エラー(controller 側)
           3. 操作イベント(本パネル側、起動失敗 / 致命的エラー 等。新しい順)
         """
         try:
-            summary = self._controller.get_status_summary()
+            lines, errors = self._controller.get_status_snapshot()
+            summary = format_status_summary(lines, errors, self._gui_event_log)
         except Exception as e:  # noqa: BLE001
-            summary = f"(ステータス取得に失敗: {e})"
-
-        # GUI 操作イベントを末尾に付加(あれば)
-        if self._gui_event_log:
-            lines = [summary, "", "操作イベント:"]
-            # 新しいものから 5 件まで(直近を見たい想定)
-            for ev in list(self._gui_event_log)[-5:][::-1]:
-                lines.append(f"  {ev}")
-            summary = "\n".join(lines)
+            # 取得失敗時も操作イベントだけは見えるようにする
+            summary = append_gui_events(
+                f"(ステータス取得に失敗: {e})", self._gui_event_log
+            )
 
         try:
             self._status_text.configure(state="normal")
@@ -527,187 +526,98 @@ class ControlPanel(ctk.CTkFrame):
     def _sync_ready_state(self) -> None:
         """各レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。
 
-        Phase B: 「全レイヤ LOADED でないと開始ボタン無効」を撤回。
-        開始ボタンは常時押下可で、押された時点で未ロードならまとめてロードする。
-        MISSING_CREDENTIALS / DOWNLOADING のときだけ無効化する:
-          - MISSING_CREDENTIALS: ロードしても意味なし(API key 未設定)
-          - DOWNLOADING: 進行中のロードを待つ(押下しても何も起きない)
-
-        text_only モード(P3): TTS / Output レイヤは判定対象から除外する
-        (起動対象外なので、未ロードで残っていても Start を阻害しない)。
-
+        判断(文言・優先順位・text_only の除外)は `gui/logic/ready_state.py` の
+        純関数に委譲し、ここでは入力の収集(controller への問い合わせ + 失敗時の
+        縮退)と計算結果の widget への反映だけを行う。
         idle 以外(running / starting / stopping)のときは触らない(各フローで管理)。
         """
         if self._state != "idle":
             return
 
-        statuses = list(self._active_layer_statuses().values())
-        if not statuses:
+        rs = compute_ready_state(
+            self._layer_statuses,
+            output_mode=self._safe_output_mode(),
+            capture_kind=self._ready_capture_kind(),
+            has_input_source=self._ready_has_input_source(),
+            has_output_device=self._ready_has_output_device(),
+        )
+        if rs is None:
             return
 
-        if any(s == ModelStatus.MISSING_CREDENTIALS for s in statuses):
-            self._toggle_btn.configure(text="認証情報未設定", state="disabled")
-            self._status_label.configure(
-                text="認証情報未設定(詳細ダイアログで設定してください)"
-            )
-        elif any(s == ModelStatus.DOWNLOADING for s in statuses):
-            self._toggle_btn.configure(text="モデル DL 中…", state="disabled")
-            self._status_label.configure(text="モデルダウンロード中…")
-        elif self._capture_source_required_but_empty():
-            # 段階 3 / A-7: PROCESS kind の capture backend を選択中で `devices.input`
-            # が未設定(=PID 未選択)のときは Start させない。プロセス選択ダイアログから
-            # PID を選んでもらう必要がある。
-            self._toggle_btn.configure(text="プロセス未選択", state="disabled")
-            self._status_label.configure(
-                text="プロセスを選択してください(設定 → プロセス選択…)"
-            )
-        else:
-            # 開始ボタンは常時押下可。ロード状況は補助情報としてラベルに出す。
-            self._toggle_btn.configure(text="▶ 開始", state="normal")
-            if any(s in (ModelStatus.INIT, ModelStatus.NOT_DOWNLOADED) for s in statuses):
-                self._status_label.configure(text="停止中(押下時にロードします)")
-            elif any(s == ModelStatus.LOADING for s in statuses):
-                self._status_label.configure(text="停止中(ロード中)")
-            else:
-                self._status_label.configure(text="停止中")
-
-        # 中央ロードボタンの state を再計算(text_only 時は対象レイヤから絞った statuses を使う)
-        self._sync_load_button_state(statuses)
-        # 出力テストボタンの state も再計算(動作中 / text_only / output 未選択 で disable)
-        self._sync_test_button_state()
+        self._apply_widget_spec(self._toggle_btn, rs.toggle)
+        self._status_label.configure(text=rs.status_text)
+        try:
+            self._apply_widget_spec(self._load_btn, rs.load)
+        except AttributeError:
+            pass  # 初期化前に呼ばれた場合(理論上ありえない)
+        try:
+            self._apply_widget_spec(self._test_btn, rs.test)
+        except AttributeError:
+            pass
         # アクセラレータ表示は ready_state とは独立に常に更新する
         self._refresh_accel_label()
 
-    def _sync_load_button_state(self, statuses: list[ModelStatus]) -> None:
-        """中央「↻ ロード」ボタンの enable/disable と text を再設定する。
+    @staticmethod
+    def _apply_widget_spec(btn, spec: WidgetSpec) -> None:
+        """`WidgetSpec` をボタンの text / state に反映する。"""
+        btn.configure(text=spec.text, state="normal" if spec.enabled else "disabled")
 
-        - 全レイヤが LOADED → ボタン文言「ロード済み」+ disable
-        - LOADING 中のレイヤあり → ボタン文言「ロード中…」+ disable
-        - MISSING_CREDENTIALS あり → 「↻ ロード」だが押せる(押すと部分 load 試行 →
-          MISSING のレイヤだけ skip、それ以外はロード)。disable はしない。
-        - それ以外(INIT / NOT_DOWNLOADED が混在) → 「↻ ロード」+ normal
-        """
+    # ---- compute_ready_state への入力収集(取得失敗時の縮退も担う)----
+    def _safe_output_mode(self) -> str:
+        """output_mode を安全に問い合わせる(古いモック / 仕様逸脱は audio 扱い)。"""
         try:
-            btn = self._load_btn
-        except AttributeError:
-            return  # 初期化前に呼ばれた場合(理論上ありえない)
-        if not statuses:
-            btn.configure(text="↻ ロード", state="normal")
-            return
-        if all(s == ModelStatus.LOADED for s in statuses):
-            btn.configure(text="ロード済み", state="disabled")
-        elif any(s == ModelStatus.LOADING for s in statuses):
-            btn.configure(text="ロード中…", state="disabled")
-        else:
-            btn.configure(text="↻ ロード", state="normal")
-
-    def _sync_test_button_state(self) -> None:
-        """🔊 出力テストボタンの enable/disable と text を再設定する。
-
-        無効化条件(いずれか):
-        - text_only モード(TTS=「(なし)」、合成手段がない)
-        - 出力デバイス未選択(devices.output が空)
-        - すでに何かのトランジション中(running / starting / stopping)
-        """
-        try:
-            btn = self._test_btn
-        except AttributeError:
-            return  # 初期化前に呼ばれた場合
-        try:
-            mode = self._controller.output_mode
+            return self._controller.output_mode
         except Exception:  # noqa: BLE001
-            mode = "audio"
-        if mode == "text_only":
-            btn.configure(text="🔊 (TTS なし)", state="disabled")
-            return
+            return "audio"
+
+    def _ready_capture_kind(self) -> CaptureKind:
+        """現在の capture backend の kind(取れないときは DEVICE フォールバック)。"""
+        try:
+            backend_name = str(
+                self._controller.get_setting(
+                    "backends", LayerKind.CAPTURE.value, default=""
+                )
+            )
+        except Exception:  # noqa: BLE001
+            return CaptureKind.DEVICE
+        if not backend_name:
+            return CaptureKind.DEVICE
+        try:
+            kind = self._controller.get_capture_kind(backend_name)
+        except Exception:  # noqa: BLE001
+            return CaptureKind.DEVICE
+        return kind if isinstance(kind, CaptureKind) else CaptureKind.DEVICE
+
+    def _ready_has_input_source(self) -> bool:
+        """`devices.input` が選択済みか。取得失敗は未選択扱い(安全側 = Start を止める)。"""
+        try:
+            source = self._controller.get_setting("devices", "input", default="")
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(str(source).strip())
+
+    def _ready_has_output_device(self) -> bool:
+        """`devices.output` が選択済みか。取得失敗は未選択扱い。"""
         try:
             output_id = str(
                 self._controller.get_setting("devices", "output", default="") or ""
             ).strip()
         except Exception:  # noqa: BLE001
             output_id = ""
-        if not output_id:
-            btn.configure(text="🔊 出力未選択", state="disabled")
-            return
-        btn.configure(text="🔊 出力テスト", state="normal")
-
-    def _capture_source_required_but_empty(self) -> bool:
-        """capture_kind == PROCESS かつ `devices.input` が未設定なら True。
-
-        段階 3 / A-7 で導入: PROCESS kind backend(ProcTap 等)は PID を毎回選び直す
-        前提のため、未選択のままで Start を許すと FatalError になる。先回りで disable。
-        """
-        try:
-            backend_name = str(
-                self._controller.get_setting("backends", LayerKind.CAPTURE.value, default="")
-            )
-        except Exception:  # noqa: BLE001
-            return False
-        if not backend_name:
-            return False
-        try:
-            kind = self._controller.get_capture_kind(backend_name)
-        except Exception:  # noqa: BLE001
-            return False
-        if not isinstance(kind, CaptureKind) or kind != CaptureKind.PROCESS:
-            return False
-        try:
-            source = self._controller.get_setting("devices", "input", default="")
-        except Exception:  # noqa: BLE001
-            return True  # 設定取得失敗 → 安全側で未選択扱い
-        return not bool(str(source).strip())
-
-    def _active_layer_statuses(self) -> dict[LayerKind, ModelStatus]:
-        """text_only モードでは TTS / Output を除いたレイヤ状態を返す。"""
-        try:
-            mode = self._controller.output_mode
-        except Exception:  # noqa: BLE001 - 古いモック / 仕様逸脱
-            mode = "audio"
-        if mode == "text_only":
-            return {
-                layer: status
-                for layer, status in self._layer_statuses.items()
-                if layer not in (LayerKind.TTS, LayerKind.OUTPUT)
-            }
-        return dict(self._layer_statuses)
+        return bool(output_id)
 
     def _refresh_accel_label(self) -> None:
-        """各レイヤの device を集約して「演算: GPU(cuda) / CPU のみ / 不明」を表示する。
+        """各レイヤの device 報告を集約してアクセラレータ表示を更新する。
 
-        device 概念を持つレイヤ(ASR / Translator 等)の値を見て、1つでも CUDA/MPS が
-        あれば GPU 利用扱い、すべて CPU なら "CPU のみ"、まだロードされていなければ
-        "不明" を表示する。
-        text_only モードでは TTS / Output レイヤの device 報告は無視する。
+        集約判定(GPU / CPU のみ / 準備中、色)は `gui/logic/accel_summary.py` に
+        委譲。ここは device の収集と label への反映のみ。
         """
         if self._accel_label is None:
             return
-        try:
-            mode = self._controller.output_mode
-        except Exception:  # noqa: BLE001
-            mode = "audio"
-        gpu_devices: set[str] = set()
-        has_cpu = False
-        for layer in LayerKind:
-            if mode == "text_only" and layer in (LayerKind.TTS, LayerKind.OUTPUT):
-                continue
-            device = self._controller.get_layer_device(layer)
-            if not device:
-                continue
-            d = device.lower()
-            if d in ("cuda", "mps"):
-                gpu_devices.add(d)
-            elif d == "cpu":
-                has_cpu = True
-
-        if gpu_devices:
-            color = "#16a34a"  # green
-            text = f"演算: GPU ({', '.join(sorted(gpu_devices))})"
-        elif has_cpu:
-            color = "#d97706"  # amber(動作はするがプロファイル的に最速ではない)
-            text = "演算: CPU のみ"
-        else:
-            color = "#94a3b8"  # slate
-            text = "演算: -(モデル準備中)"
+        devices = {
+            layer: self._controller.get_layer_device(layer) for layer in LayerKind
+        }
+        text, color = summarize_accel(devices, output_mode=self._safe_output_mode())
         self._accel_label.configure(text=text, text_color=color)
 
     # ---- メインスレッドでの反映 ----

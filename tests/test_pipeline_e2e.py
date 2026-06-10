@@ -147,14 +147,17 @@ class TestPipelineE2EWithSynthPcm:
     def test_set_languages_takes_effect_on_next_utterance(self, tmp_path: Path) -> None:
         """動作中に set_languages(tgt=...) を呼ぶと、後続発話の tgt_text に反映される(P2)。
 
-        WavReplayCapture は pcm を使い切ると None を返すだけになるため、十分長い
-        pcm(5 秒)を流して「切替前の発話」「切替後の発話」が両方確実に出るように
-        する。VadEveryN(every_n=3) + chunk_size=512 で約 50 発話分。
+        capture は `loop=True` で無限に発話を供給する。再生は実時間ペーシング
+        無しの全速のため、有限 PCM だと「最初の done 検出 → set_languages 呼び出し」
+        の間(本スレッドが負荷で遅れる区間)に全発話が translator を通過してしまい、
+        切替後の発話が存在しなくなるレースがあった(旧実装 = 5 秒 PCM ≈ 52 発話。
+        単体実行では pass / 全体実行の並走負荷でのみ稀に fail、2026-06-08 起票の
+        flaky の真因)。ループ供給なら切替後の発話が必ず現れる。
         """
-        t = np.linspace(0, 5.0, 80000, endpoint=False)
+        t = np.linspace(0, 1.0, 16000, endpoint=False)
         pcm = (0.1 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
 
-        capture = WavReplayCapture(pcm, chunk_size=512)
+        capture = WavReplayCapture(pcm, chunk_size=512, loop=True)
         output = RecordingOutput()
         done_records: list[dict] = []
 

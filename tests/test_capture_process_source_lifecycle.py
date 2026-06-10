@@ -164,8 +164,8 @@ class _StubController:
     def get_all_model_statuses(self):
         return dict(self._statuses)
 
-    def get_status_summary(self):
-        return "ok"
+    def get_status_snapshot(self):
+        return [], []
 
     def get_layer_device(self, layer):
         return None

@@ -16,9 +16,15 @@ import numpy as np
 import pytest
 
 
-_GOOGLE_TTS_AVAILABLE = (
-    importlib.util.find_spec("google.cloud.texttospeech") is not None
-)
+# find_spec はサブモジュール指定時に親パッケージを import するため、
+# `google.cloud` 自体が無い環境(extras 未同期)では ModuleNotFoundError になる。
+# 本ファイルの方針は「extras 未インストールなら skip」なので False に縮退する。
+try:
+    _GOOGLE_TTS_AVAILABLE = (
+        importlib.util.find_spec("google.cloud.texttospeech") is not None
+    )
+except ModuleNotFoundError:
+    _GOOGLE_TTS_AVAILABLE = False
 
 
 def _load_real_credentials_path() -> str | None:

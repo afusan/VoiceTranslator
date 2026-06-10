@@ -203,3 +203,24 @@
 
 最終 Phase(P3、P4 を実施する場合は P4)時点で、Roadmap §3 対応表に挙がった全項目が
 ✅ / ❌ / 🧪 のいずれかになっていることを完了条件にする。
+
+---
+
+## 15. チェック記録
+
+### P1: logic-extract(2026-06-10)
+
+P1 で新たに自動テスト化(✅)された項目:
+
+| 項目 | テスト |
+|---|---|
+| §1.6〜1.9(言語候補の再構築・fallback) | `tests/test_logic_language_choices.py`(判断)+ `tests/test_settings_panel_lang.py`(配線) |
+| §1.10(TTS 互換警告、ユーザ選択は変更しない) | 同上(`tts_warning_needed` + 配線) |
+| §3.1〜3.6(開始ボタンの状態遷移と優先順位) | `tests/test_logic_ready_state.py`(§3.4 は `tests/test_capture_process_source_lifecycle.py` でも実 widget 検証) |
+| §6.1〜6.4(アクセラレータ表示) | `tests/test_logic_accel_summary.py` |
+| §7.1〜7.2(ステータス集約テキストの形式) | `tests/test_logic_status_summary.py`(**golden**: 表示文字列を byte 単位で固定)+ `tests/test_app_controller.py` |
+| §9.1〜9.3(出力テストボタンの disable 条件) | `tests/test_logic_ready_state.py` + `tests/test_control_panel_test_output.py`(実 widget) |
+
+🧪 手動チェック(実機 GUI 操作: §1.6〜1.11 / §3.1〜3.6 / §6 / §7 / §9 を 1 回ずつ踏む)は
+**未実施 — ユーザのドッグフーディングでの確認待ち**。実 widget を使った自動テスト
+(panel 系)が配線を検証済みのため、リスクは表示の見た目崩れ等に限られる。

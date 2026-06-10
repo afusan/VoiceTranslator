@@ -1079,26 +1079,41 @@ class TestPhaseBConfigDefaults:
 
 
 class TestPhaseC3StatusSummary:
-    """Phase C3: 全レイヤ状態 + 最近のエラー集約テキスト。"""
+    """Phase C3 改(P1): ステータスはデータ(get_status_snapshot)で返す。
 
-    def test_summary_lists_all_layers(self, populated_registry, config) -> None:
+    旧 get_status_summary のシナリオを温存し、snapshot + gui/logic の
+    format_status_summary の組で同じ表示が得られることを検証する
+    (整形そのものの詳細は tests/test_logic_status_summary.py)。
+    """
+
+    @staticmethod
+    def _summary_text(ctrl: AppController) -> str:
+        """旧 get_status_summary 相当のテキストを snapshot + formatter で得る。"""
+        from voice_translator.gui.logic.status_summary import format_status_summary
+
+        lines, errors = ctrl.get_status_snapshot()
+        return format_status_summary(lines, errors, [])
+
+    def test_snapshot_lists_all_layers(self, populated_registry, config) -> None:
         ctrl = AppController(registry=populated_registry, config=config)
         ctrl.load_models()
-        summary = ctrl.get_status_summary()
+        lines, _errors = ctrl.get_status_snapshot()
+        assert [line.layer for line in lines] == list(LayerKind)
+        summary = self._summary_text(ctrl)
         for layer in LayerKind:
             assert f"[{layer.value}]" in summary, f"{layer} 未含有"
             # backend 名(faster_whisper 等)も載っている
         assert "faster_whisper" in summary
         assert "Loaded" in summary
 
-    def test_summary_includes_backend_name(self, populated_registry, config) -> None:
+    def test_snapshot_includes_backend_name(self, populated_registry, config) -> None:
         ctrl = AppController(registry=populated_registry, config=config)
-        summary = ctrl.get_status_summary()
+        summary = self._summary_text(ctrl)
         # 未ロードでも backend 名 + INIT は出る
         assert "faster_whisper" in summary
         assert "Init" in summary
 
-    def test_summary_groups_errors(self, populated_registry, config) -> None:
+    def test_snapshot_groups_errors(self, populated_registry, config) -> None:
         """各 backend の get_recent_errors を集約して末尾に追記する。"""
         from voice_translator.common.types import ErrorRecord
         ctrl = AppController(registry=populated_registry, config=config)
@@ -1113,22 +1128,22 @@ class TestPhaseC3StatusSummary:
         ctrl._backends[LayerKind.ASR].get_recent_errors = MagicMock(
             return_value=[fake_record]
         )
-        summary = ctrl.get_status_summary()
+        summary = self._summary_text(ctrl)
         assert "最近のエラー:" in summary
         assert "OSError" in summary
         assert "model not found" in summary
         assert "[asr]" in summary
 
-    def test_summary_omits_error_section_when_no_errors(
+    def test_snapshot_omits_error_section_when_no_errors(
         self, populated_registry, config
     ) -> None:
         ctrl = AppController(registry=populated_registry, config=config)
         ctrl.load_models()
-        summary = ctrl.get_status_summary()
+        summary = self._summary_text(ctrl)
         # backend のエラー履歴が空のとき「最近のエラー:」セクションは出ない
         assert "最近のエラー:" not in summary
 
-    def test_summary_shows_downloading_size_hint(
+    def test_snapshot_shows_downloading_size_hint(
         self, populated_registry, config
     ) -> None:
         """DOWNLOADING 状態のレイヤがあると、list_recommended_models 先頭の size を併記。"""
@@ -1143,14 +1158,16 @@ class TestPhaseC3StatusSummary:
                 ModelInfo(name="small", display_name="Small", download_size_gb=0.46),
             ]
         )
-        summary = ctrl.get_status_summary()
-        # ~0.5GB 表示が含まれる(0.46GB → "~0.5GB" の表示)
-        assert "0.5GB" in summary
+        lines, _errors = ctrl.get_status_snapshot()
+        asr_line = next(line for line in lines if line.layer == LayerKind.ASR)
+        # ~0.5GB 表示が含まれる(0.46GB → "~0.5GB" の表示、先頭スペース込み)
+        assert asr_line.dl_size_hint == " (~0.5GB)"
+        assert "0.5GB" in self._summary_text(ctrl)
 
-    def test_summary_handles_missing_list_recommended_models(
+    def test_snapshot_handles_missing_list_recommended_models(
         self, populated_registry, config
     ) -> None:
-        """list_recommended_models が例外でも summary は落ちない(縮退)。"""
+        """list_recommended_models が例外でも snapshot は落ちない(縮退)。"""
         ctrl = AppController(registry=populated_registry, config=config)
         ctrl.load_models()
         ctrl._backends[LayerKind.ASR].get_status = MagicMock(
@@ -1160,7 +1177,7 @@ class TestPhaseC3StatusSummary:
             side_effect=RuntimeError("boom")
         )
         # 例外で落ちないこと
-        summary = ctrl.get_status_summary()
+        summary = self._summary_text(ctrl)
         assert "Downloading" in summary
 
 

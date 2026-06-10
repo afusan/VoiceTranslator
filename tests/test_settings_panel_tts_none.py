@@ -81,28 +81,33 @@ def _make_controller(tts_choice: str = "sapi") -> MagicMock:
 
 
 class TestHelpers:
-    """表示↔内部値の変換関数。"""
+    """表示↔内部値の変換関数。
+
+    P1: 変換関数は gui/logic/backend_display.py へ移動(詳細テストは
+    tests/test_logic_backend_display.py)。ここでは移動先の関数が
+    settings_panel から従来どおり使われている前提の代表ケースのみ残す。
+    """
 
     def test_display_to_internal_for_none(self) -> None:
-        from voice_translator.gui.settings_panel import _tts_display_to_internal
+        from voice_translator.gui.logic.backend_display import tts_display_to_internal
 
-        assert _tts_display_to_internal("(なし)") == "none"
+        assert tts_display_to_internal("(なし)") == "none"
 
     def test_display_to_internal_for_real_backend(self) -> None:
-        from voice_translator.gui.settings_panel import _tts_display_to_internal
+        from voice_translator.gui.logic.backend_display import tts_display_to_internal
 
-        assert _tts_display_to_internal("sapi") == "sapi"
-        assert _tts_display_to_internal("piper") == "piper"
+        assert tts_display_to_internal("sapi") == "sapi"
+        assert tts_display_to_internal("piper") == "piper"
 
     def test_internal_to_display_for_none(self) -> None:
-        from voice_translator.gui.settings_panel import _tts_internal_to_display
+        from voice_translator.gui.logic.backend_display import tts_internal_to_display
 
-        assert _tts_internal_to_display("none") == "(なし)"
+        assert tts_internal_to_display("none") == "(なし)"
 
     def test_internal_to_display_for_real_backend(self) -> None:
-        from voice_translator.gui.settings_panel import _tts_internal_to_display
+        from voice_translator.gui.logic.backend_display import tts_internal_to_display
 
-        assert _tts_internal_to_display("sapi") == "sapi"
+        assert tts_internal_to_display("sapi") == "sapi"
 
 
 class TestTtsDropdownChoices:

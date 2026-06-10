@@ -1,7 +1,14 @@
-"""SettingsPanel の入力言語連動ロジックの単体テスト。
+"""SettingsPanel の言語連動の「配線」テスト(wiring smoke)。
 
-UI 全体ではなく、`_refresh_input_language_choices` と `_notify_lang_fallback` の
-振る舞いに絞って検証する(customtkinter widget は MagicMock で代替)。
+P1(refactor-ui-3move)で言語候補・fallback の判断ロジックは
+`gui/logic/language_choices.py` に移動した。判断の全分岐は
+tests/test_logic_language_choices.py(純 small)で検証する。
+本ファイルは「View が logic の計算結果を widget / controller / banner に
+正しく配線しているか」の代表ケースだけを残す。
+
+shim 方式: SettingsPanel の `__init__`(GUI 構築)を経由せず、検証対象メソッドを
+MagicMock に bind して呼ぶ。配線先(dropdown / var / controller / banner)の
+呼び出しを観察する。
 """
 
 from __future__ import annotations
@@ -11,21 +18,27 @@ from unittest.mock import MagicMock
 import pytest
 
 
-@pytest.fixture()
-def stub_panel(monkeypatch):
-    """SettingsPanel の `__init__` を経由せず、必要な属性だけ持つ shim を作る。
+def _bind(shim, *method_names: str):
+    """SettingsPanel の実メソッドを shim に bind する。"""
+    from voice_translator.gui.settings_panel import SettingsPanel
 
-    `_refresh_input_language_choices` / `_notify_lang_fallback` は self に対する
-    属性アクセスだけで動くので、MagicMock + 必要な実メソッドの bound で十分。
-    """
+    for name in method_names:
+        setattr(shim, name, getattr(SettingsPanel, name).__get__(shim))
+
+
+@pytest.fixture()
+def stub_panel():
+    """入力言語(src)連動の配線検証用 shim。"""
     from voice_translator.gui.settings_panel import SettingsPanel
 
     shim = MagicMock(spec=SettingsPanel)
-    # 実メソッドを使う(self 経由で呼ばれる)
-    shim._refresh_input_language_choices = SettingsPanel._refresh_input_language_choices.__get__(shim)
-    shim._notify_lang_fallback = SettingsPanel._notify_lang_fallback.__get__(shim)
-    shim._on_src_lang_changed = SettingsPanel._on_src_lang_changed.__get__(shim)
-    # widget 群はモック
+    _bind(
+        shim,
+        "_refresh_input_language_choices",
+        "_notify_lang_fallback",
+        "_notify_warning",
+        "_on_src_lang_changed",
+    )
     shim._src_dropdown = MagicMock(name="src_dropdown")
     shim._src_var = MagicMock(name="src_var")
     shim._controller = MagicMock(name="controller")
@@ -33,91 +46,42 @@ def stub_panel(monkeypatch):
     return shim
 
 
-class TestRefreshInputLanguageChoices:
-    def test_uses_backend_supported_languages_when_available(self, stub_panel) -> None:
-        stub_panel._controller.get_supported_input_languages.return_value = ["en", "ja", "fr"]
-        stub_panel._controller.supports_auto_detect.return_value = True
-        stub_panel._controller.get_setting.return_value = "en"
-
-        stub_panel._refresh_input_language_choices("fake_backend", notify_fallback=True)
-
-        # configure に渡された values を取り出す
-        configure_kwargs = stub_panel._src_dropdown.configure.call_args.kwargs
-        labels = configure_kwargs["values"]
-        # auto が先頭に入り、残りはソート順
-        assert labels[0] == "auto (Auto-detect)"
-        assert "en (English)" in labels
-        assert "ja (Japanese)" in labels
-        assert "fr (French)" in labels
-
-    def test_no_auto_when_backend_not_supports_auto(self, stub_panel) -> None:
-        stub_panel._controller.get_supported_input_languages.return_value = ["en"]
-        stub_panel._controller.supports_auto_detect.return_value = False
-        stub_panel._controller.get_setting.return_value = "en"
-
-        stub_panel._refresh_input_language_choices("fake_backend", notify_fallback=True)
-
-        labels = stub_panel._src_dropdown.configure.call_args.kwargs["values"]
-        assert "auto (Auto-detect)" not in labels
-
-    def test_fallback_when_backend_returns_empty(self, stub_panel) -> None:
-        stub_panel._controller.get_supported_input_languages.return_value = []
-        stub_panel._controller.supports_auto_detect.return_value = False
-        stub_panel._controller.get_setting.return_value = "en"
-
-        stub_panel._refresh_input_language_choices("unknown_backend", notify_fallback=False)
-
-        # fallback 候補が使われる(MVP セット相当)
-        labels = stub_panel._src_dropdown.configure.call_args.kwargs["values"]
-        assert "en (English)" in labels
-
-    def test_keeps_current_setting_if_supported(self, stub_panel) -> None:
+class TestSrcLanguageWiring:
+    def test_rebuild_applies_choices_and_selection_to_widgets(self, stub_panel) -> None:
+        """logic の計算結果(候補 + 選択値)が dropdown / StringVar に反映される。"""
         stub_panel._controller.get_supported_input_languages.return_value = ["en", "ja"]
         stub_panel._controller.supports_auto_detect.return_value = True
         stub_panel._controller.get_setting.return_value = "ja"
 
         stub_panel._refresh_input_language_choices("fake_backend", notify_fallback=True)
 
-        # 現在値が新リストに含まれるので保持(set_setting は呼ばれない)
-        stub_panel._controller.set_setting.assert_not_called()
-        # 表示形式に更新される
+        labels = stub_panel._src_dropdown.configure.call_args.kwargs["values"]
+        assert labels[0] == "auto (Auto-detect)"
+        assert "ja (Japanese)" in labels
         stub_panel._src_var.set.assert_called_with("ja (Japanese)")
+        # 現在値が対応言語なので設定の書き戻しは起きない
+        stub_panel._controller.set_setting.assert_not_called()
 
-    def test_falls_back_to_auto_when_current_unsupported_and_auto_available(
-        self, stub_panel
-    ) -> None:
+    def test_fallback_writes_setting_and_shows_banner(self, stub_panel) -> None:
+        """fallback 発生時は set_setting + 警告バナーまで配線される。"""
         stub_panel._controller.get_supported_input_languages.return_value = ["en"]
         stub_panel._controller.supports_auto_detect.return_value = True
         stub_panel._controller.get_setting.return_value = "fr"  # 非対応
 
         stub_panel._refresh_input_language_choices("fake_backend", notify_fallback=True)
 
-        # auto に fallback
         stub_panel._controller.set_setting.assert_called_with("languages", "src", "auto")
         stub_panel._src_var.set.assert_called_with("auto (Auto-detect)")
-        # 通知バナーが呼ばれる
-        stub_panel._banner.show_warning.assert_called_once()
-
-    def test_falls_back_to_first_lang_when_no_auto(self, stub_panel) -> None:
-        stub_panel._controller.get_supported_input_languages.return_value = ["en", "ja"]
-        stub_panel._controller.supports_auto_detect.return_value = False
-        stub_panel._controller.get_setting.return_value = "fr"  # 非対応
-
-        stub_panel._refresh_input_language_choices("fake_backend", notify_fallback=True)
-
-        # ソート済み先頭(= "en")に fallback
-        stub_panel._controller.set_setting.assert_called_with("languages", "src", "en")
         stub_panel._banner.show_warning.assert_called_once()
 
     def test_no_notification_when_notify_fallback_false(self, stub_panel) -> None:
-        """起動時の初回構築では通知を出さない(設定 OK のときも fallback のときも)。"""
+        """起動時の初回構築では fallback しても通知を出さない。"""
         stub_panel._controller.get_supported_input_languages.return_value = ["en"]
         stub_panel._controller.supports_auto_detect.return_value = False
         stub_panel._controller.get_setting.return_value = "fr"
 
         stub_panel._refresh_input_language_choices("fake_backend", notify_fallback=False)
 
-        # fallback はするが通知はしない
         stub_panel._controller.set_setting.assert_called_with("languages", "src", "en")
         stub_panel._banner.show_warning.assert_not_called()
 
@@ -140,15 +104,15 @@ class TestOnSrcLangChanged:
 
 @pytest.fixture()
 def stub_tgt_panel():
-    """Translator 連動(_refresh_target_language_choices)用の shim。"""
+    """出力言語(tgt)連動の配線検証用 shim。"""
     from voice_translator.gui.settings_panel import SettingsPanel
 
     shim = MagicMock(spec=SettingsPanel)
-    shim._refresh_target_language_choices = (
-        SettingsPanel._refresh_target_language_choices.__get__(shim)
-    )
-    shim._notify_tgt_lang_fallback = (
-        SettingsPanel._notify_tgt_lang_fallback.__get__(shim)
+    _bind(
+        shim,
+        "_refresh_target_language_choices",
+        "_notify_tgt_lang_fallback",
+        "_notify_warning",
     )
     shim._tgt_dropdown = MagicMock(name="tgt_dropdown")
     shim._tgt_var = MagicMock(name="tgt_var")
@@ -157,23 +121,28 @@ def stub_tgt_panel():
     return shim
 
 
-class TestRefreshTargetLanguageChoices:
-    def test_uses_backend_supported_languages(self, stub_tgt_panel) -> None:
+class TestTgtLanguageWiring:
+    def test_fallback_writes_setting_banner_and_chains_tts_check(
+        self, stub_tgt_panel,
+    ) -> None:
+        """fallback 時: set_setting + バナー + TTS 互換チェック連鎖まで配線される。"""
         stub_tgt_panel._controller.get_supported_target_languages.return_value = [
             "en", "ja", "fr",
         ]
-        stub_tgt_panel._controller.get_setting.return_value = "ja"
+        stub_tgt_panel._controller.get_setting.return_value = "xx"  # 非対応
 
         stub_tgt_panel._refresh_target_language_choices(
             "fake_backend", notify_fallback=True
         )
 
-        labels = stub_tgt_panel._tgt_dropdown.configure.call_args.kwargs["values"]
-        assert "en (English)" in labels
-        assert "ja (Japanese)" in labels
-        assert "fr (French)" in labels
-        # auto は出力側では出さない
-        assert all("auto" not in label for label in labels)
+        stub_tgt_panel._controller.set_setting.assert_called_with(
+            "languages", "tgt", "ja"
+        )
+        stub_tgt_panel._banner.show_warning.assert_called_once()
+        # tgt が変わったので TTS 互換チェックに連鎖する(shim 上は auto-mock)
+        stub_tgt_panel._check_tts_output_lang_compatibility.assert_called_once_with(
+            notify_fallback=True
+        )
 
     def test_keeps_current_if_supported(self, stub_tgt_panel) -> None:
         stub_tgt_panel._controller.get_supported_target_languages.return_value = [
@@ -187,69 +156,6 @@ class TestRefreshTargetLanguageChoices:
         stub_tgt_panel._controller.set_setting.assert_not_called()
         stub_tgt_panel._tgt_var.set.assert_called_with("ja (Japanese)")
 
-    def test_fallback_prefers_japanese(self, stub_tgt_panel) -> None:
-        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
-            "en", "ja", "fr",
-        ]
-        stub_tgt_panel._controller.get_setting.return_value = "xx"  # 非対応
-
-        stub_tgt_panel._refresh_target_language_choices(
-            "fake_backend", notify_fallback=True
-        )
-        stub_tgt_panel._controller.set_setting.assert_called_with(
-            "languages", "tgt", "ja"
-        )
-        stub_tgt_panel._banner.show_warning.assert_called_once()
-
-    def test_fallback_to_english_when_no_japanese(self, stub_tgt_panel) -> None:
-        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
-            "en", "fr", "de",
-        ]
-        stub_tgt_panel._controller.get_setting.return_value = "xx"
-
-        stub_tgt_panel._refresh_target_language_choices(
-            "fake_backend", notify_fallback=True
-        )
-        stub_tgt_panel._controller.set_setting.assert_called_with(
-            "languages", "tgt", "en"
-        )
-
-    def test_fallback_to_first_when_no_en_no_ja(self, stub_tgt_panel) -> None:
-        stub_tgt_panel._controller.get_supported_target_languages.return_value = [
-            "fr", "de", "es",
-        ]
-        stub_tgt_panel._controller.get_setting.return_value = "xx"
-
-        stub_tgt_panel._refresh_target_language_choices(
-            "fake_backend", notify_fallback=True
-        )
-        # sorted 順の先頭 = "de"
-        stub_tgt_panel._controller.set_setting.assert_called_with(
-            "languages", "tgt", "de"
-        )
-
-    def test_empty_backend_response_uses_fallback_list(self, stub_tgt_panel) -> None:
-        stub_tgt_panel._controller.get_supported_target_languages.return_value = []
-        stub_tgt_panel._controller.get_setting.return_value = "ja"
-
-        stub_tgt_panel._refresh_target_language_choices(
-            "unknown_backend", notify_fallback=False
-        )
-        labels = stub_tgt_panel._tgt_dropdown.configure.call_args.kwargs["values"]
-        # MVP セット相当の言語が出ている
-        assert "ja (Japanese)" in labels
-
-    def test_no_notification_when_notify_false(self, stub_tgt_panel) -> None:
-        stub_tgt_panel._controller.get_supported_target_languages.return_value = ["en"]
-        stub_tgt_panel._controller.get_setting.return_value = "xx"
-        stub_tgt_panel._refresh_target_language_choices(
-            "fake_backend", notify_fallback=False
-        )
-        stub_tgt_panel._controller.set_setting.assert_called_with(
-            "languages", "tgt", "en"
-        )
-        stub_tgt_panel._banner.show_warning.assert_not_called()
-
     def test_dropdown_missing_is_noop(self, stub_tgt_panel) -> None:
         stub_tgt_panel._tgt_dropdown = None
         stub_tgt_panel._refresh_target_language_choices("any", notify_fallback=True)
@@ -257,15 +163,15 @@ class TestRefreshTargetLanguageChoices:
 
 @pytest.fixture()
 def stub_tts_panel():
-    """TTS 互換チェック用 shim。"""
+    """TTS 互換チェックの配線検証用 shim。"""
     from voice_translator.gui.settings_panel import SettingsPanel
 
     shim = MagicMock(spec=SettingsPanel)
-    shim._check_tts_output_lang_compatibility = (
-        SettingsPanel._check_tts_output_lang_compatibility.__get__(shim)
-    )
-    shim._notify_tts_unsupported_lang = (
-        SettingsPanel._notify_tts_unsupported_lang.__get__(shim)
+    _bind(
+        shim,
+        "_check_tts_output_lang_compatibility",
+        "_notify_tts_unsupported_lang",
+        "_notify_warning",
     )
     shim._show_message = MagicMock()
     shim._controller = MagicMock(name="controller")
@@ -280,16 +186,8 @@ def _make_setting_fn(table: dict):
     return fn
 
 
-class TestCheckTtsOutputLangCompatibility:
-    """`_check_tts_output_lang_compatibility` の挙動。
-
-    現在の TTS backend が現在の出力言語(tgt)を読めない場合に警告バナーを出す
-    こと、対応する場合や情報不十分な場合は黙ること、を検証する。
-    """
-
-    def test_warns_when_tts_does_not_support_current_tgt(
-        self, stub_tts_panel,
-    ) -> None:
+class TestTtsCompatibilityWiring:
+    def test_warns_when_tts_does_not_support_current_tgt(self, stub_tts_panel) -> None:
         stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
             ("backends", "tts"): "fake_tts",
             ("languages", "tgt"): "fr",
@@ -301,31 +199,6 @@ class TestCheckTtsOutputLangCompatibility:
         stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=True)
 
         stub_tts_panel._banner.show_warning.assert_called_once()
-
-    def test_no_warn_when_tts_supports_current_tgt(self, stub_tts_panel) -> None:
-        stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
-            ("backends", "tts"): "fake_tts",
-            ("languages", "tgt"): "ja",
-        })
-        stub_tts_panel._controller.get_supported_output_languages.return_value = [
-            "en", "ja",
-        ]
-
-        stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=True)
-
-        stub_tts_panel._banner.show_warning.assert_not_called()
-
-    def test_no_warn_when_supported_list_empty(self, stub_tts_panel) -> None:
-        """未知(空リスト)backend は警告を出さない(誤検知より沈黙)。"""
-        stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
-            ("backends", "tts"): "fake_tts",
-            ("languages", "tgt"): "fr",
-        })
-        stub_tts_panel._controller.get_supported_output_languages.return_value = []
-
-        stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=True)
-
-        stub_tts_panel._banner.show_warning.assert_not_called()
 
     def test_no_warn_when_notify_fallback_false(self, stub_tts_panel) -> None:
         """起動時の初期化(notify_fallback=False)では対応外でも警告しない。"""
@@ -341,15 +214,16 @@ class TestCheckTtsOutputLangCompatibility:
 
         stub_tts_panel._banner.show_warning.assert_not_called()
 
-    def test_no_warn_when_no_tts_backend(self, stub_tts_panel) -> None:
-        """TTS backend 未選択時は何もしない。"""
+    def test_no_query_when_tts_none(self, stub_tts_panel) -> None:
+        """TTS=(なし) のときは supported の問い合わせ自体を行わない。"""
         stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({
-            ("backends", "tts"): "",
+            ("backends", "tts"): "none",
             ("languages", "tgt"): "fr",
         })
 
         stub_tts_panel._check_tts_output_lang_compatibility(notify_fallback=True)
 
+        stub_tts_panel._controller.get_supported_output_languages.assert_not_called()
         stub_tts_panel._banner.show_warning.assert_not_called()
 
     def test_falls_back_to_show_message_when_banner_missing(
