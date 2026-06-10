@@ -1,6 +1,6 @@
 # Class (クラス・モジュール詳細)
 
-`Architecture.html` で示したレイヤ構成と 5 スレッド構成を、**クラス/モジュール単位の責務まで落とし込んだ詳細**。
+`Architecture.html` で示したレイヤ構成とステージ編成(標準 5 ステージ)を、**クラス/モジュール単位の責務まで落とし込んだ詳細**。
 役割の上位ビュー(レイヤ・I/F・スレッド)については [Architecture.html](Architecture.html) を参照。
 
 ---
@@ -8,6 +8,10 @@
 ## 1. パイプラインステージ(各レイヤ)
 
 各レイヤは「**抽象インタフェース + 具象実装**」で構成し、差し替え可能な拡張点として残す。
+
+全 backend は編成への申告 classmethod(`covers_roles()` / `consumes_payload()` /
+`produces_payload()`)を持つ。各レイヤの抽象基底が単体ロールの既定実装を提供するため、
+単体 backend は何も書かない。複合 backend(複数ロールを 1 つで担う)だけがオーバーライドする。
 
 | インタフェース | I/F シグネチャ(プリミティブのみ) | 実装 | 備考 |
 |---|---|---|---|
@@ -17,40 +21,44 @@
 | `TranslatorBackend` | `translate(src_text, src_lang, tgt_lang) -> str` + `supported_target_languages()` / `supported_source_languages()` | `Nllb200TranslatorBackend` / `DeepLTranslatorBackend` / `OpenAiGptTranslatorBackend` / `AnthropicClaudeTranslatorBackend` | 対応言語は ISO 639-1 で宣言(クラスメソッド、未ロードで問い合わせ可)。対称な backend なら source は default(target と同じ)、非対称ならオーバーライド。NLLB はローカル、DeepL は API、GPT / Claude は LLM 翻訳(temperature=0.2、system + user 構造)。 |
 | `TtsBackend` | `synthesize(text, tgt_lang) -> (pcm, samplerate)` + `supported_output_languages()` | `SapiTtsBackend` / `PiperTtsBackend` / `ElevenLabsTtsBackend` / `OpenAiTtsBackend` / `GoogleCloudTtsBackend` | 対応読み上げ言語は classmethod で宣言(SAPI は `["ja", "en"]` 保守的)。SAPI=Windows 同梱、Piper=ONNX 軽量ローカル(マルチ OS、voice モデルは HF DL)、ElevenLabs=API key + プリメイド voice(クローニングは pendList)、OpenAI TTS=API key + 6 voice、Google Cloud TTS=サービスアカウント JSON。UI 側で「Translator 出力言語が TTS で読めない」なら警告バナー(ユーザ選択は変更しない)。 |
 | `AudioOutputBackend` | `start(id)` / `play(pcm, samplerate)` / `stop()` | `SoundcardOutputBackend` | 出力デバイスを別途指定 |
+| `AsrTranslatorBackend`(複合) | `transcribe_translate(pcm, hint, tgt_lang) -> (src_text, src_lang, tgt_text, tgt_lang)` + `supported_input_languages()` / `supported_target_languages()` / `supports_auto_detect()` | `FasterWhisperTranslateBackend` | **ASR + Translator の 2 ロールを 1 ステージで担う**(End-to-End 音声翻訳)。ASR レイヤに登録され、選択すると Translator ロールが吸収される(Translator backend はロード・認証 gate・編成の対象外)。faster_whisper_translate は Whisper の task=translate を使い、翻訳先は英語固定(`supported_target_languages() == ["en"]`)・源言語テキストは出力されない(`src_text=""`)。モデル管理は `FasterWhisperAsrBackend` を継承。 |
 
 ---
 
-## 2. パイプライン制御(5スレッド + 中央レジャ)
+## 2. パイプライン制御(編成表駆動のステージ列 + 中央レジャ)
 
 | クラス/モジュール | 役割 |
 |---|---|
-| `PipelineCoordinator` | **Input / ASR / Translator / TTS / Output の5スレッド**を起動・停止し、4本の上限付き `queue.Queue` で連携。各スレッドは `stop_event` で停止指示を受け、停止時はセンチネル投入で確実に終了する。発話メタの集約は `UtteranceLedger` に委譲。**出力モード**(`audio` / `text_only`)を持ち、`text_only` のときは TTS/Output スレッドを起動せず、Translator 完了で `on_text_ready` 発火 + `ledger.pop()` で即解放する。出力モードは `AppController.output_mode`(= `backends.tts` から派生)に従い、独立した ConfigStore キーは持たない。 |
+| `pipeline_plan` モジュール | **編成表の構築(純関数)**。`build_pipeline_plan(declarations, text_only)` が backend の申告(`RoleDeclaration`)からステージ編成(`PipelinePlan` = `StageSpec` の列 + 吸収マップ)を組み、申告の欠落・covers の非連続・隣接 payload 形式の不整合を `PlanError`(FatalError 系)で起動拒否する。発話 payload が生まれる前の区間(Capture〜VAD)は常に 1 つの入力ステージに融合する。形式変換が必要になった時の差し込み口 `PayloadAdapter`(現在は素通しのみ)もここ。走行中の動的ルーティングは行わない(編成を変える要因は設定だけで、設定は走行中に変わらない)。 |
+| `PipelineCoordinator` | **編成表どおりにステージスレッドとキューを組み立てて起動・停止**する。標準構成では Input / ASR / Translator / TTS / Output の 5 ステージ・4 キュー。各ステージは `stop_event` で停止指示を受け、停止時はセンチネル投入で確実に終了する。ステージ共通の流れ(キュー get → ロール処理 → 次段 put / 終端処理 / エラー縮退 / リトライ)は `_worker_loop` に 1 回だけ書かれ、ロール固有の中身(backend 呼び出し・計時・dump・テキストログ)は `_process_<role>` 関数群に分離。発話メタの集約は `UtteranceLedger` に委譲。終端の一般則: 最終ステージが Output なら `on_utterance_done`、でなければ最終ステージ完了で `on_text_ready` + `ledger.pop()`。`plan` プロパティで確定済み編成表を公開。 |
 | `UtteranceLedger` | seq_id をキーに、各ステージで生じる timeline / 言語 / テキスト等を集約するスレッドセーフな中央レジャ。`init / mark_time / record / pop / peek / clear` を提供。 |
 | `SequenceGenerator` | 発話に一意な連番(seq_id)を発行する atomic counter。各レイヤのログ(app.log / soundsrc.txt / translated.txt / jsonl)に seq_id を載せて対応を取れるようにする。 |
 | `PipelineMessage` | ステージ間キューを流れる封筒(`seq_id` + `payload`)。 |
+| `PayloadKind` | ステージ間データ形式の識別子(RAW / TRANSCRIBED / TRANSLATED / SYNTHESIZED / NONE)。backend の申告と編成の型整合検証に使う。 |
 | `RawPayload` / `TranscribedPayload` / `TranslatedPayload` / `SynthesizedPayload` | 各ステージで次段に渡す最小ペイロード。pcm 等の重いデータは「次段が要らなくなった時点」で運ばれない。 |
 | `VadSegment` | VAD が確定した1発話分の `(pcm, started_at_monotonic)`。Input スレッドが ledger に正確な t_capture を記録するために運ぶ。 |
 
-### スレッド/キュー構成
+### ステージ/キュー構成(標準編成)
 
-| スレッド | 入力 | 出力 | 主な処理 |
+| ステージ | 入力 | 出力 | 主な処理 |
 |---|---|---|---|
-| Input | (capture) | `captured_queue`(**バイト基準** ByteBoundedQueue) | `capture.read_chunk` → `vad.process` で VadSegment を取り出し、seq_id を発行して `RawPayload` を流す。`t_capture` / `t_vad_end` をレジャに記録。 |
+| Input(Capture+VAD 融合) | (capture) | `captured_queue`(**バイト基準** ByteBoundedQueue) | `capture.read_chunk` → `vad.process` で VadSegment を取り出し、seq_id を発行して `RawPayload` を流す。`t_capture` / `t_vad_end` をレジャに記録。 |
 | ASR | `captured_queue` | `recognized_queue`(**件数基準** queue.Queue) | キュー取出後 `t_asr_start` 記録 → `asr.transcribe(pcm, hint)` → `(text, lang)`。レジャに `src_text / src_lang / t_asr` を記録し、TextLogger に `write_src(seq_id, text, lang)`。pcm は次段に運ばれない(=ASR後に自然解放)。 |
-| Translator | `recognized_queue` | `translated_queue`(**件数基準** queue.Queue) | キュー取出後 `t_translate_start` 記録 → `translator.translate(src_text, src_lang, tgt_lang)` → str。レジャに `tgt_text / tgt_lang / t_translate` を記録、TextLogger に `write_tgt(seq_id, text, lang)`。空翻訳はレジャを pop して打ち切り。 |
+| Translator | `recognized_queue` | `translated_queue`(**件数基準** queue.Queue) | キュー取出後 `t_translate_start` 記録 → `translator.translate(src_text, src_lang, tgt_lang)` → str。レジャに `tgt_text / tgt_lang / t_translate` を記録、TextLogger に `write_tgt(seq_id, text, lang)`。空翻訳は破棄(レジャ解放は worker loop 側)。 |
 | TTS | `translated_queue` | `synthesized_queue`(**バイト基準** ByteBoundedQueue) | キュー取出後 `t_tts_start` 記録 → `tts.synthesize(text, tgt_lang)` → `(pcm, samplerate)`。レジャに `t_tts` を記録。**TTS 完了直後に `on_text_ready(ledger.peek(seq_id))` を呼び、UI 履歴を音より前に出す前倒し通知を行う**(レジャは pop せずスナップショットのみ)。 |
 | Output | `synthesized_queue` | (output) | キュー取出後 `t_playback_start` 記録 → `output.play(pcm, samplerate)` → `t_playback` 記録 → `ledger.pop(seq_id)` で record を取り出し `on_utterance_done(record)` 通知。 |
+| ASR+Translator(複合選択時) | `captured_queue` | `translated_queue` | ASR と Translator の 2 段を 1 ステージで担う。`transcribe_translate(pcm, hint, tgt_lang)` の 1 呼び出しで `TranslatedPayload` を産出し、`recognized_queue` は使われない。timeline は入口(`t_asr_start`)と出口(`t_translate`)のみ記録し、内側の境界時刻は欠損(処理時間表示は「-」に縮退)。 |
 
-- **出力モード**: 出力モードは独立キーで持たず、`backends.tts` から派生する。
-  - `backends.tts = "none"`(UI 表記「(なし)」) → **text_only**: Input / ASR / Translator の 3 スレッドのみ起動。Translator 完了で `on_text_ready` を発火し、ledger を `pop` してバッファ即解放。`translated_queue` / `synthesized_queue` には何も流れず、TTS / Output レイヤの backend ロードもスキップ。`on_utterance_done` は呼ばない(Output が無いため)。jsonl / processtime / レイヤ別 処理時間バッファへの記録は `AppController._handle_text_ready` 側で兼ねる。
-  - それ以外(SAPI / Piper / ElevenLabs ...) → **audio**: 上記 5 スレッド構成で動く。
+- **出力モード**: 出力モードは独立キーで持たず、`backends.tts` から派生する。text_only は「TTS / Output が編成表に載らない」縮退(スキップの一般則の一例)。
+  - `backends.tts = "none"`(UI 表記「(なし)」) → **text_only**: 編成は Input / ASR / Translator の 3 ステージ。最終ステージ(Translator)完了で `on_text_ready` を発火し、ledger を `pop` してバッファ即解放。`translated_queue` / `synthesized_queue` には何も流れず、TTS / Output レイヤの backend ロードもスキップ。`on_utterance_done` は呼ばない(Output が無いため)。jsonl / processtime / レイヤ別 処理時間バッファへの記録は `AppController._handle_text_ready` 側で兼ねる。
+  - それ以外(SAPI / Piper / ElevenLabs ...) → **audio**: 標準 5 ステージ編成で動く。
 - **キュー上限**: `config.yaml` の `pipeline` セクションで設定可能。
   - PCM 系 (`captured_queue` / `synthesized_queue`): **合計バイト数** で制限(`*_queue_max_bytes`、既定 500KB)。
   - テキスト系 (`recognized_queue` / `translated_queue`): **発話件数** で制限(`*_queue_size`、既定 10)。
 - **PCM 系のあふれ時(`ByteBoundedQueue`)**: 「設定値を超えるまでは積み、超えたら先頭から退避」方針。`push_evicting` で必ず新規 item は保持し、合計が上限を超えていれば古いものから退避する(2件以上残っている場合のみ)。1 件の item が単独で上限を超える場合はその item を残す → **運用上、設定値を少し超える前提**。
 - **テキスト系のあふれ時(`queue.Queue`)**: `maxsize` 到達時に古いものから捨てて新規 item を入れる。
 - **共通**: 捨てた発話はレジャから即 pop されてリーク防止。テキストは ASR / Translator 段で既に書かれているため失われない。`on_dropped(seq_ids, stage_name)` で UI に通知。
-- **エラー**: 各スレッド内で例外を捕捉し `ErrorHandler` に委譲。FATAL なら `stop_event` を立てて全スレッド停止。SKIP/RECOVERABLE は当該 seq_id をレジャから pop して継続。
+- **エラー**: 各ステージ内で例外を捕捉し `ErrorHandler` に委譲。FATAL(およびリトライ枯渇)なら `stop_event` を立てて全ステージ停止。SKIP / WARN は当該 seq_id をレジャから pop して継続。RECOVERABLE は指数バックオフで最大 3 回リトライ(枯渇 → 停止は意図的設計。ユーザはローカル backend への切替でしのぐ)。
 - **停止シーケンス**: `stop_event` セット → Input スレッド終了 → 各処理スレッドにセンチネル投入 → 上流から順に join。
 - **再 start**: 全キュー drain + `ledger.clear()` を実施し、前回の残骸を引きずらない。
 
@@ -86,7 +94,7 @@
 |---|---|
 | `AppController` | GUI と内部モジュールを繋ぐ**ランタイム**: 設定の反映・backend のロード/キャッシュ・パイプラインの起動/停止。`UtteranceLedger` と `SequenceGenerator` を生成して `PipelineCoordinator` に渡す。UI への通知はすべてイベント emit(`add_<event>_listener`)で行う。 |
 | `BackendRegistry` | レイヤ別バックエンドの登録/列挙/生成。GUIのプルダウン項目供給に使う。`register_default_backends(registry)` で標準実装を一括登録。 |
-| `BackendCatalog` | **backend クラスのメタ情報問合せ口(状態なし)**。capture_kind / 対応言語 / credential_spec / capability hint を**インスタンス化せずに**引く。未登録・例外時は安全側の既定値に縮退(GUI の防御縮退が依存する規約)。`AppController.catalog` で公開。 |
+| `BackendCatalog` | **backend クラスのメタ情報問合せ口(状態なし)**。capture_kind / 対応言語 / credential_spec / capability hint を**インスタンス化せずに**引く。未登録・例外時は安全側の既定値に縮退(GUI の防御縮退が依存する規約)。`get_supported_target_languages` は `layer=` 指定で複合 backend(ASR レイヤ登録)にも問い合わせ可能。`AppController.catalog` で公開。 |
 | `CredentialsService` | **認証情報の保管・疎通確認・verified フラグ管理**。CredentialsStore(lazy 初期化)+ ConfigStore の `credentials.*` に閉じる。`verify_and_save` は成功時のみ保存 + verified=True。backend キャッシュには触らない(認証成功後の reload はランタイム側)。`AppController.credentials` で公開。 |
 
 ### `AppController` の主要メソッド
@@ -105,7 +113,9 @@
 | `add_<event>_listener(callback) -> Subscription` | UI への全通知の購読口(Subscription 1 本に統一)。イベント種: `status`(layer, status)/ `text_ready`(record。TTS 完了直後の履歴前倒し通知。`output_mode=text_only` ではここが最終通知)/ `utterance_done`(record)/ `fatal` / `warn`(message + context kwargs)/ `settings`(set_setting のキー tuple)/ `restart`(`PipelineRestartEvent`)。listener は emit 元スレッドで呼ばれるため UI 側は `after(0, ...)` で marshalling する。 |
 | `output_mode` | プロパティ。`backends.tts` を読み、`"none"` / 空文字 / 未設定なら `"text_only"`、それ以外なら `"audio"` を返す。独立した `pipeline.output_mode` キーは持たない。 |
 | `TTS_NONE` | 定数 `"none"`。TTS=(なし) を表す ConfigStore 上の内部値。BackendRegistry にこの名前は登録しない。 |
-| `_active_layers()` | 現在の出力モードでロード/起動対象のレイヤ一覧。`text_only` では TTS / Output を除外する。 |
+| `_current_plan()` / `_active_layers()` | 現在の設定(backends.*)から編成表を組み、ロード/起動/認証 gate の対象レイヤ(= 編成表の lead)を返す。text_only の TTS / Output、複合 backend に吸収されたロールは含まれない(どちらも「編成表に載らない」の一例)。申告は registry の backend クラスから取り、`backend_cls` 未登録はレイヤ既定(単体ロール)で fallback。 |
+| `get_absorbed_roles() -> dict[LayerKind, LayerKind]` | 複合 backend に吸収されているロール → 吸収先レイヤ。UI の「(〜に吸収済み)」表示と ready 判定の除外に使う。 |
+| `get_target_language_provider()` / `get_effective_target_languages()` | 翻訳先言語の候補を決める backend(吸収時は複合側)とその対応言語。SettingsPanel の出力言語プルダウンが使う。 |
 | `get_model_status(layer)` / `get_all_model_statuses()` | 各レイヤのモデル状態を取得。内部で `backends[layer].get_status()` に委譲(状態の真実は backend 側)。未ロード layer は `INIT`。 |
 | `load_model_layer(layer)` | 単一レイヤだけをロードする(冪等)。 |
 | `load_auto_load_layers_async(on_done, on_failed)` | `auto_load=True` のレイヤだけを Loader スレッドで順次ロードする(起動シーケンス。既定では対象なし)。 |
@@ -236,13 +246,13 @@ backend 実装者は **エラーを適切な `AppError` サブクラスに分け
 | クラス | 役割 |
 |---|---|
 | `MainWindow` | アプリのルートウィンドウ。NotificationBanner / SettingsPanel / ControlPanel を内包する(customtkinter)。起動時に `load_auto_load_layers_async()` を呼ぶ(auto_load=True のレイヤのみ先行ロード、既定は対象なし)。Panel 間の参照注入はしない(各 Panel が AppController のイベントを自身で購読する)。閉じる時にパイプライン停止を保証。 |
-| `SettingsPanel` | レイヤ別実装の選択 / src/tgt 言語 / 入出力デバイス選択 / ログ出力先指定 / 設定保存・読込 + **レイヤ別モデルステータスラベル(色付き)**。「バックエンド / デバイス / 翻訳」の 3 セクション独立折り畳み。各レイヤ行に「設定」ボタンがあり、`LayerSettingsDialog` を開いてレイヤ固有の設定を編集できる。LOADED 状態のとき、device 概念を持つレイヤ(ASR/Translator)は `Loaded (cuda)` のように **実デバイス名を併記**(`AppController.get_layer_device(layer)` 経由)。**入力言語(src)プルダウンは ASR backend ごとの対応言語に動的追従**:backend 切替時に選択肢を再構築し、既存設定値が新 backend で非対応なら自動 fallback(auto 対応なら `auto`、非対応なら先頭言語)+ 通知バナーで明示(判断は `gui/logic/language_choices.py`)。表示形式は `"en (English)"`(共通言語テーブル `common/languages.py` で変換)。**入力ソース UI は CAPTURE backend の kind に応じて切替**:`capture_kind == DEVICE` ならプルダウンで `list_sources()` を表示、`PROCESS` なら「プロセス選択…」ボタンに切替し、押下で `ProcessSelectDialog` を開いて PID を選ぶ。ボタンラベルは現 PID を反映(`PID 1234 ▼`)。**動作中の入出力デバイス変更**: ハンドラは `set_setting("devices", ...)` を書くだけ(自動 restart は AppController の反応系)。restart イベントを購読して NotificationBanner に「再開中…」(started、永続)→ dismiss(completed)/ show_error(failed)を反映する。状態ラベルの更新は `add_status_listener` を自身で購読。「設定を再読込」は動作中 / ロード中は拒否して警告バナーを出す(全 backend evict が走るため)。 |
+| `SettingsPanel` | レイヤ別実装の選択 / src/tgt 言語 / 入出力デバイス選択 / ログ出力先指定 / 設定保存・読込 + **レイヤ別モデルステータスラベル(色付き)**。「バックエンド / デバイス / 翻訳」の 3 セクション独立折り畳み。各レイヤ行に「設定」ボタンがあり、`LayerSettingsDialog` を開いてレイヤ固有の設定を編集できる。LOADED 状態のとき、device 概念を持つレイヤ(ASR/Translator)は `Loaded (cuda)` のように **実デバイス名を併記**(`AppController.get_layer_device(layer)` 経由)。**入力言語(src)プルダウンは ASR backend ごとの対応言語に動的追従**:backend 切替時に選択肢を再構築し、既存設定値が新 backend で非対応なら自動 fallback(auto 対応なら `auto`、非対応なら先頭言語)+ 通知バナーで明示(判断は `gui/logic/language_choices.py`)。表示形式は `"en (English)"`(共通言語テーブル `common/languages.py` で変換)。**入力ソース UI は CAPTURE backend の kind に応じて切替**:`capture_kind == DEVICE` ならプルダウンで `list_sources()` を表示、`PROCESS` なら「プロセス選択…」ボタンに切替し、押下で `ProcessSelectDialog` を開いて PID を選ぶ。ボタンラベルは現 PID を反映(`PID 1234 ▼`)。**動作中の入出力デバイス変更**: ハンドラは `set_setting("devices", ...)` を書くだけ(自動 restart は AppController の反応系)。restart イベントを購読して NotificationBanner に「再開中…」(started、永続)→ dismiss(completed)/ show_error(failed)を反映する。状態ラベルの更新は `add_status_listener` を自身で購読。「設定を再読込」は動作中 / ロード中は拒否して警告バナーを出す(全 backend evict が走るため)。**複合 backend の吸収表示**: 吸収されたレイヤ(例: ASR+翻訳複合選択時の翻訳行)はステータス欄に「(〜に吸収済み)」+ グレー表示(文言は `gui/logic/backend_display.py:absorbed_status_text`)。プルダウンは選べるまま残す(選択は保存されるが Start 時は無視。複合をやめた時の選択を保持するため)。出力言語プルダウンは「翻訳ロールを実際に担う backend」(吸収時は複合側)の対応言語で構築される。 |
 | `ControlPanel` | 動作開始/停止トグル(**常時押下可**。「認証情報未設定」「モデル DL 中…」「プロセス未選択」のときだけ disable)、「↻ ロード」「🔊 出力テスト」ボタン、最新翻訳テキスト履歴(`#seq` 付き、クリアボタンあり)、直近平均レイテンシ表示、ステータス集約テキストボックス。**警告は UI には出さず、致命的エラーのみ履歴+「停止中(エラー)」表示**(警告も app.log には残る)。レイテンシは `timeline` の `t_vad_end → t_playback_start` 区間。**アクセラレータ集約表示**:各レイヤの `device` を集約して「演算: GPU (cuda)」「演算: CPU のみ」を色付きで表示。ボタン状態の判定はすべて `gui/logic/ready_state.py` の純関数(PROCESS kind で `devices.input` が空なら「プロセス未選択」disable。PID 選択完了は settings イベント購読で即時 enable に遷移)。**🔊 出力テストボタン**(出力切り分け用):`AppController.test_output_playback("テスト音声")` を別スレッドで呼び、TTS → Output → スピーカの経路を 1 回だけ叩く。text_only(`🔊 (TTS なし)`) / `devices.output` 空(`🔊 出力未選択`) / 動作中(`🔊 (動作中)`) で disable。**通知はすべて AppController の listener 購読**(status / text_ready / utterance_done / fatal / warn / settings の 6 本)。30 秒周期の再描画はイベント化されていない backend エラー履歴(RECOVERABLE/SKIP)の遅延表示専用。 |
 | `LayerSettingsDialog` | 単一レイヤの設定編集ウィンドウ(CTkToplevel)。`layer_settings_schema.LAYER_SETTINGS` のスキーマに従ってラベル + 入力欄を動的に構築し、保存時に `AppController.set_setting` で ConfigStore に書き戻す。バックエンド条件付きフィールド(SAPI rate 等)に対応。 |
 | `layer_settings_schema` モジュール | レイヤ別の編集可能な設定項目を `SettingField(keys, label, field_type, default, help_text, applies_when_backend)` の集まりで宣言。新項目はここに追加するだけで GUI に出る(スキーマ駆動)。 |
 | `ProcessSelectDialog` | per-process キャプチャ用のプロセス選択ダイアログ(CTkToplevel)。`capture_kind == PROCESS` の入力ソースを選ぶ専用 UI で、`SettingsPanel` の「プロセス選択…」ボタンから呼ばれる。構成: 列挙テーブル(プロセス名 + PID、ラジオ選択) / ↻ 更新 / ▶ 試聴開始・■ 停止トグル / レベルメータ(`CTkProgressBar`) / OK・Cancel。試聴は本番パイプラインと完全独立(WASAPI Process Loopback を開かない、pycaw メータのみ)。 |
 | `ProcessSelectController` | `ProcessSelectDialog` の状態機械を GUI 非依存に切り出したもの。列挙 / 選択 PID / 試聴 ON-OFF / peak decay を保持。`_PeakProvider` Protocol を経由して peak 供給元(本番は `process_enumerator` モジュールの永続ワーカ、テストは fake)を差し替えられる。GUI 不要のロジック単体テストはこのクラスを直接生成して fake provider で検証する。 |
-| `gui/logic` パッケージ | **UI 判断ロジックの純関数集**。「現在の状態 → UI に表示すべき値」の計算だけを行い、widget / AppController / ConfigStore には触らない(依存は common の純粋モジュールと標準ライブラリのみ)。Panel は「入力収集 → logic → widget へ反映」の配線役に徹する。内訳: `ready_state.py`(開始/ロード/出力テストボタンの文言・有効無効。`compute_ready_state`)/ `language_choices.py`(言語候補・fallback 判定・通知文言)/ `backend_display.py`(TTS「(なし)」・CAPTURE kind の表示↔内部値変換)/ `status_summary.py`(ステータス集約テキストの整形。golden テストで形式固定)/ `accel_summary.py`(演算: GPU/CPU 集約判定)/ `restart_messages.py`(自動 restart バナー文言)/ `palette.py`(配色定数)。テストは `tests/test_logic_*.py`(GUI 不要の純 small)。 |
+| `gui/logic` パッケージ | **UI 判断ロジックの純関数集**。「現在の状態 → UI に表示すべき値」の計算だけを行い、widget / AppController / ConfigStore には触らない(依存は common の純粋モジュールと標準ライブラリのみ)。Panel は「入力収集 → logic → widget へ反映」の配線役に徹する。内訳: `ready_state.py`(開始/ロード/出力テストボタンの文言・有効無効。`compute_ready_state`。text_only / 吸収ロールは判定から除外)/ `language_choices.py`(言語候補・fallback 判定・通知文言)/ `backend_display.py`(TTS「(なし)」・CAPTURE kind の表示↔内部値変換・吸収済み表示文言 `absorbed_status_text`)/ `status_summary.py`(ステータス集約テキストの整形。golden テストで形式固定)/ `accel_summary.py`(演算: GPU/CPU 集約判定)/ `restart_messages.py`(自動 restart バナー文言)/ `palette.py`(配色定数)。テストは `tests/test_logic_*.py`(GUI 不要の純 small)。 |
 
 ### スレッドセーフ規約
 
@@ -258,6 +268,7 @@ backend 実装者は **エラーを適切な `AppError` サブクラスに分け
 - **TTS差し替え**: `TtsBackend` の新実装(例: `VoicevoxTtsBackend`)を登録するだけで GUI のプルダウンに出現。
 - **LLM翻訳**: `TranslatorBackend` の追加実装(例: `OllamaTranslatorBackend`)を登録。
 - **新バックエンドのキャッシュ判定追加**: `cache_check` に check 関数を追加し、`AppController._CACHE_CHECKER_NAMES` に登録。
+- **複合バックエンド(複数ロール一括)**: 該当する複合 I/F(ASR+Translator なら `AsrTranslatorBackend`)を実装し、先頭ロールのレイヤに登録する。`covers_roles()` の申告だけで編成・吸収・UI 表示が連動する。新しいロール組合せ(TTS+Output 等)は複合 I/F と `PipelineCoordinator._process_*` の追加が必要。
 
 ---
 
