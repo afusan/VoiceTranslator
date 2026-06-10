@@ -285,7 +285,10 @@
 
 ---
 
-## [⏳保留 2026-05-29] cloud backend 認証テスト(skip スケルトンの埋め込み)
+## [⏳保留 2026-05-29 / 縮小 2026-06-10] cloud backend 認証テスト(skip スケルトンの埋め込み)
+> **縮小(2026-06-10)**: asr-picks / translator-picks / tts-picks の実装で OpenAI Whisper API /
+> DeepL / OpenAI TTS / Anthropic Claude / Google(file_picker 型含む)の分は実テスト化済み。
+> **skip で残るのは AWS Transcribe の 5 件のみ**(backend 未実装のため。実装時に有効化)。
 - **対象**: `tests/test_credential_flow.py` Part 2(6 クラス計 28 件、すべて `@pytest.mark.skip`)
 - **背景**: Phase E-2 で認証フローを汎用化(spec → verify → 保存 → Start gate)した際、
   各 cloud backend が満たすべき契約をテスト雛形として先置きしてある。実 backend がまだ
