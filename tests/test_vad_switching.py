@@ -1,14 +1,16 @@
-"""VAD レイヤのバックエンド切替が「適切に破棄 → 新インスタンスで再ロード」を経ることの構造テスト。
+"""VAD レイヤのバックエンド切替が「適切に破棄 → 明示ロードで新インスタンス」を経ることの構造テスト。
 
 Phase F1 で VAD レイヤに 4 つの backend (silero / webrtcvad / pyannote / pvcobra) が登録された。
 4×4 の全遷移を試す必要はない — `AppController.set_setting("backends", "vad", name)` は
-`_evict_backend_locked(layer)` → 新 backend factory 起動の **同じ経路** を通るため、
-代表系列 1〜2 本を確認すれば構造的に保証される(CLAUDE.md「構造上適当に破棄されるなら
-すべてのパターンを試す必要はない」)。
+`_evict_backend_locked(layer)` の **同じ経路** を通るため、代表系列 1〜2 本を確認すれば
+構造的に保証される(CLAUDE.md「構造上適当に破棄されるならすべてのパターンを試す必要はない」)。
+
+変更即ロードは廃止済み: `set_setting` は evict + INIT のみで、実ロードは
+Start / ↻ ロード / auto_load(テストでは `load_model_layer`)で行う。
 
 検証する 3 つの不変条件:
 1. 切替前の backend インスタンスの `subscribe()` が返した `Subscription.unsubscribe()` が呼ばれる
-2. `_backends[VAD]` が新 backend インスタンスで上書きされる(同じインスタンスではない)
+2. 明示ロード後に `_backends[VAD]` が新 backend インスタンスで上書きされる(同じインスタンスではない)
 3. 状態が `INIT → LOADED`(or `MISSING_CREDENTIALS`)を経由する
 """
 
@@ -251,22 +253,19 @@ def controller_with_4_vads(tmp_path, monkeypatch):
     return ctrl
 
 
-def _wait_for_vad_loaded(ctrl: AppController, expected_cls) -> object:
-    """`set_setting` で起動した bg load スレッドが終わるまで待ち、新 backend を返す。
+def _load_vad(ctrl: AppController, expected_cls) -> object:
+    """切替後の明示ロード(↻ ロード / Start 相当)を行い、新 backend を返す。
 
-    AppController 内部の `vt_reload_vad` スレッドが backend を `_backends[VAD]` に詰めるまで
-    数 ms 待つ。
+    変更即ロードは廃止されたので `set_setting` 後は INIT のまま。テストでは
+    `load_model_layer` で実ロード経路を踏む。
     """
-    import time
-    for _ in range(50):
-        backend = ctrl._backends.get(LayerKind.VAD)
-        if isinstance(backend, expected_cls):
-            return backend
-        time.sleep(0.02)
-    raise AssertionError(
-        f"VAD backend did not become {expected_cls.__name__} within 1s "
+    ctrl.load_model_layer(LayerKind.VAD)
+    backend = ctrl._backends.get(LayerKind.VAD)
+    assert isinstance(backend, expected_cls), (
+        f"VAD backend が {expected_cls.__name__} になっていない "
         f"(current: {type(backend).__name__ if backend else None})"
     )
+    return backend
 
 
 # ============================================================
@@ -290,7 +289,7 @@ class TestVadBackendSwitchingDisposal:
 
         # 切替 → 旧 subscription が unsubscribe される
         ctrl.set_setting("backends", "vad", "webrtcvad")
-        new_inst = _wait_for_vad_loaded(ctrl, _FakeWebRtc)
+        new_inst = _load_vad(ctrl, _FakeWebRtc)
 
         old_sub.unsubscribe.assert_called()
         # 新 backend のインスタンスは別もの
@@ -312,12 +311,12 @@ class TestVadBackendSwitchingDisposal:
 
         # → webrtcvad
         ctrl.set_setting("backends", "vad", "webrtcvad")
-        _wait_for_vad_loaded(ctrl, _FakeWebRtc)
+        _load_vad(ctrl, _FakeWebRtc)
         assert _FakeWebRtc.instance_count == 1
 
         # → pyannote(認証情報なし → MISSING_CREDENTIALS で生成されるが、_backends には入る)
         ctrl.set_setting("backends", "vad", "pyannote")
-        _wait_for_vad_loaded(ctrl, _FakePyannote)
+        _load_vad(ctrl, _FakePyannote)
         assert _FakePyannote.instance_count == 1
         # MISSING_CREDENTIALS が backend 側で立っている
         assert (
@@ -326,24 +325,25 @@ class TestVadBackendSwitchingDisposal:
 
         # → pvcobra(同じく認証無し → MISSING_CREDENTIALS)
         ctrl.set_setting("backends", "vad", "pvcobra")
-        _wait_for_vad_loaded(ctrl, _FakePvcobra)
+        _load_vad(ctrl, _FakePvcobra)
         assert _FakePvcobra.instance_count == 1
 
     def test_load_lock_serialized_no_double_load(
         self, controller_with_4_vads
     ) -> None:
-        """同じ backend に切り替えても再ロードはされない(load 経路は冪等)。
+        """同じ backend に切り替えても load 経路は冪等(evict 後の明示ロードで作り直し)。
 
-        ただし `set_setting` は evict を発火するので毎回 reload する設計。これは
-        意図通り — backends_config が変わった可能性があるため。
+        `set_setting` は同名でも evict を発火する。これは意図通り —
+        backends_config が変わった可能性があるため、次の明示ロードで新インスタンスが入る。
         """
         ctrl = controller_with_4_vads
         ctrl.load_model_layer(LayerKind.VAD)
         assert _FakeSilero.instance_count == 1
 
-        # 同じ silero に再 set_setting → evict → reload で +1
+        # 同じ silero に再 set_setting → evict、明示ロードで +1
         ctrl.set_setting("backends", "vad", "silero")
-        _wait_for_vad_loaded(ctrl, _FakeSilero)
+        assert LayerKind.VAD not in ctrl._backends, "evict されていない"
+        _load_vad(ctrl, _FakeSilero)
         assert _FakeSilero.instance_count == 2
 
 
@@ -364,7 +364,7 @@ class TestStartGateOnCredentialedVad:
         ctrl = controller_with_4_vads
         self._setup_devices(ctrl, tmp_path)
         ctrl.set_setting("backends", "vad", "pvcobra")
-        _wait_for_vad_loaded(ctrl, _FakePvcobra)
+        _load_vad(ctrl, _FakePvcobra)
         # access_key が無い → gate が落ちる
         with pytest.raises(FatalError):
             ctrl.start_pipeline()
@@ -375,7 +375,7 @@ class TestStartGateOnCredentialedVad:
         ctrl = controller_with_4_vads
         self._setup_devices(ctrl, tmp_path)
         ctrl.set_setting("backends", "vad", "pvcobra")
-        _wait_for_vad_loaded(ctrl, _FakePvcobra)
+        _load_vad(ctrl, _FakePvcobra)
         # 認証情報を入力 + verify
         result = ctrl.verify_and_save_credentials(
             LayerKind.VAD, "pvcobra", {"access_key": "ak"}
@@ -397,13 +397,13 @@ class TestStartGateOnCredentialedVad:
 
         # pvcobra で gate される
         ctrl.set_setting("backends", "vad", "pvcobra")
-        _wait_for_vad_loaded(ctrl, _FakePvcobra)
+        _load_vad(ctrl, _FakePvcobra)
         with pytest.raises(FatalError):
             ctrl.start_pipeline()
 
         # silero に戻すと gate を通る
         ctrl.set_setting("backends", "vad", "silero")
-        _wait_for_vad_loaded(ctrl, _FakeSilero)
+        _load_vad(ctrl, _FakeSilero)
         ctrl.start_pipeline()
         try:
             assert ctrl.is_running

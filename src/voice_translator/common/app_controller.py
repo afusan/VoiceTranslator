@@ -493,9 +493,12 @@ class AppController:
 
     def set_setting(self, *keys_and_value: Any) -> None:
         self._config.set(*keys_and_value)
-        # バックエンド名が変わったら、該当レイヤのキャッシュを破棄してステータスを更新する。
-        # (実体ロードはバックグラウンドで自動的に走らせる: ユーザは設定を変えたら
-        # すぐに「準備中→完了」が見える方が自然)
+        # バックエンド名が変わったら、該当レイヤのキャッシュを破棄して INIT に戻すだけ。
+        # 実ロードは「開始ボタン押下 / ↻ ロード / 起動時 auto_load」の 3 経路に寄せる。
+        # 変更即ロードは廃止: 押し間違いでも数 GB のロードが走る・ロード中の再変更で
+        # UI スレッドがロック待ちで固まる、の 2 点が実害で、即ロードを要した前提
+        # (全レイヤ LOADED でないと開始不可)は「押下時にロード」方式で消滅している。
+        # 詳細ダイアログ保存(evict のみ)とも同じ規則になる。
         if len(keys_and_value) == 3 and keys_and_value[0] == "backends":
             try:
                 layer_changed = LayerKind(keys_and_value[1])
@@ -506,21 +509,6 @@ class AppController:
                     self._evict_backend_locked(layer_changed)
                 # 該当レイヤは INIT に戻す(まだロード起動前の状態)
                 self._emit_status(layer_changed, ModelStatus.INIT)
-                # text_only モードでは TTS / Output は対象外。再ロードしない
-                # (BackendRegistry に "none" backend は存在しないので再ロードは
-                #  必ず失敗する。レイヤは INIT のまま残し、Start 時に skip される)。
-                if (
-                    layer_changed in (LayerKind.TTS, LayerKind.OUTPUT)
-                    and self.output_mode == "text_only"
-                ):
-                    pass
-                else:
-                    # バックグラウンドで即座にロードを試みる(GUI 側で進捗が見える)
-                    threading.Thread(
-                        target=lambda: self._safe_load_layer(layer_changed),
-                        daemon=True,
-                        name=f"vt_reload_{layer_changed.value}",
-                    ).start()
 
         # 言語設定が変わったら、動作中の Coordinator にも反映する(P2)。
         # `is_running` でないときは Coordinator が無いか停止中なので、次回 Start 時に
@@ -841,16 +829,6 @@ class AppController:
             target=_target, name="vt_loader", daemon=True
         )
         self._loader_thread.start()
-
-    def _safe_load_layer(self, layer: LayerKind) -> None:
-        """指定レイヤを単独でロードし直す(バックエンド差し替え時に使う)。
-
-        例外は握りつぶし(ログのみ)・status は `_load_layer_locked` 側で適切に発火する。
-        """
-        try:
-            self.load_model_layer(layer)
-        except Exception:  # noqa: BLE001
-            self._logger.exception("レイヤ %s の再ロードに失敗", layer.value)
 
     # ---- 起動 ----
     def get_auto_load_layers(self) -> list[LayerKind]:

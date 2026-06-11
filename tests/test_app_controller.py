@@ -601,7 +601,13 @@ class TestLoadModels:
     def test_backend_change_evicts_only_that_layer(
         self, populated_registry, config
     ) -> None:
-        """バックエンド名を変えると、当該レイヤだけがキャッシュから外れる。"""
+        """バックエンド名の変更は当該レイヤの evict + INIT のみ(自動再ロードはしない)。
+
+        変更即ロードは廃止済み: 実ロードは Start / ↻ ロード / auto_load に寄せる
+        (押し間違いで重いロードを走らせない・ロード中の再変更で UI を固めない)。
+        """
+        import threading
+
         # ASR にもう1つ実装を追加して切り替えできるようにする
         populated_registry.register(
             LayerKind.ASR, "alt_asr", _fake_simple_backend
@@ -613,15 +619,12 @@ class TestLoadModels:
         old_asr = ctrl._backends[LayerKind.ASR]
 
         ctrl.set_setting("backends", "asr", "alt_asr")
-        # ASR は破棄され、再ロードが起きる(別スレッドだが Mock の生成は瞬時)
-        import time
-        for _ in range(20):
-            if LayerKind.ASR in ctrl._backends:
-                break
-            time.sleep(0.05)
-        assert LayerKind.ASR in ctrl._backends, "ASR が再ロードされていない"
-        new_asr = ctrl._backends[LayerKind.ASR]
-        assert new_asr is not old_asr, "ASR インスタンスが置き換わっていない"
+        # 変更は「選択」のみ: キャッシュから外れ、ロードスレッドは起動しない
+        assert LayerKind.ASR not in ctrl._backends, "変更直後に自動ロードが走っている"
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT
+        assert not [
+            t for t in threading.enumerate() if t.name.startswith("vt_reload")
+        ], "廃止したはずの自動再ロードスレッドが起動している"
         # 他レイヤは触られていない
         for layer in LayerKind:
             if layer == LayerKind.ASR:
@@ -629,6 +632,9 @@ class TestLoadModels:
             assert ctrl._backends[layer] is kept_layers[layer], (
                 f"{layer}: 設定変更で触らなくていいキャッシュが破棄された"
             )
+        # 次の明示ロード(↻ ロード / Start 相当)で新しい選択が入る
+        ctrl.load_model_layer(LayerKind.ASR)
+        assert ctrl._backends[LayerKind.ASR] is not old_asr
 
     def test_load_models_async_invokes_on_done(
         self, populated_registry, config
@@ -739,15 +745,9 @@ class TestPhaseA2StatusDelegation:
         old_sub = ctrl._backend_subscriptions[LayerKind.ASR]
 
         ctrl.set_setting("backends", "asr", "alt_asr")
-        # 再ロード完了を待つ
-        import time
-        for _ in range(20):
-            if LayerKind.ASR in ctrl._backends and (
-                ctrl._backend_subscriptions.get(LayerKind.ASR) is not old_sub
-            ):
-                break
-            time.sleep(0.05)
+        # evict は同期で完了する(自動再ロードはしないので待ち合わせ不要)
         assert old_sub.unsubscribe.called, "旧 backend の subscription が解除されていない"
+        assert LayerKind.ASR not in ctrl._backend_subscriptions
 
 
 class TestPhaseA2MultiListener:
@@ -843,17 +843,18 @@ class TestPhaseA2LoadModelLayer:
 
         populated_registry.register(LayerKind.ASR, "broken", _failing_factory)
         ctrl = AppController(registry=populated_registry, config=config)
-        ctrl.set_setting("backends", "asr", "broken")  # 再ロードは別スレッドで失敗
-        # set_setting 由来の再ロードが完了するのを待ち、最終状態が NOT_DOWNLOADED であること
-        import time
-        for _ in range(20):
-            if ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT:
-                # まだロードが始まっていない or 終わっていない
-                time.sleep(0.05)
-            else:
-                break
-        # 失敗ロードなので backend は不在
+        ctrl.set_setting("backends", "asr", "broken")  # 変更は選択のみ(自動ロードなし)
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT
+
+        statuses: list[ModelStatus] = []
+        ctrl.add_status_listener(
+            lambda l, s: statuses.append(s) if l == LayerKind.ASR else None
+        )
+        with pytest.raises(RuntimeError):
+            ctrl.load_model_layer(LayerKind.ASR)
+        # 失敗ロードなので backend は不在、最終通知は NOT_DOWNLOADED
         assert LayerKind.ASR not in ctrl._backends
+        assert statuses[-1] == ModelStatus.NOT_DOWNLOADED
 
 
 class TestPhaseA2RecentDurations:
