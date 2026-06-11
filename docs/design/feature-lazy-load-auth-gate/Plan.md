@@ -89,10 +89,17 @@
 2. **設定再読込の差分更新**: `load_settings` は全レイヤ破棄をやめ、
    「選択 backend 名 + その backend の backends_config」が変わったレイヤだけ
    evict + INIT。変わっていないレイヤはロード済みインスタンスと状態表示を維持。
-3. **(調査)「設定を保存」で入力プロセスが無効化される件**: 原因特定済み・修正は未実施。
+3. **「設定を保存」で入力プロセスが無効化される件(修正済み)**: 原因は
    `save_settings` → `_strip_volatile_inputs_before_save` が「PID を永続化しない」
    (A-7 方針)を実現するために **実メモリの `devices.input` を空文字に書き換えて
-   から保存している**。ファイルに残さないのは意図どおりだが、実行中セッションの
+   から保存していた**こと。ファイルに残さないのは意図どおりだが、実行中セッションの
    選択まで消えるのは副作用(しかも静かな書き換えで settings イベントも出ない)。
-   修正案: 保存時はメモリを触らず「書き出すデータのコピー」から PID を除外する
-   (ConfigStore.save に書き出し前変換を渡す等)。ユーザ確認後に対応する。
+   修正: `ConfigStore.save(transform=...)` を新設し、保存時はメモリを触らず
+   **書き出し用ディープコピーから PID を除外**する(`_strip_volatile_inputs_for_save`)。
+   load 側の正規化(起動/再読込直後の in-memory 空化)は方針どおりなので維持。
+4. **「静かな書き換え」(set_setting を経由しない ConfigStore 直書き)の棚卸し**:
+   grep で全数確認(軽調査で完了、pend 不要)。残りは 2 系統のみで両方問題なし:
+   (a) load 直後の PID 正規化 — 読み込み直後で UI はその後 config から再構築されるため
+   食い違いが生じない。(b) CredentialsService の verified フラグ — GUI からの経路は
+   すべて AppController 互換窓経由で、Phase 2 以降 `("credentials", ...)` イベントを
+   emit するため現在は「静かではない」。service 直叩きの呼び出し元はコード内に無い。

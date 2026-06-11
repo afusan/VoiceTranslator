@@ -615,8 +615,10 @@ class AppController:
         # 段階 3 / A-7 確定方針: PROCESS kind の capture backend が選ばれているときは
         # `devices.input` を永続化しない。PID はアプリ再起動で別プロセスに振られるので、
         # 残しても次回起動で意味を持たない(誤って別アプリの音を取り込む事故も防ぐ)。
-        self._strip_volatile_inputs_before_save()
-        self._config.save()
+        # 除外は**書き出し用コピー**に対して行い、in-memory の選択は維持する
+        # (実メモリを空にしてから保存すると、保存のたびにセッション中のプロセス選択が
+        #  消えてしまう)。
+        self._config.save(transform=self._strip_volatile_inputs_for_save)
 
     def load_settings(self) -> None:
         """設定ファイルを読み直し、**実効内容が変わったレイヤだけ** キャッシュを破棄する。
@@ -657,36 +659,48 @@ class AppController:
             snapshot[layer] = (name, cfg)
         return snapshot
 
-    def _strip_volatile_inputs_before_save(self) -> None:
-        """save 直前のフック: PROCESS kind の capture backend なら `devices.input` を空にする。
+    def _strip_volatile_inputs_for_save(
+        self, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """save 直前の書き出しコピー変換: PROCESS kind なら `devices.input` を空にする。
 
-        ConfigStore を直接書き換える(`set_setting` だと UI 通知が発火するため、
-        save コミット用の静かな書き換え)。
+        in-memory の設定には触らない(実メモリを空にしてから保存すると、保存のたびに
+        セッション中のプロセス選択が消えてしまうため、除外はコピー側だけに行う)。
         """
-        self._clear_process_input_if_applicable()
+        if not self._is_process_capture_selected():
+            return data
+        devices = data.get("devices")
+        if isinstance(devices, dict):
+            devices["input"] = ""
+        return data
 
     def _normalize_volatile_inputs_after_load(self) -> None:
-        """load 直後のフック: PROCESS kind なら `devices.input` を空にする(セーフティ)。"""
-        self._clear_process_input_if_applicable()
+        """load 直後のフック: PROCESS kind なら `devices.input` を空にする(セーフティ)。
 
-    def _clear_process_input_if_applicable(self) -> None:
-        """現在の capture backend が PROCESS kind なら `devices.input` を空文字に揃える。"""
+        再起動 / 再読込後の PID は別プロセスを指し得るため、in-memory 側も空に揃える
+        (手動編集や旧版から引き継いだ config を想定。読み込み直後なので消える
+        セッション状態は無い)。
+        """
+        if not self._is_process_capture_selected():
+            return
+        try:
+            self._config.set("devices", "input", "")
+        except Exception:  # noqa: BLE001 - 失敗しても load を止めない
+            pass
+
+    def _is_process_capture_selected(self) -> bool:
+        """現在の capture backend が PROCESS kind か(判定不能は False)。"""
         backend_name = str(
             self._config.get("backends", LayerKind.CAPTURE.value, default="")
         )
         if not backend_name:
-            return
+            return False
         try:
             kind = self.get_capture_kind(backend_name)
         except Exception:  # noqa: BLE001
-            return
+            return False
         from .types import CaptureKind as _CK
-        if kind != _CK.PROCESS:
-            return
-        try:
-            self._config.set("devices", "input", "")
-        except Exception:  # noqa: BLE001 - 失敗しても save / load を止めない
-            pass
+        return kind == _CK.PROCESS
 
     # ============================================================
     # ロード / 起動 / 停止

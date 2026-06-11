@@ -8,7 +8,7 @@ YAML ファイルとして保存・読込する。スキーマは緩く dict と
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -193,12 +193,23 @@ class ConfigStore:
             node = node[k]
         node[keys[-1]] = value
 
-    def save(self) -> None:
-        """現在の設定を YAML ファイルに書き出す。"""
+    def save(
+        self,
+        *,
+        transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> None:
+        """現在の設定を YAML ファイルに書き出す。
+
+        transform: 書き出し直前に**データのディープコピー**へ適用する変換。
+        「ファイルには残さないが in-memory では維持する」値の除外に使う
+        (例: PROCESS kind の `devices.input` / PID)。in-memory の設定
+        (`self._data`)は変更しない。
+        """
+        data = self._data if transform is None else transform(_deepcopy(self._data))
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("w", encoding="utf-8") as f:
-                yaml.safe_dump(self._data, f, allow_unicode=True, sort_keys=False)
+                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
         except OSError as e:
             raise FatalError(f"設定ファイルを書き出せません: {self._path}", cause=e) from e
 
