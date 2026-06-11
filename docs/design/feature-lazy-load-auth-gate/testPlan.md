@@ -47,5 +47,15 @@
 - [x] load_models の冪等性(既ロードはスキップ)が維持される
 - [x] stop 後もバックエンド常駐(既存テストの温存)
 
+## Phase 4: 動作中ロック / 差分リロード
+- [x] running イベント: start_pipeline 完了で True、stop_pipeline で False(未起動 stop は emit なし)
+- [x] 動作中(running=True)は全バックエンド行のプルダウン / 設定ボタンが disabled
+- [x] 停止(running=False)で normal 復元 + 吸収 / TTS=(なし) の disable 再適用
+- [x] 動作中は編成復帰 / TTS=(なし) 解除の経路でも widget を normal に戻さない
+- [x] `_interactive_state`: running=True → disabled / False・問い合わせ失敗 → normal
+- [x] load_settings: 変更なし → 全レイヤ維持・INIT を emit しない
+- [x] load_settings: backends.<layer> 変更 → 当該レイヤのみ evict + INIT
+- [x] load_settings: backends_config(model_size 等)変更 → 当該レイヤのみ evict
+
 ## 回帰(全 Phase 共通)
-- [x] 既存 small スイート全件 pass(1,257 件 + 本ブランチ追加分)
+- [x] 既存 small スイート全件 pass(1,257 件 + 本ブランチ追加分 → 1,315 件)

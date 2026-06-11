@@ -135,6 +135,7 @@ class SettingsPanel(ctk.CTkFrame):
             controller.add_status_listener(self.on_status_change),
             controller.add_restart_listener(self._on_restart_event),
             controller.add_settings_listener(self._on_settings_event),
+            controller.add_running_listener(self._on_running_changed),
         ]
 
     # ============================================================
@@ -297,7 +298,9 @@ class SettingsPanel(ctk.CTkFrame):
         for w in rows.get(LayerKind.OUTPUT, []):
             try:
                 if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
-                    w.configure(state="disabled" if is_none else "normal")
+                    w.configure(
+                        state="disabled" if is_none else self._interactive_state()
+                    )
                 elif isinstance(w, ctk.CTkLabel) and w is not out_status:
                     w.configure(
                         text_color=DISABLED_TEXT if is_none else self._restore_text_color()
@@ -315,13 +318,50 @@ class SettingsPanel(ctk.CTkFrame):
                     )
                 elif isinstance(w, ctk.CTkButton):
                     # 設定ボタンは TTS=(なし) のとき意味がない → disable
-                    w.configure(state="disabled" if is_none else "normal")
+                    w.configure(
+                        state="disabled" if is_none else self._interactive_state()
+                    )
             except Exception:  # noqa: BLE001
                 pass
 
     def _restore_text_color(self) -> object:
         """グレーアウト解除時に戻す既定の文字色(構築時に保存した値)。"""
         return self._default_row_text_color
+
+    def _interactive_state(self) -> str:
+        """バックエンド行の操作 widget(プルダウン / 設定ボタン)の enable 状態。
+
+        動作中(`is_running`)は "disabled": 選択を変えても動作には反映されず、
+        「何で動いているのか」が表示と食い違うため、変更自体を塞ぐ。
+        devices / languages は動作中の変更に対応済みなので対象外。
+        問い合わせ失敗は「停止中」扱いに縮退(入力収集ヘルパ)。
+        """
+        try:
+            running = bool(self._controller.is_running)
+        except Exception:  # noqa: BLE001
+            running = False
+        return "disabled" if running else "normal"
+
+    def _on_running_changed(self, running: bool) -> None:
+        """running イベント(emit 元スレッド)→ バックエンド行のロック/解除を反映する。"""
+        self.after(0, lambda: self._apply_running_lock_visual(bool(running)))
+
+    def _apply_running_lock_visual(self, running: bool) -> None:
+        """動作中はバックエンド行の操作 widget をすべて disable する。
+
+        停止時は一括で normal に戻したあと、編成表示(吸収)と TTS=(なし) 由来の
+        disable を再適用して整合させる。
+        """
+        rows = getattr(self, "_backend_rows", {})
+        for widgets in rows.values():
+            for w in widgets:
+                try:
+                    if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
+                        w.configure(state="disabled" if running else "normal")
+                except Exception:  # noqa: BLE001 - widget 破棄で UI を止めない
+                    pass
+        if not running:
+            self._apply_absorbed_visuals()
 
     # ----------------------------------------------------------
     # セクション 2: デバイス
@@ -595,7 +635,8 @@ class SettingsPanel(ctk.CTkFrame):
                     if isinstance(w, ctk.CTkLabel):
                         w.configure(text_color=self._restore_text_color())
                     elif isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
-                        w.configure(state="normal")
+                        # 動作中は normal に戻さない(動作中ロックの管轄)
+                        w.configure(state=self._interactive_state())
                 except Exception:  # noqa: BLE001
                     pass
             try:

@@ -169,6 +169,7 @@ class AppController:
     # - "fatal" / "warn": (message, *, exc, stage, seq_id, suppressed)
     # - "settings":       (keys: tuple[str, ...]) … set_setting のキー(値は含めない)
     # - "restart":        (event: PipelineRestartEvent)
+    # - "running":        (running: bool) … パイプライン起動完了 / 停止
     # listener は emit 元スレッド(Loader / Coordinator / vt_restart 等)で呼ばれる。
     # UI 側は `widget.after(0, ...)` でメインスレッドへ marshalling すること。
     def add_status_listener(self, callback: UiStatusListener) -> Subscription:
@@ -200,6 +201,14 @@ class AppController:
     def add_restart_listener(self, callback: Callable[..., None]) -> Subscription:
         """動作中デバイス変更に伴う自動 restart のライフサイクル通知を購読する。"""
         return self._add_listener("restart", callback)
+
+    def add_running_listener(self, callback: Callable[[bool], None]) -> Subscription:
+        """パイプラインの起動完了 / 停止を購読する(running: bool が届く)。
+
+        用途: SettingsPanel が動作中にバックエンド行をロックする等、
+        「動作中かどうか」で UI を切り替える Panel 間同期(直接参照の代わり)。
+        """
+        return self._add_listener("running", callback)
 
     def _add_listener(self, event: str, callback: Callable[..., None]) -> Subscription:
         with self._listeners_lock:
@@ -610,18 +619,43 @@ class AppController:
         self._config.save()
 
     def load_settings(self) -> None:
+        """設定ファイルを読み直し、**実効内容が変わったレイヤだけ** キャッシュを破棄する。
+
+        比較対象はレイヤごとに「選択 backend 名」+「その backend の backends_config」。
+        どちらも同じレイヤはロード済みインスタンスと状態表示を維持する(全破棄だと
+        再読込のたびに全モデルの再ロードが必要になり、重いローカルモデルで待ち時間が
+        無駄になるため)。破棄されたレイヤは INIT に戻り、次の 開始 / ↻ ロードで
+        新しい設定のインスタンスが入る。
+        """
+        before = self._layer_effective_settings()
         self._config.load()
         # A-7 確定方針: 古い config に PROCESS kind の `devices.input` が残っていても、
         # 起動時には空扱いに正規化する(save 側でも除外しているが、手動編集や旧版から
         # 引き継いだ config を想定したセーフティ)。
         self._normalize_volatile_inputs_after_load()
-        # 設定再読込ではバックエンド名が変わっている可能性があるので、キャッシュを全破棄して
-        # INIT に戻す。GUI 側で自動ロードを再度発火する想定。
-        with self._load_lock:
-            for layer in list(self._backends.keys()):
-                self._evict_backend_locked(layer)
+        after = self._layer_effective_settings()
         for layer in LayerKind:
+            if before[layer] == after[layer]:
+                continue
+            with self._load_lock:
+                self._evict_backend_locked(layer)
             self._emit_status(layer, ModelStatus.INIT)
+
+    def _layer_effective_settings(self) -> dict[LayerKind, tuple[Any, Any]]:
+        """レイヤごとの「ロード結果に効く設定」のスナップショット(差分判定用)。
+
+        (選択 backend 名, その backend の backends_config サブツリー) のペア。
+        `_config.load()` は内部 dict を丸ごと置き換えるため、参照のままでも
+        load 前後のスナップショットが混ざることはない。
+        """
+        snapshot: dict[LayerKind, tuple[Any, Any]] = {}
+        for layer in LayerKind:
+            name = self._config.get("backends", layer.value)
+            cfg = (
+                self._config.get("backends_config", str(name)) if name else None
+            )
+            snapshot[layer] = (name, cfg)
+        return snapshot
 
     def _strip_volatile_inputs_before_save(self) -> None:
         """save 直前のフック: PROCESS kind の capture backend なら `devices.input` を空にする。
@@ -1222,9 +1256,11 @@ class AppController:
         self._coord.start(
             capture_source_id=input_id, output_device_id=output_id
         )
+        self._emit("running", True)
 
     def stop_pipeline(self) -> None:
         """Coordinator を停止する。バックエンド実体は常駐させたまま残す。"""
+        was_running = self._coord is not None
         if self._coord is not None:
             self._coord.stop()
             self._coord = None
@@ -1234,6 +1270,8 @@ class AppController:
             except Exception:  # noqa: BLE001 - ダンプ停止失敗で本体は止めない
                 self._logger.exception("StageDumpWriter.stop_run に失敗")
             self._stage_dump = None
+        if was_running:
+            self._emit("running", False)
 
     def test_output_playback(self, text: str = "テスト音声") -> None:
         """選択中の TTS / Output backend / 出力デバイスで `text` を 1 回だけ再生する。

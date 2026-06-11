@@ -666,6 +666,115 @@ class TestLoadModels:
             ctrl.stop_pipeline()
 
 
+class TestRunningEvent:
+    """パイプライン起動完了 / 停止の running イベント(動作中 UI ロックの材料)。"""
+
+    def _runnable_ctrl(self, populated_registry, config, tmp_path) -> AppController:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        return ctrl
+
+    def test_emitted_on_start_and_stop(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        ctrl = self._runnable_ctrl(populated_registry, config, tmp_path)
+        events: list[bool] = []
+        ctrl.add_running_listener(lambda r: events.append(r))
+        ctrl.start_pipeline()
+        try:
+            assert events == [True]
+        finally:
+            ctrl.stop_pipeline()
+        assert events == [True, False]
+
+    def test_stop_without_start_does_not_emit(
+        self, populated_registry, config
+    ) -> None:
+        """未起動の stop(冪等呼び出し)ではイベントを出さない。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        events: list[bool] = []
+        ctrl.add_running_listener(lambda r: events.append(r))
+        ctrl.stop_pipeline()
+        assert events == []
+
+
+class TestLoadSettingsDiff:
+    """設定再読込は「実効内容が変わったレイヤだけ」evict する(全破棄しない)。
+
+    比較対象は (選択 backend 名, その backend の backends_config)。同一なら
+    ロード済みインスタンスと状態表示を維持する(再読込のたびに重いモデルの
+    再ロードが必要になるのを避ける)。
+    """
+
+    @staticmethod
+    def _rewrite_config_file(config, mutate) -> None:
+        """保存済み config.yaml を外部編集相当で書き換える。"""
+        import yaml
+
+        data = yaml.safe_load(config.path.read_text(encoding="utf-8"))
+        mutate(data)
+        config.path.write_text(
+            yaml.safe_dump(data, allow_unicode=True), encoding="utf-8"
+        )
+
+    def test_unchanged_layers_keep_loaded_instances(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.save_settings()  # 現状をファイル化(再読込しても同一内容)
+        ctrl.load_models()
+        snapshot = dict(ctrl._backends)
+
+        statuses: list = []
+        ctrl.add_status_listener(lambda l, s: statuses.append((l, s)))
+        ctrl.load_settings()
+
+        assert dict(ctrl._backends) == snapshot, "変更が無いのに evict された"
+        assert statuses == [], "変更が無いのに INIT が emit された"
+
+    def test_changed_backend_evicts_only_that_layer(
+        self, populated_registry, config
+    ) -> None:
+        populated_registry.register(LayerKind.ASR, "alt_asr", _fake_simple_backend)
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.save_settings()
+        ctrl.load_models()
+
+        self._rewrite_config_file(
+            config, lambda d: d["backends"].__setitem__("asr", "alt_asr")
+        )
+        ctrl.load_settings()
+
+        assert LayerKind.ASR not in ctrl._backends
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT
+        for layer in LayerKind:
+            if layer != LayerKind.ASR:
+                assert layer in ctrl._backends, f"{layer}: 無関係なレイヤが破棄された"
+
+    def test_changed_backends_config_evicts_that_layer(
+        self, populated_registry, config
+    ) -> None:
+        """選択名が同じでも backends_config(model_size 等)が変われば作り直し対象。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.save_settings()
+        ctrl.load_models()
+
+        def _mutate(d):
+            d.setdefault("backends_config", {}).setdefault("faster_whisper", {})[
+                "model_size"
+            ] = "large-v3"
+
+        self._rewrite_config_file(config, _mutate)
+        ctrl.load_settings()
+
+        assert LayerKind.ASR not in ctrl._backends
+        for layer in LayerKind:
+            if layer != LayerKind.ASR:
+                assert layer in ctrl._backends
+
+
 class TestPipelineQueueConfig:
     """config.yaml の pipeline セクションがコーディネータに反映されることを確認。"""
 
