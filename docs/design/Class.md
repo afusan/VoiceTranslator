@@ -95,7 +95,7 @@
 | `AppController` | GUI と内部モジュールを繋ぐ**ランタイム**: 設定の反映・backend のロード/キャッシュ・パイプラインの起動/停止。`UtteranceLedger` と `SequenceGenerator` を生成して `PipelineCoordinator` に渡す。UI への通知はすべてイベント emit(`add_<event>_listener`)で行う。 |
 | `BackendRegistry` | レイヤ別バックエンドの登録/列挙/生成。GUIのプルダウン項目供給に使う。`register_default_backends(registry)` で標準実装を一括登録。 |
 | `BackendCatalog` | **backend クラスのメタ情報問合せ口(状態なし)**。capture_kind / 対応言語 / credential_spec / capability hint を**インスタンス化せずに**引く。未登録・例外時は安全側の既定値に縮退(GUI の防御縮退が依存する規約)。`get_supported_target_languages` は `layer=` 指定で複合 backend(ASR レイヤ登録)にも問い合わせ可能。`AppController.catalog` で公開。 |
-| `CredentialsService` | **認証情報の保管・疎通確認・verified フラグ管理**。CredentialsStore(lazy 初期化)+ ConfigStore の `credentials.*` に閉じる。`verify_and_save` は成功時のみ保存 + verified=True。backend キャッシュには触らない(認証成功後の reload はランタイム側)。`AppController.credentials` で公開。 |
+| `CredentialsService` | **認証情報の保管・疎通確認・verified フラグ管理**。CredentialsStore(lazy 初期化)+ ConfigStore の `credentials.*` に閉じる。`verify_and_save` は成功時のみ保存 + verified=True。`get_auth_state(layer, name)` は選択中 backend の認証準備状態(`AuthState`: NOT_REQUIRED / MISSING / UNVERIFIED / VERIFIED)を**インスタンス不要で静的判定**する(判定順は start 時の認証 gate と同一)。backend キャッシュには触らない(認証成功後の evict はランタイム側)。`AppController.credentials` で公開。 |
 
 ### `AppController` の主要メソッド
 
@@ -109,21 +109,22 @@
 | `stop_pipeline()` | Coordinator のみ停止(バックエンド実体は `_backends` に常駐継続)。次回 Start でロード不要。 |
 | `restart_pipeline_async(on_restarted, on_failed)` | `vt_restart` スレッドで `stop_pipeline()` → `start_pipeline()`(同期版)を直列実行する。動作中でない場合は no-op(`on_restarted` を即時呼ぶ)。多重起動は `on_failed("既に再開中です")` で拒否。主経路は `set_setting("devices", ...)` の反応系: 動作中に devices.* が書かれると自動で本メソッドが呼ばれ、ライフサイクルが restart イベント(started / completed / failed)として UI に届く(SettingsPanel がバナー表示)。 |
 | `list_capture_sources()` / `list_output_devices()` | 設定中のバックエンドを使ってデバイス列挙(GUIプルダウン供給)。 |
-| `get_setting()` / `set_setting()` / `save_settings()` / `load_settings()` | ConfigStore のラッパ。`set_setting("backends", layer, name)` は該当レイヤのキャッシュを破棄して再ロードを自動発火する。`save_settings()` / `load_settings()` は「PROCESS kind の capture backend が選ばれているとき `devices.input` を空文字に正規化する」フックを内包(`_strip_volatile_inputs_before_save` / `_normalize_volatile_inputs_after_load`)。PID はアプリ再起動で別プロセスに振られるため永続化しない(誤って別アプリの音を取り込む事故を防ぐ)。 |
-| `add_<event>_listener(callback) -> Subscription` | UI への全通知の購読口(Subscription 1 本に統一)。イベント種: `status`(layer, status)/ `text_ready`(record。TTS 完了直後の履歴前倒し通知。`output_mode=text_only` ではここが最終通知)/ `utterance_done`(record)/ `fatal` / `warn`(message + context kwargs)/ `settings`(set_setting のキー tuple)/ `restart`(`PipelineRestartEvent`)。listener は emit 元スレッドで呼ばれるため UI 側は `after(0, ...)` で marshalling する。 |
+| `get_setting()` / `set_setting()` / `save_settings()` / `load_settings()` | ConfigStore のラッパ。`set_setting("backends", layer, name)` は該当レイヤのキャッシュを破棄して INIT に戻す**だけ**(再ロードは自動発火しない。実ロードは 開始 / ↻ ロード / auto_load の 3 経路。押し間違いで重いロードを走らせない・ロード中の再変更で UI を固めないため)。`save_settings()` / `load_settings()` は「PROCESS kind の capture backend が選ばれているとき `devices.input` を空文字に正規化する」フックを内包(`_strip_volatile_inputs_before_save` / `_normalize_volatile_inputs_after_load`)。PID はアプリ再起動で別プロセスに振られるため永続化しない(誤って別アプリの音を取り込む事故を防ぐ)。 |
+| `add_<event>_listener(callback) -> Subscription` | UI への全通知の購読口(Subscription 1 本に統一)。イベント種: `status`(layer, status)/ `text_ready`(record。TTS 完了直後の履歴前倒し通知。`output_mode=text_only` ではここが最終通知)/ `utterance_done`(record)/ `fatal` / `warn`(message + context kwargs)/ `settings`(set_setting のキー tuple。認証情報の変化も `("credentials", <backend>)` でここに流れる — AuthState は status イベントが出ない経路で変わるため)/ `restart`(`PipelineRestartEvent`)。listener は emit 元スレッドで呼ばれるため UI 側は `after(0, ...)` で marshalling する。 |
 | `output_mode` | プロパティ。`backends.tts` を読み、`"none"` / 空文字 / 未設定なら `"text_only"`、それ以外なら `"audio"` を返す。独立した `pipeline.output_mode` キーは持たない。 |
 | `TTS_NONE` | 定数 `"none"`。TTS=(なし) を表す ConfigStore 上の内部値。BackendRegistry にこの名前は登録しない。 |
 | `_current_plan()` / `_active_layers()` | 現在の設定(backends.*)から編成表を組み、ロード/起動/認証 gate の対象レイヤ(= 編成表の lead)を返す。text_only の TTS / Output、複合 backend に吸収されたロールは含まれない(どちらも「編成表に載らない」の一例)。申告は registry の backend クラスから取り、`backend_cls` 未登録はレイヤ既定(単体ロール)で fallback。 |
 | `get_absorbed_roles() -> dict[LayerKind, LayerKind]` | 複合 backend に吸収されているロール → 吸収先レイヤ。UI の「(〜側で実行)」表示と ready 判定の除外に使う。 |
 | `get_target_language_provider()` / `get_effective_target_languages()` | 翻訳先言語の候補を決める backend(吸収時は複合側)とその対応言語。SettingsPanel の出力言語プルダウンが使う。 |
 | `get_model_status(layer)` / `get_all_model_statuses()` | 各レイヤのモデル状態を取得。内部で `backends[layer].get_status()` に委譲(状態の真実は backend 側)。未ロード layer は `INIT`。 |
-| `load_model_layer(layer)` | 単一レイヤだけをロードする(冪等)。 |
+| `load_model_layer(layer)` | 単一レイヤだけをロードする(冪等)。実体 `_load_layer` は**モデル構築をロック外で行う**: `_load_lock` は `_backends` / in-flight 集合 / 世代カウンタの短い読み書きに限る(UI スレッドが evict のためにロックを取っても待たされない)。同一レイヤの並行ロードは in-flight 待ち合わせで 1 回の構築を共有し、構築中に evict(設定変更)で世代が進んだら完成品を破棄して最新の設定でロードし直す(last-write-wins。構築は中断できないため完走 → 破棄)。 |
+| `get_auth_state(layer)` / `get_all_auth_states()` | 選択中 backend の認証準備状態(`AuthState`)。実体は `CredentialsService.get_auth_state`(静的判定・ロード不要)。SettingsPanel の行ステータス上書きと ready_state の開始ガードの入力。 |
 | `load_auto_load_layers_async(on_done, on_failed)` | `auto_load=True` のレイヤだけを Loader スレッドで順次ロードする(起動シーケンス。既定では対象なし)。 |
 | `get_recent_durations(layer) -> list[float]` | レイヤ別の直近 5 件処理時間(ms、古い→新しい順)。`_handle_utterance_done` で push される。詳細ダイアログ(LayerSettingsDialog)で使う。 |
-| `get_status_snapshot() -> tuple[list[LayerStatusLine], list[tuple[LayerKind, ErrorRecord]]]` | 全レイヤの状態 + 直近エラーを**整形前のデータ**で返す。各行には編成上の扱い(`disposition`: active / absorbed / skipped と吸収先情報)も載り、UI は「動かないレイヤ」を実態どおりに描画できる。文字列への整形は UI 側 `gui/logic/status_summary.py` の役割。 |
+| `get_status_snapshot() -> tuple[list[LayerStatusLine], list[tuple[LayerKind, ErrorRecord]]]` | 全レイヤの状態 + 直近エラーを**整形前のデータ**で返す。各行には編成上の扱い(`disposition`: active / absorbed / skipped と吸収先情報)と認証準備状態(`auth: AuthState`)も載り、UI は「動かないレイヤ」「認証未完了」を実態どおりに描画できる。文字列への整形は UI 側 `gui/logic/status_summary.py` の役割。 |
 | `catalog` / `credentials` プロパティ | メタ問合せの実体 `BackendCatalog` と認証フローの実体 `CredentialsService` を公開する。新規コードはこちらを直接使う。 |
 | メタ問合せ / 認証の互換窓(`get_capture_kind` / `get_supported_*_languages` / `supports_auto_detect` / `get_credential_spec` / `get_backend_capability_hint` / `get_credential` / `set_credential` / `delete_credential` / `has_credential` / `is_backend_verified` / `invalidate_verification`) | 実装本体は `BackendCatalog` / `CredentialsService` にあり、これらは既存呼び出し元互換の **1 行委譲**(参照の全付け替えと削除は将来の整理候補)。 |
-| `verify_and_save_credentials(layer, name, values) -> VerifyResult` | `CredentialsService.verify_and_save`(疎通確認 + 保存 + verified 永続化)に委譲した上で、後処理(認証成功時、該当レイヤが MISSING_CREDENTIALS なら reload)を行う。backend キャッシュに触るためこの後処理だけはランタイムの責務。 |
+| `verify_and_save_credentials(layer, name, values) -> VerifyResult` | `CredentialsService.verify_and_save`(疎通確認 + 保存 + verified 永続化)に委譲した上で、後処理を行う: 認証成功時、該当レイヤで本 backend が選択中かつロード済みなら evict して INIT に戻す(古い認証情報のインスタンスを使い続けない。即時再ロードはしない — lazy 方針)。成功時は `("credentials", <backend>)` の settings イベントも emit。backend キャッシュに触るためこの後処理だけはランタイムの責務。 |
 | `_handle_text_ready(record)` | Coordinator から呼ばれる(TTS スレッド)。レジャのスナップショットを text_ready イベントにそのまま中継し、UI 履歴を音より前に出す。 |
 | `_handle_utterance_done(record)` | Coordinator から呼ばれる(Output スレッド)。`TranslationLogger.write_record(record)` で jsonl 追記後、utterance_done イベントを emit。 |
 | `_handle_dropped(seq_ids, stage)` | Coordinator から呼ばれる。テキストは各段で既に書かれているのでログのみ。 |
@@ -143,8 +144,10 @@
               └→ Coordinator.stop() のみ。_backends は残置
 [バックエンド設定変更]
   AppController.set_setting("backends", layer, new_name)
-              └→ _backends.pop(layer) → 別スレッドで _safe_load_layer(layer)
-                                       └→ LOADING → LOADED
+              └→ _backends.pop(layer) + 世代カウンタ +1 → INIT(破棄のみ。自動再ロードしない)
+                 次の Start / ↻ ロード / auto_load で新しい選択がロードされる。
+                 ロード構築中に変更された場合は、完成品を破棄して最新の選択を
+                 ロードし直す(last-write-wins。UI はロックを待たないので固まらない)
 [動作中のデバイス変更]
   AppController.set_setting("devices", input|output, id)
               └→ vt_restart スレッド: stop_pipeline() → start_pipeline()
@@ -163,10 +166,26 @@
 | `LOADED` | "Loaded" | green | メモリ常駐済み(即使用可)。 |
 
 - 初期表示はキャッシュ有無に関係なく **全レイヤ INIT** に統一する(キャッシュ有→ LOADED と出すと、その直後に自動ロードが走って `Loaded→Loading→Loaded` の不自然な遷移になるため)。
-- 通常の遷移: `INIT → (DOWNLOADING) → LOADING → LOADED`。キャッシュ有なら DOWNLOADING はスキップ。失敗時のみ `→ NOT_DOWNLOADED`。バックエンド名を変更すると当該レイヤだけ `LOADED → INIT → ... → LOADED`。
-- 開始ボタンは常時押下可。disable になるのは `MISSING_CREDENTIALS` / `DOWNLOADING` /
+- 通常の遷移: `INIT → (DOWNLOADING) → LOADING → LOADED`。キャッシュ有なら DOWNLOADING はスキップ。失敗時のみ `→ NOT_DOWNLOADED`。バックエンド名を変更すると当該レイヤだけ `LOADED → INIT`(再ロードは次の 開始 / ↻ ロード)。
+
+### 認証準備状態 (`AuthState`) と表示の上書き
+
+`ModelStatus` がインスタンスの状態であるのに対し、`AuthState` は**選択中 backend の
+認証準備状態を設定情報だけで静的判定**したもの(NOT_REQUIRED / MISSING / UNVERIFIED /
+VERIFIED)。未ロード(Init)でも「認証が必要・未完了」を表示・ガードに使える。
+
+| AuthState | 行ステータス表示 | 色 | 意味 |
+|---|---|---|---|
+| `MISSING` | "Missing Credentials" | red | 必要な認証情報が未入力(表記はインスタンス由来の MISSING_CREDENTIALS と同一)。 |
+| `UNVERIFIED` | "Not Verified" | amber | 鍵は保存済みだが疎通確認(verify)未実施。 |
+| `NOT_REQUIRED` / `VERIFIED` | (上書きなし) | — | 通常の ModelStatus 表示に委譲。 |
+
+- 認証未完了の表示は ModelStatus より優先する(「Loaded(緑)なのに Start で認証エラー」の矛盾を見せない)。判断は `gui/logic/auth_display.py` の純関数。
+- 開始ボタンは常時押下可。disable になるのは 認証未設定(`AuthState.MISSING` or
+  `MISSING_CREDENTIALS`)/ 認証未検証(`AuthState.UNVERIFIED`)/ `DOWNLOADING` /
   PROCESS kind で入力未選択 のときだけ。`INIT` / `LOADING` 残存時はラベルで補助表示
   (「停止中(押下時にロードします)」等)。判定は `gui/logic/ready_state.py` の純関数。
+  押下時の認証 gate(`_check_missing_credentials_gate` の FatalError)は最後の防波堤として残る。
 
 ### バックエンド基底 (`BackendBase`)
 
@@ -246,13 +265,13 @@ backend 実装者は **エラーを適切な `AppError` サブクラスに分け
 | クラス | 役割 |
 |---|---|
 | `MainWindow` | アプリのルートウィンドウ。NotificationBanner / SettingsPanel / ControlPanel を内包する(customtkinter)。起動時に `load_auto_load_layers_async()` を呼ぶ(auto_load=True のレイヤのみ先行ロード、既定は対象なし)。Panel 間の参照注入はしない(各 Panel が AppController のイベントを自身で購読する)。閉じる時にパイプライン停止を保証。 |
-| `SettingsPanel` | レイヤ別実装の選択 / src/tgt 言語 / 入出力デバイス選択 / ログ出力先指定 / 設定保存・読込 + **レイヤ別モデルステータスラベル(色付き)**。「バックエンド / デバイス / 翻訳」の 3 セクション独立折り畳み。各レイヤ行に「設定」ボタンがあり、`LayerSettingsDialog` を開いてレイヤ固有の設定を編集できる。LOADED 状態のとき、device 概念を持つレイヤ(ASR/Translator)は `Loaded (cuda)` のように **実デバイス名を併記**(`AppController.get_layer_device(layer)` 経由)。**入力言語(src)プルダウンは ASR backend ごとの対応言語に動的追従**:backend 切替時に選択肢を再構築し、既存設定値が新 backend で非対応なら自動 fallback(auto 対応なら `auto`、非対応なら先頭言語)+ 通知バナーで明示(判断は `gui/logic/language_choices.py`)。表示形式は `"en (English)"`(共通言語テーブル `common/languages.py` で変換)。**入力ソース UI は CAPTURE backend の kind に応じて切替**:`capture_kind == DEVICE` ならプルダウンで `list_sources()` を表示、`PROCESS` なら「プロセス選択…」ボタンに切替し、押下で `ProcessSelectDialog` を開いて PID を選ぶ。ボタンラベルは現 PID を反映(`PID 1234 ▼`)。**動作中の入出力デバイス変更**: ハンドラは `set_setting("devices", ...)` を書くだけ(自動 restart は AppController の反応系)。restart イベントを購読して NotificationBanner に「再開中…」(started、永続)→ dismiss(completed)/ show_error(failed)を反映する。状態ラベルの更新は `add_status_listener` を自身で購読。「設定を再読込」は動作中 / ロード中は拒否して警告バナーを出す(全 backend evict が走るため)。**編成表示(動かないレイヤの実態表示)**: 吸収されたレイヤ(例: ASR+翻訳複合選択時の翻訳行)は**プルダウンと設定ボタンを disabled + ステータス欄は空表示**(無効化で「使われない」が伝わるため文言は出さない。代行 backend 名の明示は動作タブのステータス集約の役割)。text_only の TTS/Output 行はステータス欄に「(なし)」(`gui/logic/backend_display.py` の `SKIPPED_STATUS_TEXT`)。選択値そのものは保存され、複合をやめた瞬間に元の選択が復帰する。出力言語プルダウンは「翻訳ロールを実際に担う backend(吸収時は複合側)の対応言語 ∩ TTS の読み上げ可能言語」で構築される(TTS の対応言語が不明 / TTS=(なし) は絞らない。積が空になる組合せは絞らず警告に委ねる。判断は `gui/logic/language_choices.py:restrict_to_tts`)。TTS 切替時も候補を再構築する。 |
-| `ControlPanel` | 動作開始/停止トグル(**常時押下可**。「認証情報未設定」「モデル DL 中…」「プロセス未選択」のときだけ disable)、「↻ ロード」「🔊 出力テスト」ボタン、最新翻訳テキスト履歴(`#seq` 付き、クリアボタンあり)、直近平均レイテンシ表示、ステータス集約テキストボックス。**警告は UI には出さず、致命的エラーのみ履歴+「停止中(エラー)」表示**(警告も app.log には残る)。レイテンシは `timeline` の `t_vad_end → t_playback_start` 区間。**アクセラレータ集約表示**:各レイヤの `device` を集約して「演算: GPU (cuda)」「演算: CPU のみ」を色付きで表示。ボタン状態の判定はすべて `gui/logic/ready_state.py` の純関数(PROCESS kind で `devices.input` が空なら「プロセス未選択」disable。PID 選択完了は settings イベント購読で即時 enable に遷移)。**🔊 出力テストボタン**(出力切り分け用):`AppController.test_output_playback("テスト音声")` を別スレッドで呼び、TTS → Output → スピーカの経路を 1 回だけ叩く。text_only(`🔊 (TTS なし)`) / `devices.output` 空(`🔊 出力未選択`) / 動作中(`🔊 (動作中)`) で disable。**通知はすべて AppController の listener 購読**(status / text_ready / utterance_done / fatal / warn / settings の 6 本)。30 秒周期の再描画はイベント化されていない backend エラー履歴(RECOVERABLE/SKIP)の遅延表示専用。 |
+| `SettingsPanel` | レイヤ別実装の選択 / src/tgt 言語 / 入出力デバイス選択 / ログ出力先指定 / 設定保存・読込 + **レイヤ別モデルステータスラベル(色付き)**。「バックエンド / デバイス / 翻訳」の 3 セクション独立折り畳み。各レイヤ行に「設定」ボタンがあり、`LayerSettingsDialog` を開いてレイヤ固有の設定を編集できる。LOADED 状態のとき、device 概念を持つレイヤ(ASR/Translator)は `Loaded (cuda)` のように **実デバイス名を併記**(`AppController.get_layer_device(layer)` 経由)。**入力言語(src)プルダウンは ASR backend ごとの対応言語に動的追従**:backend 切替時に選択肢を再構築し、既存設定値が新 backend で非対応なら自動 fallback(auto 対応なら `auto`、非対応なら先頭言語)+ 通知バナーで明示(判断は `gui/logic/language_choices.py`)。表示形式は `"en (English)"`(共通言語テーブル `common/languages.py` で変換)。**入力ソース UI は CAPTURE backend の kind に応じて切替**:`capture_kind == DEVICE` ならプルダウンで `list_sources()` を表示、`PROCESS` なら「プロセス選択…」ボタンに切替し、押下で `ProcessSelectDialog` を開いて PID を選ぶ。ボタンラベルは現 PID を反映(`PID 1234 ▼`)。**動作中の入出力デバイス変更**: ハンドラは `set_setting("devices", ...)` を書くだけ(自動 restart は AppController の反応系)。restart イベントを購読して NotificationBanner に「再開中…」(started、永続)→ dismiss(completed)/ show_error(failed)を反映する。状態ラベルの更新は `add_status_listener` を自身で購読。「設定を再読込」は動作中 / ロード中は拒否して警告バナーを出す(全 backend evict が走るため)。**編成表示(動かないレイヤの実態表示)**: 吸収されたレイヤ(例: ASR+翻訳複合選択時の翻訳行)は**プルダウンと設定ボタンを disabled + ステータス欄は空表示**(無効化で「使われない」が伝わるため文言は出さない。代行 backend 名の明示は動作タブのステータス集約の役割)。text_only の TTS/Output 行はステータス欄に「(なし)」(`gui/logic/backend_display.py` の `SKIPPED_STATUS_TEXT`)。選択値そのものは保存され、複合をやめた瞬間に元の選択が復帰する。**認証状態の上書き表示**: 選択中 backend の `AuthState` が MISSING / UNVERIFIED の行は、ステータス欄を "Missing Credentials"(赤)/ "Not Verified"(琥珀)で上書きする(未ロードでも表示。編成表示の上書きはさらに優先。判断は `gui/logic/auth_display.py`)。認証情報の変化は settings イベント `("credentials", ...)` を購読して再描画。出力言語プルダウンは「翻訳ロールを実際に担う backend(吸収時は複合側)の対応言語 ∩ TTS の読み上げ可能言語」で構築される(TTS の対応言語が不明 / TTS=(なし) は絞らない。積が空になる組合せは絞らず警告に委ねる。判断は `gui/logic/language_choices.py:restrict_to_tts`)。TTS 切替時も候補を再構築する。 |
+| `ControlPanel` | 動作開始/停止トグル(**常時押下可**。「認証情報未設定」「認証未検証」「モデル DL 中…」「プロセス未選択」のときだけ disable)、「↻ ロード」「🔊 出力テスト」ボタン、最新翻訳テキスト履歴(`#seq` 付き、クリアボタンあり)、直近平均レイテンシ表示、ステータス集約テキストボックス。**警告は UI には出さず、致命的エラーのみ履歴+「停止中(エラー)」表示**(警告も app.log には残る)。レイテンシは `timeline` の `t_vad_end → t_playback_start` 区間。**アクセラレータ集約表示**:各レイヤの `device` を集約して「演算: GPU (cuda)」「演算: CPU のみ」を色付きで表示。ボタン状態の判定はすべて `gui/logic/ready_state.py` の純関数(PROCESS kind で `devices.input` が空なら「プロセス未選択」disable。PID 選択完了は settings イベント購読で即時 enable に遷移)。**🔊 出力テストボタン**(出力切り分け用):`AppController.test_output_playback("テスト音声")` を別スレッドで呼び、TTS → Output → スピーカの経路を 1 回だけ叩く。text_only(`🔊 (TTS なし)`) / `devices.output` 空(`🔊 出力未選択`) / 動作中(`🔊 (動作中)`) で disable。**通知はすべて AppController の listener 購読**(status / text_ready / utterance_done / fatal / warn / settings の 6 本)。30 秒周期の再描画はイベント化されていない backend エラー履歴(RECOVERABLE/SKIP)の遅延表示専用。 |
 | `LayerSettingsDialog` | 単一レイヤの設定編集ウィンドウ(CTkToplevel)。`layer_settings_schema.LAYER_SETTINGS` のスキーマに従ってラベル + 入力欄を動的に構築し、保存時に `AppController.set_setting` で ConfigStore に書き戻す。バックエンド条件付きフィールド(SAPI rate 等)に対応。 |
 | `layer_settings_schema` モジュール | レイヤ別の編集可能な設定項目を `SettingField(keys, label, field_type, default, help_text, applies_when_backend)` の集まりで宣言。新項目はここに追加するだけで GUI に出る(スキーマ駆動)。 |
 | `ProcessSelectDialog` | per-process キャプチャ用のプロセス選択ダイアログ(CTkToplevel)。`capture_kind == PROCESS` の入力ソースを選ぶ専用 UI で、`SettingsPanel` の「プロセス選択…」ボタンから呼ばれる。構成: 列挙テーブル(プロセス名 + PID、ラジオ選択) / ↻ 更新 / ▶ 試聴開始・■ 停止トグル / レベルメータ(`CTkProgressBar`) / OK・Cancel。試聴は本番パイプラインと完全独立(WASAPI Process Loopback を開かない、pycaw メータのみ)。 |
 | `ProcessSelectController` | `ProcessSelectDialog` の状態機械を GUI 非依存に切り出したもの。列挙 / 選択 PID / 試聴 ON-OFF / peak decay を保持。`_PeakProvider` Protocol を経由して peak 供給元(本番は `process_enumerator` モジュールの永続ワーカ、テストは fake)を差し替えられる。GUI 不要のロジック単体テストはこのクラスを直接生成して fake provider で検証する。 |
-| `gui/logic` パッケージ | **UI 判断ロジックの純関数集**。「現在の状態 → UI に表示すべき値」の計算だけを行い、widget / AppController / ConfigStore には触らない(依存は common の純粋モジュールと標準ライブラリのみ)。Panel は「入力収集 → logic → widget へ反映」の配線役に徹する。内訳: `ready_state.py`(開始/ロード/出力テストボタンの文言・有効無効。`compute_ready_state`。text_only / 吸収ロールは判定から除外)/ `language_choices.py`(言語候補・fallback 判定・通知文言)/ `backend_display.py`(TTS「(なし)」・CAPTURE kind の表示↔内部値変換・吸収済み表示文言 `absorbed_status_text`)/ `status_summary.py`(ステータス集約テキストの整形。golden テストで形式固定)/ `accel_summary.py`(演算: GPU/CPU 集約判定)/ `restart_messages.py`(自動 restart バナー文言)/ `palette.py`(配色定数)。テストは `tests/test_logic_*.py`(GUI 不要の純 small)。 |
+| `gui/logic` パッケージ | **UI 判断ロジックの純関数集**。「現在の状態 → UI に表示すべき値」の計算だけを行い、widget / AppController / ConfigStore には触らない(依存は common の純粋モジュールと標準ライブラリのみ)。Panel は「入力収集 → logic → widget へ反映」の配線役に徹する。内訳: `ready_state.py`(開始/ロード/出力テストボタンの文言・有効無効。`compute_ready_state`。text_only / 吸収ロールは判定から除外。認証未設定/未検証ガードも担う)/ `language_choices.py`(言語候補・fallback 判定・通知文言)/ `backend_display.py`(TTS「(なし)」・CAPTURE kind の表示↔内部値変換・対象外レイヤの `SKIPPED_STATUS_TEXT`)/ `auth_display.py`(AuthState → 行ステータス上書き文言・色)/ `status_summary.py`(ステータス集約テキストの整形。golden テストで形式固定)/ `accel_summary.py`(演算: GPU/CPU 集約判定)/ `restart_messages.py`(自動 restart バナー文言)/ `palette.py`(配色定数)。テストは `tests/test_logic_*.py`(GUI 不要の純 small)。 |
 
 ### スレッドセーフ規約
 
