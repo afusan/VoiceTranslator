@@ -113,6 +113,8 @@ def register_default_backends(
             requires_credentials=False,
             notes="proc-tap WASAPI Process Loopback。48kHz/2ch を内部で 16kHz/mono に変換。",
         ),
+        # pycaw / psutil はプロセス選択ダイアログ(process_enumerator)の依存
+        requires_modules=("proctap", "scipy", "pycaw", "psutil"),
     )
 
     # Silero VAD は config から発話区切り関連パラメータを読み込む
@@ -177,6 +179,7 @@ def register_default_backends(
         capabilities=BackendCapabilities(
             notes="webrtcvad (C 実装)。極軽量、ルールベース。"
         ),
+        requires_modules=("webrtcvad",),
     )
 
     # pyannote.audio: HF gated model + neural。重いが精度が出る。
@@ -217,6 +220,7 @@ def register_default_backends(
             terms_url="https://huggingface.co/pyannote/segmentation-3.0",
             notes="pyannote.audio 4.x VAD pipeline。segmentation-3.0 を基底に構築。HF token + 利用同意が必要。",
         ),
+        requires_modules=("pyannote.audio",),
     )
 
     # Picovoice Cobra: ローカル + アクセスキー認証(クラウドとは別パターン)。
@@ -254,6 +258,7 @@ def register_default_backends(
             terms_url="https://picovoice.ai/docs/cobra/",
             notes="pvcobra (C 実装)。ローカル動作だがアクセスキーが必要。",
         ),
+        requires_modules=("pvcobra",),
     )
 
     # faster-whisper の model_size / device / compute_type を config から取る。
@@ -328,6 +333,7 @@ def register_default_backends(
             device=ow_device,
         ),
         backend_cls=OpenAiWhisperAsrBackend,
+        requires_modules=("whisper",),
     )
 
     # OpenAI Whisper API(クラウド)。extras: `asr-openai-api`(httpx)。
@@ -350,6 +356,7 @@ def register_default_backends(
             terms_url="https://openai.com/policies/terms-of-use",
             notes="OpenAI Whisper API。25MB/req 制限あり。",
         ),
+        requires_modules=("httpx",),
     )
 
     # OpenAI Whisper API の translations 版(ASR+翻訳の複合、英語固定)。
@@ -379,6 +386,7 @@ def register_default_backends(
             terms_url="https://openai.com/policies/terms-of-use",
             notes="OpenAI Whisper API translations(ASR+翻訳の複合、英語固定)。25MB/req 制限あり。",
         ),
+        requires_modules=("httpx",),
     )
 
     # GPT 音声入力モデルによる ASR+翻訳の複合(任意の翻訳先・原文テキストも取得)。
@@ -407,6 +415,7 @@ def register_default_backends(
             terms_url="https://openai.com/policies/terms-of-use",
             notes="GPT 音声入力で書き起こし+翻訳を一括(任意の翻訳先、原文も取得)。音声トークン従量課金。",
         ),
+        requires_modules=("httpx",),
     )
 
     # Google Cloud STT(クラウド)。サービスアカウント JSON ファイル認証。
@@ -429,6 +438,7 @@ def register_default_backends(
             terms_url="https://cloud.google.com/speech-to-text",
             notes="Google Cloud STT。サービスアカウント JSON で認証。",
         ),
+        requires_modules=("google.cloud.speech",),
     )
 
     # Deepgram(クラウド)。prerecorded 短期接続パターン。
@@ -451,6 +461,7 @@ def register_default_backends(
             terms_url="https://deepgram.com/terms",
             notes="Deepgram Nova-3。prerecorded 同期 API(短期接続)。",
         ),
+        requires_modules=("deepgram",),
     )
 
     # NLLB-200 の device を config から取る
@@ -487,6 +498,7 @@ def register_default_backends(
             terms_url="https://www.deepl.com/pro-license",
             notes="DeepL API(Free/Pro 自動判定)。日本語品質トップ。",
         ),
+        requires_modules=("httpx",),
     )
 
     # OpenAI GPT(クラウド)。LLM 翻訳。extras: `translator-openai-api`。
@@ -508,6 +520,7 @@ def register_default_backends(
             terms_url="https://openai.com/policies/terms-of-use",
             notes="OpenAI GPT(LLM 翻訳)。temperature=0.2。",
         ),
+        requires_modules=("httpx",),
     )
 
     # Anthropic Claude(クラウド)。LLM 翻訳。extras: `translator-anthropic`。
@@ -530,6 +543,7 @@ def register_default_backends(
             terms_url="https://www.anthropic.com/legal/aup",
             notes="Anthropic Claude(LLM 翻訳)。temperature=0.2。",
         ),
+        requires_modules=("httpx",),
     )
 
     # SAPI は config から rate を取って渡す(設定なしなら既定 180)
@@ -557,6 +571,7 @@ def register_default_backends(
             requires_credentials=False,
             notes="Piper TTS (ONNX, CPU 軽量)。voice モデルは初回 DL。",
         ),
+        requires_modules=("piper", "huggingface_hub"),
     )
 
     # ElevenLabs TTS(クラウド)。extras: `tts-elevenlabs`(httpx)。
@@ -584,6 +599,7 @@ def register_default_backends(
             terms_url="https://elevenlabs.io/terms-of-use",
             notes="ElevenLabs TTS。プリメイド voice 主軸。クローニングは未対応(pendList)。",
         ),
+        requires_modules=("httpx",),
     )
 
     # OpenAI TTS(クラウド)。extras: `tts-openai-api`(httpx)。
@@ -609,6 +625,7 @@ def register_default_backends(
             terms_url="https://openai.com/policies/terms-of-use",
             notes="OpenAI TTS。プリメイド 6 voice。response_format=pcm で 24kHz mono。",
         ),
+        requires_modules=("httpx",),
     )
 
     # Google Cloud TTS(クラウド)。サービスアカウント JSON 認証。
@@ -636,6 +653,7 @@ def register_default_backends(
             terms_url="https://cloud.google.com/text-to-speech",
             notes="Google Cloud TTS。LINEAR16 PCM、SSML 対応(本実装は text 入力のみ)。",
         ),
+        requires_modules=("google.cloud.texttospeech",),
     )
 
     registry.register(LayerKind.OUTPUT, "soundcard", SoundcardOutputBackend)

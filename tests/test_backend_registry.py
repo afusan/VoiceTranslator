@@ -49,6 +49,28 @@ class TestBackendRegistry:
         instance = reg.create(LayerKind.ASR, "x")
         assert instance.label == "v2"
 
+
+class TestRequiresModules:
+    """opt-in extras backend の必要 import 名宣言(導入済み判定の材料)。"""
+
+    def test_default_is_empty(self) -> None:
+        """未宣言 = base 依存のみ(常に導入済み扱い)。"""
+        reg = BackendRegistry()
+        reg.register(LayerKind.ASR, "plain", lambda: _Dummy())
+        assert reg.get_requires_modules(LayerKind.ASR, "plain") == ()
+
+    def test_declared_modules_returned(self) -> None:
+        reg = BackendRegistry()
+        reg.register(
+            LayerKind.ASR, "cloudy", lambda: _Dummy(),
+            requires_modules=("httpx",),
+        )
+        assert reg.get_requires_modules(LayerKind.ASR, "cloudy") == ("httpx",)
+
+    def test_unregistered_returns_empty(self) -> None:
+        reg = BackendRegistry()
+        assert reg.get_requires_modules(LayerKind.ASR, "nope") == ()
+
     def test_layer_isolation(self) -> None:
         reg = BackendRegistry()
         reg.register(LayerKind.ASR, "shared", lambda: _Dummy("asr"))

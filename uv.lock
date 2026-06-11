@@ -7022,6 +7022,22 @@ cuda = [
     { name = "torch", version = "2.12.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
     { name = "torchaudio", version = "2.11.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
+full = [
+    { name = "deepgram-sdk" },
+    { name = "google-cloud-speech" },
+    { name = "google-cloud-texttospeech" },
+    { name = "httpx" },
+    { name = "huggingface-hub" },
+    { name = "onnxruntime" },
+    { name = "openai-whisper" },
+    { name = "piper-tts" },
+    { name = "proc-tap" },
+    { name = "psutil" },
+    { name = "pvcobra" },
+    { name = "pyannote-audio" },
+    { name = "pycaw" },
+    { name = "webrtcvad-wheels" },
+]
 translator-anthropic = [
     { name = "httpx" },
 ]
@@ -7093,9 +7109,10 @@ requires-dist = [
     { name = "torchaudio", marker = "extra == 'cpu'", specifier = ">=2.8", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "voice-translator", extra = "cpu" } },
     { name = "torchaudio", marker = "extra == 'cuda'", specifier = ">=2.8", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "voice-translator", extra = "cuda" } },
     { name = "transformers", specifier = ">=4.40" },
+    { name = "voice-translator", extras = ["vad-extra", "asr-whisper-official", "asr-openai-api", "asr-google-stt", "asr-deepgram", "translator-deepl", "translator-openai-api", "translator-anthropic", "tts-piper", "tts-elevenlabs", "tts-openai-api", "tts-google", "capture-proctap"], marker = "extra == 'full'" },
     { name = "webrtcvad-wheels", marker = "extra == 'vad-extra'", specifier = ">=2.0.10" },
 ]
-provides-extras = ["cpu", "cuda", "vad-extra", "asr-whisper-official", "asr-openai-api", "asr-google-stt", "asr-deepgram", "translator-deepl", "translator-openai-api", "translator-anthropic", "tts-piper", "tts-elevenlabs", "tts-openai-api", "tts-google", "capture-proctap"]
+provides-extras = ["cpu", "cuda", "vad-extra", "asr-whisper-official", "asr-openai-api", "asr-google-stt", "asr-deepgram", "translator-deepl", "translator-openai-api", "translator-anthropic", "tts-piper", "tts-elevenlabs", "tts-openai-api", "tts-google", "capture-proctap", "full"]
 
 [package.metadata.requires-dev]
 dev = [

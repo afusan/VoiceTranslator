@@ -119,6 +119,16 @@ capture-proctap = [
     "pycaw>=20240210",
     "psutil>=5.9",
 ]
+# 集約プリセット(自己参照 extras)。機能系 extras の「全部のせ」を 1 個に束ねる:
+#   py -m uv sync --extra cpu  --extra full   (CPU 全部のせ)
+#   py -m uv sync --extra cuda --extra full   (CUDA 全部のせ)
+# 新しい機能 extras を追加したらここにも追記すること。
+# 注意: cpu / cuda は **full に含めない**。自己参照 extras 経由で活性化すると
+# [tool.uv.sources] の torch index 選択(+cpu / +cu126)が効かず、素の PyPI torch に
+# 化けることを確認済み(uv export で検証)。演算系は従来どおり直接指定する。
+full = [
+    "voice-translator[vad-extra,asr-whisper-official,asr-openai-api,asr-google-stt,asr-deepgram,translator-deepl,translator-openai-api,translator-anthropic,tts-piper,tts-elevenlabs,tts-openai-api,tts-google,capture-proctap]",
+]
 
 [tool.uv]
 conflicts = [

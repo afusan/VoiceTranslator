@@ -12,6 +12,7 @@ capability hint を、**インスタンス化せずに**引く。設定ダイア
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 
 from .backend_registry import BackendRegistry
@@ -26,6 +27,31 @@ class BackendCatalog:
     ) -> None:
         self._registry = registry
         self._logger = logger or logging.getLogger("voice_translator")
+
+    # ---- 導入済み判定 ----
+    def is_backend_available(self, layer: LayerKind, name: str) -> bool:
+        """指定 backend の依存パッケージが導入済みかを返す。
+
+        登録時に宣言された `requires_modules` を `importlib.util.find_spec` で
+        **実 import せずに**判定する(UI のプルダウン構築を遅くしない)。
+        宣言なし(base 依存のみ)は常に True。判定不能(find_spec 自体の例外等)は
+        True に縮退する — 誤判定で隠すより、選んでロード失敗(Not Downloaded +
+        エラー案内)に倒す方が安全。
+        """
+        for module_name in self._registry.get_requires_modules(layer, name):
+            if not self._module_available(module_name):
+                return False
+        return True
+
+    @staticmethod
+    def _module_available(module_name: str) -> bool:
+        """import 名 1 つの導入判定。dotted 名の親パッケージ不在も「未導入」扱い。"""
+        try:
+            return importlib.util.find_spec(module_name) is not None
+        except ModuleNotFoundError:
+            return False  # dotted 名("pyannote.audio" 等)の親不在はここに来る
+        except Exception:  # noqa: BLE001 - 判定不能は「隠さない」へ縮退
+            return True
 
     # ---- 音声取得 backend の取得単位 ----
     def get_capture_kind(self, backend_name: str) -> CaptureKind:
