@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>複合 backend 候補(複数ロール一括)</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", "Hiragino Sans", sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 16px; color: #1f2937; }
+  h1 { font-size: 22px; border-bottom: 2px solid #475569; padding-bottom: 6px; }
+  h2 { font-size: 18px; margin-top: 28px; color: #1e3a8a; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0 20px; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 8px; vertical-align: top; text-align: left; }
+  th { background: #f1f5f9; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .local  { color: #16a34a; font-weight: bold; }
+  .cloud  { color: #2563eb; font-weight: bold; }
+  .no-auth { color: #64748b; }
+  .auth-key { color: #c2410c; font-weight: bold; }
+  .legend { font-size: 12px; color: #475569; margin-bottom: 16px; }
+  code { background: #f1f5f9; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  .impl { background: #dcfce7 !important; }
+  .impl-mark { color: #15803d; font-weight: bold; }
+  .cand { color: #b45309; }
+  .out { color: #94a3b8; }
+</style>
+</head>
+<body>
+
+<h1>複合 backend 候補(複数ロール一括)</h1>
+<p class="legend">
+  <a href="backendCandidates.html">backendCandidates.html</a>(レイヤ別の単体 backend 候補)の姉妹版。
+  ここでは「<b>連続する複数ロールを 1 つの backend が一括処理する</b>」候補を扱う。
+  編成表機構(<code>covers_roles</code> 申告 → ロール吸収)の上に乗るもので、
+  緑背景 = <span class="impl-mark">実装済み</span> / <span class="cand">候補</span> = 依存追加や機構拡張が
+  必要になった時点で着手 / <span class="out">対象外</span> = 現機構と形が合わない。
+  価格は変動するため目安(発注前に公式確認)。
+</p>
+
+<!-- ============================================================ -->
+<h2>1. 複合の型と編成機構の対応状況</h2>
+<table>
+  <thead>
+    <tr><th>ロール組合せ</th><th>機構の対応</th><th>必要な追加(未対応の場合)</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>ASR + Translator</b>(音声 → 翻訳テキスト)</td>
+      <td class="impl-mark">対応済み</td>
+      <td>なし(複合 I/F <code>AsrTranslatorBackend</code> + processor 実装済み。新候補は backend 実装と登録のみ)</td>
+    </tr>
+    <tr>
+      <td><b>TTS + Output</b>(テキスト → 直接再生)</td>
+      <td class="cand">機構は素通し可・I/F 未定義</td>
+      <td>複合 I/F(例: <code>synthesize_play(text, lang)</code>)+ <code>_process_tts_output</code>。終端の一般則(Output を含む = on_utterance_done)はそのまま使える</td>
+    </tr>
+    <tr>
+      <td><b>Translator + TTS</b>(原文テキスト → 翻訳音声)</td>
+      <td class="cand">同上</td>
+      <td>複合 I/F + processor。LLM の 1 ショット(翻訳+音声生成)が現実的になった時点で検討</td>
+    </tr>
+    <tr>
+      <td><b>Capture + VAD (+ ASR)</b>(ストリーミング)</td>
+      <td class="out">スコープ外</td>
+      <td>request/response 前提の入力ステージ・リトライと形が合わない(再接続は backend 内責務になる)。入力ステージ融合の構造だけ温存済み</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>2. ASR + Translator(End-to-End 音声翻訳)候補</h2>
+<table>
+  <thead>
+    <tr>
+      <th>名前</th><th>形態</th><th>認証</th><th>翻訳先</th><th>原文取得</th><th>コスト</th><th>備考</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="impl">
+      <td><code>faster_whisper_translate</code> <span class="impl-mark">✓実装済</span></td>
+      <td><span class="local">ローカル</span></td>
+      <td class="no-auth">不要</td>
+      <td>英語固定</td>
+      <td>✗(translate は訳のみ)</td>
+      <td>無料(モデル DL のみ)</td>
+      <td>Whisper の task=translate。既存 faster-whisper のモデル管理を継承、追加依存ゼロ。CPU floor 維持</td>
+    </tr>
+    <tr class="impl">
+      <td><code>openai_whisper_api_translate</code> <span class="impl-mark">✓実装済</span></td>
+      <td><span class="cloud">クラウド</span></td>
+      <td class="auth-key">API key(OpenAI)</td>
+      <td>英語固定</td>
+      <td>✗</td>
+      <td>従量(whisper-1 の音声分単位)</td>
+      <td><code>POST /v1/audio/translations</code>。whisper-1 のみ対応・language パラメータ非対応・25MB/req。ローカル版のクラウド対(認証フローの動作確認に最適)</td>
+    </tr>
+    <tr class="impl">
+      <td><code>gpt_audio_translate</code> <span class="impl-mark">✓実装済</span></td>
+      <td><span class="cloud">クラウド</span></td>
+      <td class="auth-key">API key(OpenAI)</td>
+      <td><b>任意</b>(LLM 翻訳と同セット)</td>
+      <td><b>◯</b>(JSON 契約で transcript も返させる)</td>
+      <td>従量(音声トークン。既定の mini 系は分あたり 1 円未満の目安、上位モデルは 1 桁上)</td>
+      <td>chat/completions の <code>input_audio</code>(base64 WAV)。既定 <code>gpt-4o-mini-audio-preview</code>(設定で変更可)。JSON 契約が崩れた場合は本文全体を訳として縮退</td>
+    </tr>
+    <tr>
+      <td>SeamlessM4T v2(Meta)</td>
+      <td><span class="local">ローカル</span></td>
+      <td class="no-auth">不要(HF モデル DL)</td>
+      <td>多言語(S2TT 96+)</td>
+      <td>◯</td>
+      <td>無料(モデル ~9GB 級、GPU 推奨)</td>
+      <td class="cand">候補。transformers 経由で S2TT が 1 コール。リソース要件が重く CPU floor とは相性注意 → opt-in extras 前提。公開ベンチマークが充実(FLEURS 等)</td>
+    </tr>
+    <tr>
+      <td>Azure AI Speech(speech translation)</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td class="auth-key">API key + region</td>
+      <td>多言語</td>
+      <td>◯</td>
+      <td>従量(音声時間単位)</td>
+      <td class="cand">候補。専用 SDK(azure-cognitiveservices-speech)が必要でストリーミング前提の I/F。発話単位 API に合わせる工夫が要る(REST の短音声 API は制約あり)</td>
+    </tr>
+    <tr>
+      <td>Gemini(audio understanding)</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td class="auth-key">API key(Google)</td>
+      <td>任意(プロンプト指定)</td>
+      <td>◯</td>
+      <td>従量(音声トークン)</td>
+      <td class="cand">候補。音声入力 + 翻訳指示の 1 コールで gpt_audio_translate と同型。google-genai 依存の追加が必要。マルチモーダル文脈(用語集の同梱等)に強み</td>
+    </tr>
+    <tr>
+      <td>Deepgram / AssemblyAI 等(ASR 専業)</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td class="auth-key">API key</td>
+      <td>—</td>
+      <td>—</td>
+      <td>—</td>
+      <td class="out">対象外。翻訳を内蔵しないため複合にならない(単体 ASR としては採用済み/候補)</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>3. TTS + Output / Translator + TTS 候補(機構拡張後)</h2>
+<table>
+  <thead>
+    <tr><th>名前</th><th>組合せ</th><th>形態</th><th>認証</th><th>備考</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>SAPI 直接再生(pyttsx3 say/runAndWait)</td>
+      <td>TTS + Output</td>
+      <td><span class="local">ローカル</span></td>
+      <td class="no-auth">不要</td>
+      <td class="cand">最小の動作確認用候補。OS 既定デバイスへ直接再生するため<b>出力デバイス選択が効かなくなる</b>制約を UI にどう出すかが論点</td>
+    </tr>
+    <tr>
+      <td>ElevenLabs streaming playback</td>
+      <td>TTS + Output</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td class="auth-key">API key</td>
+      <td class="cand">stream API + ローカル再生ヘルパ。合成完了を待たずに鳴り始めるためレイテンシ短縮の検証価値あり</td>
+    </tr>
+    <tr>
+      <td>GPT audio(modalities=audio)</td>
+      <td>Translator + TTS</td>
+      <td><span class="cloud">クラウド</span></td>
+      <td class="auth-key">API key(OpenAI)</td>
+      <td class="cand">テキスト入力 → 翻訳 + 音声生成を 1 コール(出力 audio)。gpt_audio_translate と同じ呼び出し系で実装は軽い。音声出力トークンは入力より高単価</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>4. 選定(2026-06-10)</h2>
+<ul>
+  <li><b>実装済み 3 パターン</b>で「複合の動作確認の品揃え」を構成:
+    <ul>
+      <li><code>faster_whisper_translate</code> — ローカル・無認証(縦通しの基準)</li>
+      <li><code>openai_whisper_api_translate</code> — クラウド・認証あり・<b>英語固定 / 原文なし</b>型</li>
+      <li><code>gpt_audio_translate</code> — クラウド・認証あり・<b>任意言語 / 原文あり</b>型</li>
+    </ul>
+  </li>
+  <li><b>選定理由</b>: OpenAI 系 2 種は既存依存(httpx)と既存の認証フロー(単一 API key)を
+    そのまま流用でき、追加インストール無しで「認証あり複合」の実機確認ができる。
+    また「英語固定×原文なし」「任意言語×原文あり」で複合の表示・言語連動の両極をカバーする。</li>
+  <li><b>API key の使い回し</b>: 自前 namespace(<code>openai_whisper_api_translate</code> /
+    <code>gpt_audio_translate</code>)を優先し、未設定なら同じ OpenAI key を使う既存 backend
+    (<code>openai_whisper_api</code> / <code>openai_gpt</code>)の保存値に fallback する。</li>
+  <li><b>見送り(トリガー待ち)</b>: SeamlessM4T(重依存・GPU 前提)/ Azure(専用 SDK +
+    ストリーミング I/F)/ Gemini(google-genai 依存追加)。TTS+Output 系は複合 I/F と
+    processor の追加が前提のため、必要になった時点で機構拡張とセットで着手。</li>
+</ul>
+
+</body>
+</html>

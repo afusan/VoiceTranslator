@@ -198,21 +198,7 @@ class OpenAiWhisperApiAsrBackend(AsrBackend):
                 f"OpenAI Whisper API リクエスト失敗: {e}", cause=e
             ) from e
 
-        if resp.status_code in (401, 403):
-            # 認証エラーは恒久障害(再試行しても無駄)→ Fatal
-            raise FatalError(
-                f"OpenAI API 認証エラー (HTTP {resp.status_code}): "
-                "API Key が無効か取り消されています"
-            )
-        if resp.status_code in (429, 500, 502, 503, 504):
-            # レート制限 / 一時障害は Recoverable
-            raise RecoverableError(
-                f"OpenAI API 一時障害 (HTTP {resp.status_code})"
-            )
-        if resp.status_code != 200:
-            raise FatalError(
-                f"OpenAI API 異常応答 (HTTP {resp.status_code}): {resp.text[:200]}"
-            )
+        self._raise_for_api_status(resp)
 
         try:
             payload = resp.json()
@@ -230,6 +216,28 @@ class OpenAiWhisperApiAsrBackend(AsrBackend):
         else:
             lang_out = src_lang_hint
         return text, lang_out
+
+    # ----------------------------------------------------------
+    @staticmethod
+    def _raise_for_api_status(resp: Any) -> None:
+        """OpenAI API の HTTP ステータスを severity 付き例外に写像する(200 は素通し)。
+
+        401/403 → FatalError(恒久障害) / 429/5xx → RecoverableError(リトライ対象)。
+        translations 系のサブクラスも同じ写像を使う。
+        """
+        if resp.status_code in (401, 403):
+            raise FatalError(
+                f"OpenAI API 認証エラー (HTTP {resp.status_code}): "
+                "API Key が無効か取り消されています"
+            )
+        if resp.status_code in (429, 500, 502, 503, 504):
+            raise RecoverableError(
+                f"OpenAI API 一時障害 (HTTP {resp.status_code})"
+            )
+        if resp.status_code != 200:
+            raise FatalError(
+                f"OpenAI API 異常応答 (HTTP {resp.status_code}): {resp.text[:200]}"
+            )
 
     # ----------------------------------------------------------
     def capabilities(self) -> BackendCapabilities:

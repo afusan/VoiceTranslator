@@ -145,3 +145,39 @@ class TestGuiEventsSection:
 
     def test_append_gui_events_without_events_returns_input(self) -> None:
         assert append_gui_events("base", []) == "base"
+
+
+class TestDispositionLines:
+    """編成上「動かないレイヤ」の行表示(吸収 / 対象外)の固定文言。"""
+
+    def test_absorbed_line_shows_effective_runner(self) -> None:
+        line = LayerStatusLine(
+            layer=LayerKind.TRANSLATOR,
+            backend_name="nllb200",  # 設定値は残っているが表示しない(動かないため)
+            status=ModelStatus.INIT,
+            disposition="absorbed",
+            absorbed_into="asr",
+            absorbed_backend="faster_whisper_translate",
+        )
+        out = format_status_summary([line], [], [])
+        assert out == "[translator] (asr の faster_whisper_translate で実行)"
+        assert "nllb200" not in out
+
+    def test_skipped_line_shows_none(self) -> None:
+        line = LayerStatusLine(
+            layer=LayerKind.TTS,
+            backend_name="sapi",
+            status=ModelStatus.INIT,
+            disposition="skipped",
+        )
+        out = format_status_summary([line], [], [])
+        assert out == "[tts] (なし)"
+
+    def test_active_line_format_unchanged(self) -> None:
+        """既定(active)の行は従来形式のまま(golden の互換)。"""
+        line = LayerStatusLine(
+            layer=LayerKind.ASR,
+            backend_name="faster_whisper",
+            status=ModelStatus.LOADED,
+        )
+        assert format_status_summary([line], [], []) == "[asr] faster_whisper: Loaded"

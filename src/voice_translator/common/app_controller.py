@@ -248,17 +248,40 @@ class AppController:
         をデータとして集めるだけ。backend が `BackendBase` 由来でない場合(モック等)は
         ベストエフォートで縮退する。
         """
+        # 現在の編成での各レイヤの扱い(吸収 / 対象外)を行に載せる。
+        # 編成が組めない設定でもステータス表示自体は出せるよう、全 active に縮退。
+        try:
+            plan = self._current_plan()
+            absorbed = plan.absorbed_map
+            leads = set(plan.lead_layers)
+        except Exception:  # noqa: BLE001
+            absorbed, leads = {}, set(LayerKind)
+
         lines: list[LayerStatusLine] = []
         for layer in LayerKind:
             backend_name = self._config.get("backends", layer.value, default="-")
             status = self.get_model_status(layer)
             tail = self._dl_size_hint(layer) if status == ModelStatus.DOWNLOADING else ""
+            if layer in absorbed:
+                lead = absorbed[layer]
+                disposition = "absorbed"
+                absorbed_into = lead.value
+                absorbed_backend = str(
+                    self._config.get("backends", lead.value, default="") or ""
+                )
+            elif layer not in leads:
+                disposition, absorbed_into, absorbed_backend = "skipped", "", ""
+            else:
+                disposition, absorbed_into, absorbed_backend = "active", "", ""
             lines.append(
                 LayerStatusLine(
                     layer=layer,
                     backend_name=str(backend_name),
                     status=status,
                     dl_size_hint=tail,
+                    disposition=disposition,
+                    absorbed_into=absorbed_into,
+                    absorbed_backend=absorbed_backend,
                 )
             )
         return lines, self._collect_recent_errors()

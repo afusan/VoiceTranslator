@@ -304,3 +304,19 @@ class TestExpectedFields:
         fields = visible_fields(LayerKind.TTS, current_backend="sapi")
         keys = [f.keys for f in fields]
         assert ("backends_config", "sapi", "rate") in keys
+
+
+class TestCaptureProctapInputGain:
+    """ProcTap の入力ゲインがスキーマ宣言されている(設定ダイアログに出る)こと。"""
+
+    def test_field_declared_for_proctap_only(self) -> None:
+        from voice_translator.common.types import LayerKind
+        from voice_translator.gui.layer_settings_schema import LAYER_SETTINGS
+
+        field = next(
+            f for f in LAYER_SETTINGS[LayerKind.CAPTURE]
+            if f.keys == ("backends_config", "proctap", "input_gain")
+        )
+        assert field.field_type == "float"
+        assert field.default == 1.0
+        assert field.applies_when_backend == "proctap"

@@ -1,4 +1,4 @@
-"""gui/logic/backend_display.py の単体テスト(純関数)。
+﻿"""gui/logic/backend_display.py の単体テスト(純関数)。
 
 旧 test_settings_panel_tts_none.py / test_capture_kind.py のモジュール関数テストから
 変換シナリオを移植(P1 / refactor-ui-3move)。
@@ -87,15 +87,15 @@ class TestLayerDispatch:
         assert backend_internal_to_display(LayerKind.ASR, "faster_whisper") == "faster_whisper"
 
 
-class TestAbsorbedStatusText:
-    """吸収済み表示の固定文言(変更はふるまい変更としてここに現れる)。"""
+class TestSkippedStatusText:
+    """編成表示の固定文言(変更はふるまい変更としてここに現れる)。
 
-    def test_absorbed_by_asr(self) -> None:
-        from voice_translator.gui.logic.backend_display import absorbed_status_text
+    吸収レイヤのステータス欄文言(absorbed_status_text)は撤去済み: 設定パネルでは
+    プルダウン無効化 + 空表示で伝え、代行 backend 名の明示はステータス集約
+    (status_summary)に一本化した。
+    """
 
-        assert absorbed_status_text(LayerKind.ASR) == "(ASR に吸収済み)"
+    def test_skipped_status_text(self) -> None:
+        from voice_translator.gui.logic.backend_display import SKIPPED_STATUS_TEXT
 
-    def test_absorbed_by_capture(self) -> None:
-        from voice_translator.gui.logic.backend_display import absorbed_status_text
-
-        assert absorbed_status_text(LayerKind.CAPTURE) == "(音声取得 に吸収済み)"
+        assert SKIPPED_STATUS_TEXT == "(なし)"

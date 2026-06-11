@@ -31,9 +31,9 @@ from .collapsible_section import CollapsibleSection
 from .consent_dialog import ConsentDialog
 from .layer_settings_dialog import LayerSettingsDialog
 from .logic.backend_display import (
+    SKIPPED_STATUS_TEXT,
     TTS_NONE_DISPLAY,
     TTS_NONE_INTERNAL,
-    absorbed_status_text,
     backend_display_to_internal,
     backend_internal_to_display,
     capture_internal_to_display,
@@ -44,6 +44,7 @@ from .logic.language_choices import (
     format_src_fallback_message,
     format_tgt_fallback_message,
     format_tts_warning_message,
+    restrict_to_tts,
     tts_warning_needed,
 )
 from .logic.palette import DISABLED_TEXT, STATUS_COLOR_DEFAULT, STATUS_COLORS
@@ -88,8 +89,9 @@ class SettingsPanel(ctk.CTkFrame):
 
         self._backend_vars: dict[LayerKind, ctk.StringVar] = {}
         self._status_labels: dict[LayerKind, ctk.CTkLabel] = {}
-        # 複合 backend に吸収中のロール(ステータス欄の「吸収済み」表示の維持用)
-        self._absorbed_shown: set[LayerKind] = set()
+        # ステータス欄を編成表示(「〜側で実行」/「(なし)」)で上書き中のレイヤ。
+        # ここに入っている間は実ステータスでの再描画をブロックする。
+        self._status_overridden: set[LayerKind] = set()
         self._capture_var = ctk.StringVar(value="(未選択)")
         self._output_var = ctk.StringVar(value="(未選択)")
         # 言語プルダウンは表示形式 "en (English)" を保持。内部値(コード)と区別する。
@@ -161,9 +163,14 @@ class SettingsPanel(ctk.CTkFrame):
         body = section.body
         # 6 レイヤ行を保持(TTS=(なし) 時にグレーアウトするため参照を残す)
         self._backend_rows: dict[LayerKind, list[ctk.CTkBaseClass]] = {}
+        # グレーアウト解除時の復元色。ctk は text_color=None を受け付けない
+        # (ValueError)ため、構築時の既定値を保存しておき復元に使う。
+        self._default_row_text_color: object | None = None
         row = 0
         for layer, label in _LAYER_LABELS:
             label_widget = ctk.CTkLabel(body, text=f"{label}:")
+            if self._default_row_text_color is None:
+                self._default_row_text_color = label_widget.cget("text_color")
             label_widget.grid(row=row, column=0, sticky="w", padx=4, pady=2)
             internal_names = self._controller.list_backends(layer) or ["(未登録)"]
             # 表示用候補(layer ごとに display フォーマットを変換)
@@ -268,33 +275,46 @@ class SettingsPanel(ctk.CTkFrame):
         TTS の StringVar 自体は維持(ユーザが「(なし)」を選んだら表示は「(なし)」のまま)。
         Output 行は完全に disable して触れないようにする。TTS 自身は「(なし) を解除する」
         ためにプルダウンだけ enable のままにする。
+
+        **ステータスラベルには触らない**: ステータス欄のテキスト・色は編成表示
+        (`_apply_absorbed_visuals` の「(なし)」上書き)と `_apply_status`(実状態の
+        色付き再描画)の管轄。ここで色を初期化すると Loaded(緑)等の状態色を消してしまう。
         """
         is_none = self._controller.get_setting(
             "backends", LayerKind.TTS.value, default="",
         ) == TTS_NONE_INTERNAL
         rows = getattr(self, "_backend_rows", {})
 
-        # Output 行: TTS=(なし) なら全要素 disable / グレーアウト
+        # Output 行: TTS=(なし) なら全要素 disable / グレーアウト(ステータス欄を除く)
+        out_status = self._status_labels.get(LayerKind.OUTPUT)
         for w in rows.get(LayerKind.OUTPUT, []):
             try:
                 if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
                     w.configure(state="disabled" if is_none else "normal")
-                elif isinstance(w, ctk.CTkLabel):
-                    w.configure(text_color=DISABLED_TEXT if is_none else None)
+                elif isinstance(w, ctk.CTkLabel) and w is not out_status:
+                    w.configure(
+                        text_color=DISABLED_TEXT if is_none else self._restore_text_color()
+                    )
             except Exception:  # noqa: BLE001 - widget 破棄 / プロパティ未対応で UI を止めない
                 pass
 
         # TTS 行: ラベル行頭の色だけグレーアウト(プルダウン自体は触れる必要があるので enable)
-        tts_widgets = rows.get(LayerKind.TTS, [])
-        for w in tts_widgets:
+        tts_status = self._status_labels.get(LayerKind.TTS)
+        for w in rows.get(LayerKind.TTS, []):
             try:
-                if isinstance(w, ctk.CTkLabel):
-                    w.configure(text_color=DISABLED_TEXT if is_none else None)
+                if isinstance(w, ctk.CTkLabel) and w is not tts_status:
+                    w.configure(
+                        text_color=DISABLED_TEXT if is_none else self._restore_text_color()
+                    )
                 elif isinstance(w, ctk.CTkButton):
                     # 設定ボタンは TTS=(なし) のとき意味がない → disable
                     w.configure(state="disabled" if is_none else "normal")
             except Exception:  # noqa: BLE001
                 pass
+
+    def _restore_text_color(self) -> object:
+        """グレーアウト解除時に戻す既定の文字色(構築時に保存した値)。"""
+        return self._default_row_text_color
 
     # ----------------------------------------------------------
     # セクション 2: デバイス
@@ -449,8 +469,8 @@ class SettingsPanel(ctk.CTkFrame):
         self.after(0, lambda: self._apply_status(layer, status))
 
     def _apply_status(self, layer: LayerKind, status: ModelStatus) -> None:
-        if layer in self._absorbed_shown:
-            return  # 吸収済み表示を維持(編成対象外レイヤの実状態は表示しない)
+        if layer in self._status_overridden:
+            return  # 編成表示(吸収 / なし)を維持(対象外レイヤの実状態は表示しない)
         label = self._status_labels.get(layer)
         if label is None:
             return
@@ -477,7 +497,7 @@ class SettingsPanel(ctk.CTkFrame):
             self._apply_status(layer, status)
 
     # ============================================================
-    # 複合 backend の吸収表示(「(〜に吸収済み)」)
+    # 編成表示(吸収=「〜側で実行」/ 対象外=「(なし)」)
     # ============================================================
     def _absorbed_roles(self) -> dict[LayerKind, LayerKind]:
         """吸収状況を controller に問い合わせる(失敗時は「吸収なし」に縮退)。"""
@@ -487,46 +507,77 @@ class SettingsPanel(ctk.CTkFrame):
             return {}
         return dict(result) if isinstance(result, dict) else {}
 
-    def _apply_absorbed_visuals(self) -> None:
-        """複合 backend に吸収されたレイヤの行に「吸収済み」表示を反映する。
+    def _skipped_roles(self) -> set[LayerKind]:
+        """編成に載らないレイヤ(text_only の TTS/Output)。失敗時は「なし」に縮退。"""
+        try:
+            if self._controller.output_mode == "text_only":
+                return {LayerKind.TTS, LayerKind.OUTPUT}
+        except Exception:  # noqa: BLE001
+            pass
+        return set()
 
-        吸収中: ステータス欄を「(〜に吸収済み)」+ グレー表示。プルダウンは選べる
-        まま残す(選択は保存されるが Start 時は無視される。複合をやめた時の選択を
-        保持するため)。吸収解除: 行ラベルの色と実ステータス表示に戻す。
+    def _apply_absorbed_visuals(self) -> None:
+        """編成上「動かないレイヤ」の行に実態を表示する。
+
+        - 複合 backend に吸収: ステータス欄は**空表示**(使われないレイヤであることは
+          プルダウン/設定ボタンの disabled で伝わるため文言は出さない。どの backend が
+          代行するかは動作タブのステータス集約に出る)。プルダウンと設定ボタンは
+          disabled(選択値は保存されるが Start 時は無視。複合をやめた時の選択を
+          保持するため、値自体は維持される)。
+        - 編成対象外(text_only の TTS/Output): ステータス欄に「(なし)」。
+          プルダウン/設定ボタンの disable は `_apply_tts_none_visual` が担当。
+        - 解除されたレイヤ: 行ラベルの色と widget 状態と実ステータス表示に戻す。
         """
         absorbed = self._absorbed_roles()
-        prev = set(self._absorbed_shown)
-        self._absorbed_shown = set(absorbed)
+        overrides: dict[LayerKind, str] = {layer: "" for layer in absorbed}
+        for layer in self._skipped_roles():
+            overrides.setdefault(layer, SKIPPED_STATUS_TEXT)
+
+        prev = set(self._status_overridden)
+        self._status_overridden = set(overrides)
         rows = getattr(self, "_backend_rows", {})
 
-        for layer, lead in absorbed.items():
+        for layer, text in overrides.items():
             status_label = self._status_labels.get(layer)
             if status_label is not None:
                 try:
-                    status_label.configure(
-                        text=absorbed_status_text(lead), text_color=DISABLED_TEXT
-                    )
+                    status_label.configure(text=text, text_color=DISABLED_TEXT)
                 except Exception:  # noqa: BLE001 - widget 破棄で UI を止めない
                     pass
-            for w in rows.get(layer, []):
-                if isinstance(w, ctk.CTkLabel) and w is not status_label:
+            # 吸収レイヤ: 行ラベルもグレー + プルダウン/設定ボタンを disable
+            # (対象外レイヤの widget disable は _apply_tts_none_visual が担当)
+            if layer in absorbed:
+                for w in rows.get(layer, []):
                     try:
-                        w.configure(text_color=DISABLED_TEXT)
+                        if isinstance(w, ctk.CTkLabel) and w is not status_label:
+                            w.configure(text_color=DISABLED_TEXT)
+                        elif isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
+                            w.configure(state="disabled")
                     except Exception:  # noqa: BLE001
                         pass
 
-        # 吸収が解除されたレイヤ: 行ラベル色を戻し、実ステータスで上書きする
-        for layer in prev - set(absorbed):
+        # 表示上書きが解除されたレイヤ: 行ラベル色 + widget 状態を戻し、実ステータスで再描画する
+        # (ctk は text_color=None を受け付けないため、保存済みの既定色で戻す)
+        for layer in prev - set(overrides):
             for w in rows.get(layer, []):
-                if isinstance(w, ctk.CTkLabel):
-                    try:
-                        w.configure(text_color=None)
-                    except Exception:  # noqa: BLE001
-                        pass
+                try:
+                    if isinstance(w, ctk.CTkLabel):
+                        w.configure(text_color=self._restore_text_color())
+                    elif isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
+                        w.configure(state="normal")
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 self._apply_status(layer, self._controller.get_model_status(layer))
             except Exception:  # noqa: BLE001
                 pass
+
+        # TTS=(なし) 時の TTS/Output 行の disable は専用関数が管理しているため、
+        # 吸収解除で widget を normal に戻したあとで再適用しておく(復帰直後の表示崩れ防止)。
+        try:
+            self._apply_tts_none_visual()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ============================================================
     def _on_backend_change(self, layer: LayerKind, value: str) -> None:
@@ -568,9 +619,11 @@ class SettingsPanel(ctk.CTkFrame):
         # Translator backend 切替時は出力言語プルダウンを再構築
         if layer == LayerKind.TRANSLATOR:
             self._refresh_target_language_choices(notify_fallback=True)
-        # TTS backend 切替: Output 行のグレーアウト連動 + 言語互換チェック
+        # TTS backend 切替: Output 行のグレーアウト連動 + 出力言語候補の再構築
+        # (候補は 翻訳 ∩ TTS のため、TTS が変わると候補も変わる)+ 言語互換チェック
         if layer == LayerKind.TTS:
             self._apply_tts_none_visual()
+            self._refresh_target_language_choices(notify_fallback=True)
             if internal_value != TTS_NONE_INTERNAL:
                 self._check_tts_output_lang_compatibility(notify_fallback=True)
         # CAPTURE backend 切替: 入力デバイスプルダウンを新 backend の `list_sources` で再列挙
@@ -652,10 +705,13 @@ class SettingsPanel(ctk.CTkFrame):
     # 出力言語プルダウンの連動(Translator backend ごとに対応言語が違う)
     # ============================================================
     def _refresh_target_language_choices(self, *, notify_fallback: bool) -> None:
-        """出力言語プルダウンを「翻訳ロールを実際に担う backend」の対応言語で再構築する。
+        """出力言語プルダウンを「翻訳 ∩ TTS」の対応言語で再構築する。
 
-        通常は Translator backend、翻訳ロールが複合(ASR+翻訳)に吸収されている
-        場合は複合 backend が候補を決める。候補・fallback(ja > en > 先頭)の判断は
+        候補のベースは「翻訳ロールを実際に担う backend」(通常は Translator、
+        複合(ASR+翻訳)に吸収されている場合は複合 backend)の対応言語。
+        TTS が有効(audio モード)なら、さらに TTS の読み上げ可能言語との積(AND)に
+        絞る(TTS の対応言語が不明な backend は絞らない。積が空になる組合せは
+        絞らずに従来の警告に委ねる)。候補・fallback(ja > en > 先頭)の判断は
         `gui/logic/language_choices.py` に委譲。ここは controller への問い合わせ、
         widget への反映、設定の書き戻し、通知バナーの発火、fallback 後の TTS 互換
         チェック連鎖だけを行う。
@@ -663,12 +719,13 @@ class SettingsPanel(ctk.CTkFrame):
         if self._tgt_dropdown is None:
             return
 
+        tts_langs = self._active_tts_languages()
         sel = compute_tgt_selection(
-            self._effective_target_languages(),
+            restrict_to_tts(self._effective_target_languages(), tts_langs),
             current=str(
                 self._controller.get_setting("languages", "tgt", default="ja")
             ),
-            fallback_pool=_TGT_LANG_CHOICES,
+            fallback_pool=restrict_to_tts(_TGT_LANG_CHOICES, tts_langs),
         )
 
         self._tgt_dropdown.configure(values=[format_language(c) for c in sel.codes])
@@ -704,6 +761,27 @@ class SettingsPanel(ctk.CTkFrame):
                 ) or ""
             )
             return list(self._controller.get_supported_target_languages(name))
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _active_tts_languages(self) -> list[str]:
+        """現在有効な TTS の読み上げ可能言語(候補の AND 用の入力収集)。
+
+        TTS なし(text_only)/ backend 不明 / 取得失敗は [] を返し、
+        `restrict_to_tts` 側で「制限しない」と解釈される。
+        """
+        try:
+            tts_name = str(
+                self._controller.get_setting(
+                    "backends", LayerKind.TTS.value, default="",
+                ) or ""
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        if not tts_name or tts_name == TTS_NONE_INTERNAL:
+            return []
+        try:
+            return list(self._controller.get_supported_output_languages(tts_name))
         except Exception:  # noqa: BLE001
             return []
 

@@ -49,9 +49,15 @@ def register_default_backends(
     from voice_translator.asr.faster_whisper_translate_backend import (
         FasterWhisperTranslateBackend,
     )
+    from voice_translator.asr.gpt_audio_translate_backend import (
+        GptAudioTranslateBackend,
+    )
     from voice_translator.asr.openai_whisper_backend import OpenAiWhisperAsrBackend
     from voice_translator.asr.openai_whisper_api_backend import (
         OpenAiWhisperApiAsrBackend,
+    )
+    from voice_translator.asr.openai_whisper_api_translate_backend import (
+        OpenAiWhisperApiTranslateBackend,
     )
     from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
     from voice_translator.asr.deepgram_backend import DeepgramAsrBackend
@@ -93,7 +99,14 @@ def register_default_backends(
     registry.register(
         LayerKind.CAPTURE,
         "proctap",
-        lambda: ProcTapCaptureBackend(resample_quality=proctap_resample_quality),
+        # input_gain は factory 内で都度読む(設定ダイアログで変更 → backend 再生成で
+        # 最新値が反映される。credential と同じ流儀)
+        lambda: ProcTapCaptureBackend(
+            resample_quality=proctap_resample_quality,
+            input_gain=_read_float(
+                config, ("backends_config", "proctap", "input_gain"), default=1.0,
+            ),
+        ),
         backend_cls=ProcTapCaptureBackend,
         capabilities=BackendCapabilities(
             is_cloud=False,
@@ -336,6 +349,63 @@ def register_default_backends(
             service_name="OpenAI Whisper API",
             terms_url="https://openai.com/policies/terms-of-use",
             notes="OpenAI Whisper API。25MB/req 制限あり。",
+        ),
+    )
+
+    # OpenAI Whisper API の translations 版(ASR+翻訳の複合、英語固定)。
+    # faster_whisper_translate のクラウド版。API key は自前 namespace を優先し、
+    # 未設定なら同じ OpenAI key を使う openai_whisper_api の保存値に fallback する
+    # (同一サービスの key を 2 回入力させない)。
+    owapit_model = _read_str(
+        config,
+        ("backends_config", "openai_whisper_api_translate", "model"),
+        default="whisper-1",
+    )
+    registry.register(
+        LayerKind.ASR,
+        "openai_whisper_api_translate",
+        lambda: OpenAiWhisperApiTranslateBackend(
+            api_key=(
+                _get_credential(config, "openai_whisper_api_translate", "api_key")
+                or _get_credential(config, "openai_whisper_api", "api_key")
+            ),
+            model=owapit_model,
+        ),
+        backend_cls=OpenAiWhisperApiTranslateBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="OpenAI Whisper API (translate)",
+            terms_url="https://openai.com/policies/terms-of-use",
+            notes="OpenAI Whisper API translations(ASR+翻訳の複合、英語固定)。25MB/req 制限あり。",
+        ),
+    )
+
+    # GPT 音声入力モデルによる ASR+翻訳の複合(任意の翻訳先・原文テキストも取得)。
+    # 動作確認用途のコストを抑えるため既定は mini 系。API key は自前 namespace 優先、
+    # 未設定なら openai_gpt の保存値に fallback。
+    gpta_model = _read_str(
+        config,
+        ("backends_config", "gpt_audio_translate", "model"),
+        default="gpt-4o-mini-audio-preview",
+    )
+    registry.register(
+        LayerKind.ASR,
+        "gpt_audio_translate",
+        lambda: GptAudioTranslateBackend(
+            api_key=(
+                _get_credential(config, "gpt_audio_translate", "api_key")
+                or _get_credential(config, "openai_gpt", "api_key")
+            ),
+            model=gpta_model,
+        ),
+        backend_cls=GptAudioTranslateBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=True,
+            requires_credentials=True,
+            service_name="OpenAI GPT Audio (translate)",
+            terms_url="https://openai.com/policies/terms-of-use",
+            notes="GPT 音声入力で書き起こし+翻訳を一括(任意の翻訳先、原文も取得)。音声トークン従量課金。",
         ),
     )
 

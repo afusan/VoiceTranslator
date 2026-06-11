@@ -164,3 +164,29 @@ class TestMessageFormatting:
             "TTS バックエンド sapi は読み上げ言語 fr (French) に対応していません"
             "(Translator 出力言語を変えるか、別の TTS バックエンドに切り替えてください)"
         )
+
+
+class TestRestrictToTts:
+    """出力言語候補の「翻訳 ∩ TTS」絞り込み。"""
+
+    def test_intersects_with_tts_languages(self) -> None:
+        from voice_translator.gui.logic.language_choices import restrict_to_tts
+
+        assert restrict_to_tts(["en", "ja", "fr"], ["ja", "en", "de"]) == ["en", "ja"]
+
+    def test_empty_tts_means_no_restriction(self) -> None:
+        """TTS の対応言語が不明(空)/ TTS なしのときは絞らない。"""
+        from voice_translator.gui.logic.language_choices import restrict_to_tts
+
+        assert restrict_to_tts(["en", "ja"], []) == ["en", "ja"]
+
+    def test_empty_intersection_degrades_to_original(self) -> None:
+        """積が空になる組合せはプルダウンを空にせず、元の候補のまま(警告に委ねる)。"""
+        from voice_translator.gui.logic.language_choices import restrict_to_tts
+
+        assert restrict_to_tts(["en"], ["ja"]) == ["en"]
+
+    def test_preserves_order_of_codes(self) -> None:
+        from voice_translator.gui.logic.language_choices import restrict_to_tts
+
+        assert restrict_to_tts(["fr", "ja", "en"], ["en", "fr"]) == ["fr", "en"]

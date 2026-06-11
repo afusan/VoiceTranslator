@@ -26,25 +26,10 @@ CAPTURE_KIND_LABELS: dict[CaptureKind, str] = {
     CaptureKind.PROCESS: "プロセス",
 }
 
-# レイヤの短縮表示名(吸収済み表示などの文中で使う)
-LAYER_SHORT_LABELS: dict[LayerKind, str] = {
-    LayerKind.CAPTURE: "音声取得",
-    LayerKind.VAD: "VAD",
-    LayerKind.ASR: "ASR",
-    LayerKind.TRANSLATOR: "翻訳",
-    LayerKind.TTS: "TTS",
-    LayerKind.OUTPUT: "音声出力",
-}
-
-
-def absorbed_status_text(lead: LayerKind) -> str:
-    """複合 backend に吸収されたレイヤのステータス欄に出す文言。
-
-    例: 翻訳ロールが ASR の複合に吸収 → 「(ASR に吸収済み)」。
-    このレイヤの backend 選択は Start 時に無視されることを示す。
-    """
-    label = LAYER_SHORT_LABELS.get(lead, lead.value)
-    return f"({label} に吸収済み)"
+# 編成に載らないレイヤ(text_only の TTS/Output 等)のステータス欄に出す文言。
+# 吸収されたレイヤのステータス欄は空表示(プルダウン無効化で伝わるため文言を出さない。
+# 代行 backend の明示は動作タブのステータス集約 `status_summary.py` の役割)。
+SKIPPED_STATUS_TEXT = "(なし)"
 
 
 def tts_display_to_internal(display: str) -> str:

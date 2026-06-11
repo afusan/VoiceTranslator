@@ -84,6 +84,23 @@ def compute_tgt_selection(
     return LanguageSelection(codes=codes, selected=new_code, fallback_from=current)
 
 
+def restrict_to_tts(
+    codes: Sequence[str], tts_supported: Sequence[str],
+) -> list[str]:
+    """出力言語候補を「TTS が読み上げられる言語」との積(AND)に絞る。
+
+    - tts_supported が空 = TTS の対応言語が不明(または TTS なし)→ 絞らない
+    - 積が空になる場合は元の候補のまま返す(プルダウンを空にしない。
+      非対応の組合せは `tts_warning_needed` の警告に委ねる縮退)
+    - 順序は codes 側を維持
+    """
+    if not tts_supported:
+        return list(codes)
+    allowed = set(tts_supported)
+    restricted = [c for c in codes if c in allowed]
+    return restricted if restricted else list(codes)
+
+
 def tts_warning_needed(
     *,
     tts_backend: str,

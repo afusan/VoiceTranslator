@@ -35,6 +35,11 @@ def patched_backend_setup(monkeypatch):
         ),
         ("voice_translator.asr.openai_whisper_backend", "OpenAiWhisperAsrBackend"),
         ("voice_translator.asr.openai_whisper_api_backend", "OpenAiWhisperApiAsrBackend"),
+        (
+            "voice_translator.asr.openai_whisper_api_translate_backend",
+            "OpenAiWhisperApiTranslateBackend",
+        ),
+        ("voice_translator.asr.gpt_audio_translate_backend", "GptAudioTranslateBackend"),
         ("voice_translator.asr.google_stt_backend", "GoogleSttAsrBackend"),
         ("voice_translator.asr.deepgram_backend", "DeepgramAsrBackend"),
         ("voice_translator.translator.nllb200_backend", "Nllb200TranslatorBackend"),
@@ -73,11 +78,11 @@ class TestRegisterDefaultBackends:
         assert registry.list_names(LayerKind.VAD) == [
             "silero", "webrtcvad", "pyannote", "pvcobra",
         ]
-        # MVP の faster-whisper が先頭。faster_whisper_translate は ASR+翻訳の複合。
+        # MVP の faster-whisper が先頭。*_translate / gpt_audio_translate は ASR+翻訳の複合。
         assert registry.list_names(LayerKind.ASR) == [
             "faster_whisper", "faster_whisper_translate",
-            "openai_whisper", "openai_whisper_api",
-            "google_stt", "deepgram",
+            "openai_whisper", "openai_whisper_api", "openai_whisper_api_translate",
+            "gpt_audio_translate", "google_stt", "deepgram",
         ]
         # Phase F2 で DeepL / OpenAI GPT / Anthropic Claude を追加。
         # MVP の nllb200 が先頭。
@@ -454,3 +459,34 @@ class TestPvcobraRegistration:
         registry.create(LayerKind.VAD, "pvcobra")
         call_kwargs = patched_backend_setup["PvcobraVadBackend"].call_args.kwargs
         assert call_kwargs["threshold"] == 0.7
+
+
+class TestProctapInputGainConfig:
+    """ProcTap の入力ゲインが config から factory に渡ること。"""
+
+    def test_default_gain_is_passthrough(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        registry.create(LayerKind.CAPTURE, "proctap")
+        patched_backend_setup["ProcTapCaptureBackend"].assert_called_with(
+            resample_quality="best", input_gain=1.0,
+        )
+
+    def test_gain_read_from_config_at_create_time(
+        self, patched_backend_setup, tmp_path
+    ) -> None:
+        """factory 内で都度読むため、登録後の設定変更も次の生成に反映される。"""
+        from voice_translator.common.backend_setup import register_default_backends
+        from voice_translator.common.config_store import ConfigStore
+
+        config = ConfigStore(tmp_path / "cfg.yaml")
+        registry = BackendRegistry()
+        register_default_backends(registry, config)
+
+        config.set("backends_config", "proctap", "input_gain", 4.0)
+        registry.create(LayerKind.CAPTURE, "proctap")
+        patched_backend_setup["ProcTapCaptureBackend"].assert_called_with(
+            resample_quality="best", input_gain=4.0,
+        )
