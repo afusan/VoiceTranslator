@@ -12,7 +12,8 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from voice_translator.common.backend_base import BackendBase
-from voice_translator.common.types import BackendCapabilities
+from voice_translator.common.messages import PayloadKind
+from voice_translator.common.types import BackendCapabilities, LayerKind
 
 
 class TtsBackend(BackendBase, ABC):
@@ -45,6 +46,22 @@ class TtsBackend(BackendBase, ABC):
         - 空リストを返した場合 UI は「未知 = 警告しない」として扱う
           (OS 依存などで動的に変わるケースで「分からない」を表明する選択肢)
         """
+
+    # ---- パイプライン編成への申告(複合 backend はオーバーライド) ----
+    @classmethod
+    def covers_roles(cls) -> tuple[LayerKind, ...]:
+        """この backend が担うロール(パイプライン順で連続していること)。"""
+        return (LayerKind.TTS,)
+
+    @classmethod
+    def consumes_payload(cls) -> PayloadKind:
+        """入力の payload 形式。"""
+        return PayloadKind.TRANSLATED
+
+    @classmethod
+    def produces_payload(cls) -> PayloadKind:
+        """出力の payload 形式。"""
+        return PayloadKind.SYNTHESIZED
 
     def capabilities(self) -> BackendCapabilities:
         """対応言語/声質等のメタ情報。"""

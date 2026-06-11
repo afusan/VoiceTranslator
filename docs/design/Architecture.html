@@ -118,9 +118,9 @@
   <div class="flowrow">↓ ロード済み backend から組み立て・起動/停止&nbsp;&nbsp;&nbsp;↑ 発話完了・エラーのコールバック</div>
 
   <div class="layer-band exec-band">
-    <div class="band-label">パイプライン実行層 — 発話を 5 スレッドで流す</div>
+    <div class="band-label">パイプライン実行層 — 発話をステージスレッド列で流す(標準 5 ステージ)</div>
     <div class="boxes">
-      <div class="cross exec"><div class="name">PipelineCoordinator</div><div class="sub">5 スレッドの起動/停止 + キュー連携</div></div>
+      <div class="cross exec"><div class="name">PipelineCoordinator</div><div class="sub">編成表どおりのステージ起動/停止 + キュー連携</div></div>
       <div class="cross exec"><div class="name">UtteranceLedger</div><div class="sub">発話メタ情報の中央管理</div></div>
       <div class="cross exec"><div class="name">SequenceGenerator</div><div class="sub">発話への一意 ID の発行</div></div>
     </div>
@@ -249,7 +249,8 @@ gui/logic で表示値を計算して塗る。ControlPanel が SettingsPanel に
 <h3>パイプライン実行層</h3>
 <table>
   <tr><th>機能</th><th>役割</th></tr>
-  <tr><td><strong>PipelineCoordinator</strong></td><td>各レイヤの起動・停止と、レイヤ間キューの管理を担う(5 スレッド構成は §3)。</td></tr>
+  <tr><td><strong>PipelineCoordinator</strong></td><td>編成表(PipelinePlan)に従ってステージスレッド群とステージ間キューを組み立て、起動・停止・エラー縮退を担う(§3)。</td></tr>
+  <tr><td><strong>pipeline_plan</strong>(build_pipeline_plan / PipelinePlan)</td><td>各 backend の申告(担当ロール・入出力 payload 形式)から、起動前に一度だけステージ編成を確定する純関数。隣接ステージの形式不整合や申告の矛盾は <code>PlanError</code> で起動拒否する。</td></tr>
   <tr><td><strong>UtteranceLedger</strong></td><td>発話ごとのメタ情報(タイミング・言語・テキスト・状態)を中央で集約する。最終段で取り出して履歴ログに書く。スレッドセーフ。</td></tr>
   <tr><td><strong>SequenceGenerator</strong></td><td>発話ごとに一意の通し番号を発行する。各ログにこの番号が載り、レコード間の対応を取れる。</td></tr>
 </table>
@@ -272,7 +273,8 @@ gui/logic で表示値を計算して塗る。ControlPanel が SettingsPanel に
 <h2>3. スレッド構成</h2>
 
 <p>
-各レイヤを独立スレッドで動かし、UI と取得・処理・再生を分離する。各スレッドはキューで連結し、後段が詰まっても前段が止まらない。
+各ステージを独立スレッドで動かし、UI と取得・処理・再生を分離する。各スレッドはキューで連結し、後段が詰まっても前段が止まらない。
+ステージ構成は固定ではなく、<strong>起動時に編成表(plan)から組まれる</strong>(後述)。以下は標準構成(単体 backend×6)での編成。
 </p>
 
 <table>
@@ -300,22 +302,22 @@ gui/logic で表示値を計算して塗る。ControlPanel が SettingsPanel に
   <tr>
     <td><strong>ASR</strong></td>
     <td>発話を書き起こす。</td>
-    <td>PipelineCoordinator._asr_loop</td>
+    <td>PipelineCoordinator._worker_loop + _process_asr</td>
   </tr>
   <tr>
     <td><strong>Translator</strong></td>
     <td>書き起こしを翻訳する。</td>
-    <td>PipelineCoordinator._translator_loop</td>
+    <td>PipelineCoordinator._worker_loop + _process_translator</td>
   </tr>
   <tr>
     <td><strong>TTS</strong></td>
     <td>翻訳結果を音声に合成する。</td>
-    <td>PipelineCoordinator._tts_loop</td>
+    <td>PipelineCoordinator._worker_loop + _process_tts</td>
   </tr>
   <tr>
     <td><strong>Output</strong></td>
     <td>合成音声を再生し、発話の完了を通知する。</td>
-    <td>PipelineCoordinator._output_loop</td>
+    <td>PipelineCoordinator._worker_loop + _process_output</td>
   </tr>
   <tr>
     <td><strong>_PeakWorker</strong>(任意)</td>
@@ -323,6 +325,30 @@ gui/logic で表示値を計算して塗る。ControlPanel が SettingsPanel に
     <td>capture.process_enumerator._PeakWorker</td>
   </tr>
 </table>
+
+<h3>編成表(plan)によるステージ組み立て</h3>
+<p>
+PipelineCoordinator は構築時に、各 backend の申告
+(<code>covers_roles() / consumes_payload() / produces_payload()</code>、いずれも classmethod)から
+<code>build_pipeline_plan</code>(純関数)で編成表を組み、表の通りにスレッドとキューを用意する。
+走行中の動的ルーティングは行わない — 編成を変える要因は設定だけで、設定は走行中に変わらないため。
+</p>
+<ul>
+  <li><strong>スキップ = 編成表に載らない</strong>: 載らないロールはスレッドもキューも作られず、
+    モデルもロードされない(text_only はこの一例)。</li>
+  <li><strong>複合 backend</strong>: 連続する複数ロールを 1 backend が 1 ステージで担える
+    (例: <code>faster_whisper_translate</code> = ASR+Translator)。後続ロールは「吸収」され、
+    そのレイヤに設定されていた backend は Start 時に無視される(UI は「(〜に吸収済み)」表示)。
+    吸収されたロールの内部処理時刻は欠損として扱い、処理時間表示は「-」に縮退する。</li>
+  <li><strong>先頭融合</strong>: VAD より前には「発話」という単位が存在せずキューを置けないため、
+    Capture〜VAD は常に 1 つの入力ステージに融合される。</li>
+  <li><strong>起動拒否</strong>: 隣接ステージの payload 形式不一致・申告の矛盾(非連続な covers 等)は
+    構築時に <code>PlanError</code>(FATAL)。編成できない設定では動かさない。</li>
+  <li><strong>終端の一般則</strong>: 最終ステージが Output なら完了時に <code>on_utterance_done</code>、
+    Output でなければ最終ステージ完了時に <code>on_text_ready</code> + ledger 解放。</li>
+  <li>ステージ間で payload 形式の変換が必要になった場合の差し込み口(<code>PayloadAdapter</code>)を
+    seam として確保している(現在は同形式の素通しのみ)。</li>
+</ul>
 
 <h3>キューあふれ時の挙動</h3>
 <ul>
@@ -343,15 +369,17 @@ gui/logic で表示値を計算して塗る。ControlPanel が SettingsPanel に
 
 <h3>出力モード(audio / text_only)</h3>
 <p>
-出力モードは <code>backends.tts</code> の値から派生する。独立した ConfigStore キーは持たない:
+出力モードは <code>backends.tts</code> の値から派生する。独立した ConfigStore キーは持たない。
+text_only は「TTS / Output ロールが編成表に載らない」縮退として表現される(専用分岐ではなく、
+スキップの一般則の一例):
 </p>
 <ul>
-  <li><strong>audio</strong>(既定 / TTS=実 backend): 上記 5 スレッド構成で動く。</li>
+  <li><strong>audio</strong>(既定 / TTS=実 backend): 標準の 5 ステージ編成で動く。</li>
   <li><strong>text_only</strong>(TTS=<code>none</code>、UI 表記「(なし)」):
     <ul>
-      <li><strong>Input / ASR / Translator の 3 スレッドのみ</strong>起動。TTS / Output スレッドは作らない。</li>
-      <li>Translator 完了直後に <code>on_text_ready(ledger.pop(seq_id))</code> を発火 = 最終通知。
-        <code>on_utterance_done</code> は呼ばれない。</li>
+      <li>編成は <strong>Input / ASR / Translator の 3 ステージ</strong>。TTS / Output スレッドは作られない。</li>
+      <li>最終ステージ(Translator)完了で <code>on_text_ready(ledger.pop(seq_id))</code> を発火 = 最終通知。
+        <code>on_utterance_done</code> は呼ばれない(終端の一般則)。</li>
       <li><code>translated_queue</code> / <code>synthesized_queue</code> には何も流れない(レジャもキューも溜まらない)。</li>
       <li>TTS / Output レイヤの backend ロード・認証 gate も skip される(クラウド TTS の認証なしで Start 可)。</li>
       <li>jsonl / processtime / レイヤ別 処理時間バッファへの記録は <code>AppController._handle_text_ready</code> 側で兼ねる。</li>
@@ -398,6 +426,12 @@ gui/logic で表示値を計算して塗る。ControlPanel が SettingsPanel に
     <td>seq_id, tts_pcm(np.ndarray), tts_samplerate</td>
   </tr>
 </table>
+<p>
+各 payload 型には識別子(<code>PayloadKind</code>: RAW / TRANSCRIBED / TRANSLATED / SYNTHESIZED / NONE)が
+対応し、キューは payload 形式ごとに 1 本。編成に載る形式のキューだけが実際に使われる
+(例: ASR+Translator 複合の編成では <code>recognized_queue</code> は使われず、複合ステージが
+<code>TranslatedPayload</code> を直接 <code>translated_queue</code> に産出する)。
+</p>
 
 <h3>4-2. UtteranceLedger に蓄積されるメタ情報</h3>
 <p>seq_id をキーに、以下の情報を発話単位で1つのレコードに集約する。</p>
@@ -440,10 +474,21 @@ gui/logic で表示値を計算して塗る。ControlPanel が SettingsPanel に
   <tr><td>Translator</td><td><code>translate(src_text: str, src_lang: str, tgt_lang: str) -> str</code></td></tr>
   <tr><td>TTS</td><td><code>synthesize(text: str, lang: str) -> tuple[np.ndarray, int]</code></td></tr>
   <tr><td>AudioOutput</td><td><code>list_devices() / start(device_id) / play(pcm: np.ndarray, samplerate: int) / stop()</code></td></tr>
+  <tr><td>AsrTranslator(複合)</td><td><code>transcribe_translate(pcm, src_lang_hint, tgt_lang) -> tuple[str, str, str, str]</code>(src_text, src_lang, tgt_text, tgt_lang。ASR レイヤに登録し、Translator ロールを吸収する)</td></tr>
 </table>
+<p>
+全 backend は上記に加えて<strong>編成への申告</strong>
+(<code>covers_roles() / consumes_payload() / produces_payload()</code>、いずれも classmethod)を持つ。
+各レイヤの抽象基底が単体ロールの既定実装を提供するため、単体 backend は何も書かなくてよい。
+複合 backend だけがオーバーライドして複数ロールを宣言する。
+</p>
 
 <!-- =================================================== -->
-<h2>5. データフロー(発話1件あたり)</h2>
+<h2>5. データフロー(発話1件あたり、標準構成)</h2>
+
+<p>複合 backend を含む編成では、吸収された範囲のステップが 1 つにまとまる
+(例: ASR+Translator 複合では 2〜3 が 1 ステップになり、複合 backend の 1 呼び出しで
+<code>TranslatedPayload</code> を産出する)。</p>
 
 <ol>
   <li><strong>Input</strong>: PCMチャンク連続取得 → VAD が無音で区切り → <code>seq_id = SequenceGenerator.next()</code> → <code>ledger.init(seq_id, t_capture, t_vad_end, src_lang_hint)</code> → <code>captured_queue.put(RawPayload(seq_id, pcm, hint))</code></li>
@@ -478,6 +523,7 @@ translations.jsonl:
   <li>per-app 音声取得は <code>ProcTapCaptureBackend</code> として実装済み(Windows / WASAPI Process Loopback)。プロセス列挙と試聴メータの UI も同梱(<code>ProcessSelectDialog</code>)。Linux / Mac の per-app 取得は pendList 起票のみ。</li>
   <li>ローカルLLM翻訳は <code>Translator</code> の追加実装で対応(例: Ollama)。</li>
   <li>バックエンド固有パラメータは <code>backends_config.&lt;name&gt;.*</code> 名前空間で <code>config.yaml</code> から渡す(SAPI rate 等が既に実装済)。</li>
+  <li>複数ロールを一括処理する backend(End-to-End 音声翻訳等)は、<code>covers_roles()</code> の申告だけで編成に取り込める。ASR+Translator は実装済み(<code>faster_whisper_translate</code>)。TTS+Output 等の他の連続ロール組合せは、対応する複合 I/F と processor を追加した時点で同じ仕組みに乗る。</li>
 </ul>
 
 <!-- =================================================== -->

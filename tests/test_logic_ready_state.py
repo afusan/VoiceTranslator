@@ -187,3 +187,33 @@ class TestTestButton:
             has_output_device=False,
         )
         assert rs.test.text == "🔊 (TTS なし)"
+
+
+class TestAbsorbedRoleFiltering:
+    """複合 backend に吸収されたロールは ready 判定から除外される。"""
+
+    def test_filter_excludes_absorbed(self) -> None:
+        statuses = _all_statuses(ModelStatus.LOADED)
+        statuses[LayerKind.TRANSLATOR] = ModelStatus.INIT  # 吸収中はロードされない
+        active = filter_active_statuses(
+            statuses, "audio", absorbed=(LayerKind.TRANSLATOR,)
+        )
+        assert LayerKind.TRANSLATOR not in active
+        assert LayerKind.ASR in active
+
+    def test_absorbed_init_does_not_block_loaded_view(self) -> None:
+        """複合がロード済みなら、吸収ロールの INIT が残っていても「ロード済み」表示。"""
+        statuses = _all_statuses(ModelStatus.LOADED)
+        statuses[LayerKind.TRANSLATOR] = ModelStatus.INIT
+        rs = _compute(statuses, absorbed=(LayerKind.TRANSLATOR,))
+        assert rs.load.text == "ロード済み"
+        assert rs.load.enabled is False
+        assert rs.status_text == "停止中"
+
+    def test_without_absorbed_init_blocks_loaded_view(self) -> None:
+        """absorbed 指定なしなら INIT レイヤは従来どおり判定に含まれる。"""
+        statuses = _all_statuses(ModelStatus.LOADED)
+        statuses[LayerKind.TRANSLATOR] = ModelStatus.INIT
+        rs = _compute(statuses)
+        assert rs.load.text == "↻ ロード"
+        assert rs.status_text == "停止中(押下時にロードします)"

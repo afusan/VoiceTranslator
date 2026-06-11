@@ -544,6 +544,7 @@ class ControlPanel(ctk.CTkFrame):
             capture_kind=self._ready_capture_kind(),
             has_input_source=self._ready_has_input_source(),
             has_output_device=self._ready_has_output_device(),
+            absorbed=self._ready_absorbed_roles(),
         )
         if rs is None:
             return
@@ -591,6 +592,13 @@ class ControlPanel(ctk.CTkFrame):
         except Exception:  # noqa: BLE001
             return CaptureKind.DEVICE
         return kind if isinstance(kind, CaptureKind) else CaptureKind.DEVICE
+
+    def _ready_absorbed_roles(self) -> tuple[LayerKind, ...]:
+        """複合 backend に吸収されたロール(取得失敗は「吸収なし」扱い)。"""
+        try:
+            return tuple(self._controller.get_absorbed_roles().keys())
+        except Exception:  # noqa: BLE001
+            return ()
 
     def _ready_has_input_source(self) -> bool:
         """`devices.input` が選択済みか。取得失敗は未選択扱い(安全側 = Start を止める)。"""

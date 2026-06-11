@@ -46,6 +46,9 @@ def register_default_backends(
     渡さない場合は各バックエンドのコンストラクタ既定値が使われる。
     """
     from voice_translator.asr.faster_whisper_backend import FasterWhisperAsrBackend
+    from voice_translator.asr.faster_whisper_translate_backend import (
+        FasterWhisperTranslateBackend,
+    )
     from voice_translator.asr.openai_whisper_backend import OpenAiWhisperAsrBackend
     from voice_translator.asr.openai_whisper_api_backend import (
         OpenAiWhisperApiAsrBackend,
@@ -260,6 +263,39 @@ def register_default_backends(
             compute_type=fw_compute_type,
         ),
         backend_cls=FasterWhisperAsrBackend,
+    )
+
+    # faster-whisper の task=translate 版(ASR+翻訳の複合、英語固定)。
+    # 選択すると Translator レイヤは編成から吸収される(ロードもされない)。
+    fwt_model_size = _read_str(
+        config,
+        ("backends_config", "faster_whisper_translate", "model_size"),
+        default="small",
+    )
+    fwt_device = _read_str(
+        config,
+        ("backends_config", "faster_whisper_translate", "device"),
+        default="auto",
+    )
+    fwt_compute_type = _read_str(
+        config,
+        ("backends_config", "faster_whisper_translate", "compute_type"),
+        default="auto",
+    )
+    registry.register(
+        LayerKind.ASR,
+        "faster_whisper_translate",
+        lambda: FasterWhisperTranslateBackend(
+            model_size=fwt_model_size,
+            device=fwt_device,
+            compute_type=fwt_compute_type,
+        ),
+        backend_cls=FasterWhisperTranslateBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=False,
+            requires_credentials=False,
+            notes="faster-whisper task=translate(ASR+翻訳の複合、英語固定)",
+        ),
     )
 
     # openai-whisper(公式)。faster-whisper と並走する別 backend。

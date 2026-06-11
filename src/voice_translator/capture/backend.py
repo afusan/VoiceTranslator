@@ -9,10 +9,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from voice_translator.common.backend_base import BackendBase
+from voice_translator.common.messages import PayloadKind
 from voice_translator.common.types import (
     BackendCapabilities,
     CaptureKind,
     CaptureSource,
+    LayerKind,
     PcmChunk,
 )
 
@@ -33,6 +35,23 @@ class AudioCaptureBackend(BackendBase, ABC):
     def capture_kind(cls) -> CaptureKind:
         """この backend が取得する単位を返す。サブクラスでオーバーライド可。既定は DEVICE。"""
         return CaptureKind.DEVICE
+
+    # ---- パイプライン編成への申告(複合 backend はオーバーライド) ----
+    @classmethod
+    def covers_roles(cls) -> tuple[LayerKind, ...]:
+        """この backend が担うロール(パイプライン順で連続していること)。"""
+        return (LayerKind.CAPTURE,)
+
+    @classmethod
+    def consumes_payload(cls) -> PayloadKind:
+        """入力の payload 形式。Capture は編成の先頭なので NONE。"""
+        return PayloadKind.NONE
+
+    @classmethod
+    def produces_payload(cls) -> PayloadKind:
+        """出力の payload 形式。Capture 単体は PCM ストリーム供給のみで
+        発話 payload を産まない(発話単位は VAD 側の担当)ため NONE。"""
+        return PayloadKind.NONE
 
     @abstractmethod
     def list_sources(self) -> list[CaptureSource]:

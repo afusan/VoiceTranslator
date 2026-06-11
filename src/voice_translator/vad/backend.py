@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from voice_translator.common.backend_base import BackendBase
-from voice_translator.common.types import BackendCapabilities, PcmChunk
+from voice_translator.common.messages import PayloadKind
+from voice_translator.common.types import BackendCapabilities, LayerKind, PcmChunk
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,22 @@ class VadBackend(BackendBase, ABC):
     @abstractmethod
     def reset(self) -> None:
         """内部状態(進行中の発話バッファ等)をリセットする。"""
+
+    # ---- パイプライン編成への申告(複合 backend はオーバーライド) ----
+    @classmethod
+    def covers_roles(cls) -> tuple[LayerKind, ...]:
+        """この backend が担うロール(パイプライン順で連続していること)。"""
+        return (LayerKind.VAD,)
+
+    @classmethod
+    def consumes_payload(cls) -> PayloadKind:
+        """入力の payload 形式。VAD の入力は PCM ストリーム(発話 payload 以前)なので NONE。"""
+        return PayloadKind.NONE
+
+    @classmethod
+    def produces_payload(cls) -> PayloadKind:
+        """出力の payload 形式。発話確定により最初の発話 payload(RAW)が生まれる。"""
+        return PayloadKind.RAW
 
     def capabilities(self) -> BackendCapabilities:
         """このバックエンドのメタ情報。既定は空。"""

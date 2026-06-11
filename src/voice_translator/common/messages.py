@@ -11,7 +11,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Union
+
+
+class PayloadKind(str, Enum):
+    """ステージ間を流れるデータ形式の識別子。
+
+    役割: backend の申告(`consumes_payload` / `produces_payload`)と
+    パイプライン編成(`build_pipeline_plan`)で、隣接ステージの型整合を
+    起動時に検証するためのキー。`NONE` は「先頭の入力なし / 終端の出力なし」。
+    """
+
+    RAW = "raw"                  # RawPayload(発話 PCM + 言語ヒント)
+    TRANSCRIBED = "transcribed"  # TranscribedPayload(認識テキスト + 言語)
+    TRANSLATED = "translated"    # TranslatedPayload(翻訳テキスト + 言語)
+    SYNTHESIZED = "synthesized"  # SynthesizedPayload(合成 PCM + samplerate)
+    NONE = "none"                # 入出力なし(編成の先頭・終端)
 
 
 @dataclass(frozen=True)
@@ -60,6 +76,19 @@ class SynthesizedPayload:
 
 # 流通しうる payload の Union(型ヒント用)
 Payload = Union[RawPayload, TranscribedPayload, TranslatedPayload, SynthesizedPayload]
+
+# payload 型 → PayloadKind の対応(`payload_kind_of` 用)
+_PAYLOAD_KINDS: dict[type, PayloadKind] = {
+    RawPayload: PayloadKind.RAW,
+    TranscribedPayload: PayloadKind.TRANSCRIBED,
+    TranslatedPayload: PayloadKind.TRANSLATED,
+    SynthesizedPayload: PayloadKind.SYNTHESIZED,
+}
+
+
+def payload_kind_of(payload: object) -> PayloadKind:
+    """payload インスタンスの `PayloadKind` を返す。未知の型は KeyError。"""
+    return _PAYLOAD_KINDS[type(payload)]
 
 
 @dataclass(frozen=True)

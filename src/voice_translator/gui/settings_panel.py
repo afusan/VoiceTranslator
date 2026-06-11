@@ -33,6 +33,7 @@ from .layer_settings_dialog import LayerSettingsDialog
 from .logic.backend_display import (
     TTS_NONE_DISPLAY,
     TTS_NONE_INTERNAL,
+    absorbed_status_text,
     backend_display_to_internal,
     backend_internal_to_display,
     capture_internal_to_display,
@@ -87,6 +88,8 @@ class SettingsPanel(ctk.CTkFrame):
 
         self._backend_vars: dict[LayerKind, ctk.StringVar] = {}
         self._status_labels: dict[LayerKind, ctk.CTkLabel] = {}
+        # 複合 backend に吸収中のロール(ステータス欄の「吸収済み」表示の維持用)
+        self._absorbed_shown: set[LayerKind] = set()
         self._capture_var = ctk.StringVar(value="(未選択)")
         self._output_var = ctk.StringVar(value="(未選択)")
         # 言語プルダウンは表示形式 "en (English)" を保持。内部値(コード)と区別する。
@@ -106,16 +109,15 @@ class SettingsPanel(ctk.CTkFrame):
         self._build_widgets()
         self._populate_devices_into_dropdowns()
         self._sync_all_status_labels()
+        self._apply_absorbed_visuals()
         # 起動時に入力言語プルダウンを ASR backend の対応言語に合わせて構築
         current_asr = str(controller.get_setting("backends", LayerKind.ASR.value, default=""))
         if current_asr:
             self._refresh_input_language_choices(current_asr, notify_fallback=False)
-        # 出力言語プルダウンも Translator backend に合わせて構築
-        current_translator = str(
-            controller.get_setting("backends", LayerKind.TRANSLATOR.value, default="")
-        )
-        if current_translator:
-            self._refresh_target_language_choices(current_translator, notify_fallback=False)
+        # 出力言語プルダウンは「翻訳ロールを実際に担う backend」(複合に吸収されて
+        # いれば複合側)に合わせて構築
+        if self._tgt_provider_name():
+            self._refresh_target_language_choices(notify_fallback=False)
         # 起動時に TTS 互換も一度チェック(警告は出さない)
         self._check_tts_output_lang_compatibility(notify_fallback=False)
 
@@ -447,6 +449,8 @@ class SettingsPanel(ctk.CTkFrame):
         self.after(0, lambda: self._apply_status(layer, status))
 
     def _apply_status(self, layer: LayerKind, status: ModelStatus) -> None:
+        if layer in self._absorbed_shown:
+            return  # 吸収済み表示を維持(編成対象外レイヤの実状態は表示しない)
         label = self._status_labels.get(layer)
         if label is None:
             return
@@ -471,6 +475,58 @@ class SettingsPanel(ctk.CTkFrame):
         """初期化時/再読込後に全レイヤのステータスを一括反映する。"""
         for layer, status in self._controller.get_all_model_statuses().items():
             self._apply_status(layer, status)
+
+    # ============================================================
+    # 複合 backend の吸収表示(「(〜に吸収済み)」)
+    # ============================================================
+    def _absorbed_roles(self) -> dict[LayerKind, LayerKind]:
+        """吸収状況を controller に問い合わせる(失敗時は「吸収なし」に縮退)。"""
+        try:
+            result = self._controller.get_absorbed_roles()
+        except Exception:  # noqa: BLE001
+            return {}
+        return dict(result) if isinstance(result, dict) else {}
+
+    def _apply_absorbed_visuals(self) -> None:
+        """複合 backend に吸収されたレイヤの行に「吸収済み」表示を反映する。
+
+        吸収中: ステータス欄を「(〜に吸収済み)」+ グレー表示。プルダウンは選べる
+        まま残す(選択は保存されるが Start 時は無視される。複合をやめた時の選択を
+        保持するため)。吸収解除: 行ラベルの色と実ステータス表示に戻す。
+        """
+        absorbed = self._absorbed_roles()
+        prev = set(self._absorbed_shown)
+        self._absorbed_shown = set(absorbed)
+        rows = getattr(self, "_backend_rows", {})
+
+        for layer, lead in absorbed.items():
+            status_label = self._status_labels.get(layer)
+            if status_label is not None:
+                try:
+                    status_label.configure(
+                        text=absorbed_status_text(lead), text_color=DISABLED_TEXT
+                    )
+                except Exception:  # noqa: BLE001 - widget 破棄で UI を止めない
+                    pass
+            for w in rows.get(layer, []):
+                if isinstance(w, ctk.CTkLabel) and w is not status_label:
+                    try:
+                        w.configure(text_color=DISABLED_TEXT)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        # 吸収が解除されたレイヤ: 行ラベル色を戻し、実ステータスで上書きする
+        for layer in prev - set(absorbed):
+            for w in rows.get(layer, []):
+                if isinstance(w, ctk.CTkLabel):
+                    try:
+                        w.configure(text_color=None)
+                    except Exception:  # noqa: BLE001
+                        pass
+            try:
+                self._apply_status(layer, self._controller.get_model_status(layer))
+            except Exception:  # noqa: BLE001
+                pass
 
     # ============================================================
     def _on_backend_change(self, layer: LayerKind, value: str) -> None:
@@ -502,12 +558,16 @@ class SettingsPanel(ctk.CTkFrame):
         self._controller.set_setting("backends", layer.value, internal_value)
         # set_setting 側でステータスは更新されるが、ラベル反映は明示的に行う
         self._sync_all_status_labels()
-        # ASR backend 切替時は入力言語プルダウンを新 backend の対応言語に合わせる
+        self._apply_absorbed_visuals()
+        # ASR backend 切替時は入力言語プルダウンを新 backend の対応言語に合わせる。
+        # 複合(翻訳吸収)⇔ 単体の切替で「翻訳先言語を決める backend」も変わるため、
+        # 出力言語プルダウンも連動して再構築する。
         if layer == LayerKind.ASR:
             self._refresh_input_language_choices(value, notify_fallback=True)
+            self._refresh_target_language_choices(notify_fallback=True)
         # Translator backend 切替時は出力言語プルダウンを再構築
         if layer == LayerKind.TRANSLATOR:
-            self._refresh_target_language_choices(value, notify_fallback=True)
+            self._refresh_target_language_choices(notify_fallback=True)
         # TTS backend 切替: Output 行のグレーアウト連動 + 言語互換チェック
         if layer == LayerKind.TTS:
             self._apply_tts_none_visual()
@@ -591,20 +651,20 @@ class SettingsPanel(ctk.CTkFrame):
     # ============================================================
     # 出力言語プルダウンの連動(Translator backend ごとに対応言語が違う)
     # ============================================================
-    def _refresh_target_language_choices(
-        self, backend_name: str, *, notify_fallback: bool,
-    ) -> None:
-        """Translator backend に応じて出力言語プルダウンの選択肢を再構築する。
+    def _refresh_target_language_choices(self, *, notify_fallback: bool) -> None:
+        """出力言語プルダウンを「翻訳ロールを実際に担う backend」の対応言語で再構築する。
 
-        候補・fallback(ja > en > 先頭)の判断は `gui/logic/language_choices.py` に
-        委譲。ここは controller への問い合わせ、widget への反映、設定の書き戻し、
-        通知バナーの発火、fallback 後の TTS 互換チェック連鎖だけを行う。
+        通常は Translator backend、翻訳ロールが複合(ASR+翻訳)に吸収されている
+        場合は複合 backend が候補を決める。候補・fallback(ja > en > 先頭)の判断は
+        `gui/logic/language_choices.py` に委譲。ここは controller への問い合わせ、
+        widget への反映、設定の書き戻し、通知バナーの発火、fallback 後の TTS 互換
+        チェック連鎖だけを行う。
         """
         if self._tgt_dropdown is None:
             return
 
         sel = compute_tgt_selection(
-            self._controller.get_supported_target_languages(backend_name),
+            self._effective_target_languages(),
             current=str(
                 self._controller.get_setting("languages", "tgt", default="ja")
             ),
@@ -620,9 +680,48 @@ class SettingsPanel(ctk.CTkFrame):
         # 非対応 → fallback(設定を書き戻し、必要なら通知)
         self._controller.set_setting("languages", "tgt", sel.selected)
         if notify_fallback:
-            self._notify_tgt_lang_fallback(sel.fallback_from, sel.selected, backend_name)
+            self._notify_tgt_lang_fallback(
+                sel.fallback_from, sel.selected, self._tgt_provider_name()
+            )
         # tgt が fallback で変わった可能性があるので TTS 互換チェック
         self._check_tts_output_lang_compatibility(notify_fallback=notify_fallback)
+
+    # ---- 翻訳先言語の問い合わせ(吸収を考慮した入力収集 + 失敗縮退)----
+    def _effective_target_languages(self) -> list[str]:
+        """翻訳先言語の候補を controller に問い合わせる。
+
+        縮退: `get_effective_target_languages` を持たない旧 controller(モック含む)は
+        従来どおり Translator レイヤの選択 backend へ直接問い合わせる。
+        """
+        try:
+            return list(self._controller.get_effective_target_languages())
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            name = str(
+                self._controller.get_setting(
+                    "backends", LayerKind.TRANSLATOR.value, default="",
+                ) or ""
+            )
+            return list(self._controller.get_supported_target_languages(name))
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _tgt_provider_name(self) -> str:
+        """翻訳先言語を決めている backend 名(fallback 通知の文言用)。"""
+        try:
+            _, name = self._controller.get_target_language_provider()
+            return name
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return str(
+                self._controller.get_setting(
+                    "backends", LayerKind.TRANSLATOR.value, default="",
+                ) or ""
+            )
+        except Exception:  # noqa: BLE001
+            return ""
 
     # ============================================================
     # TTS 対応言語チェック(現在の出力言語が TTS で読めるか)
@@ -907,6 +1006,7 @@ class SettingsPanel(ctk.CTkFrame):
         else:
             self._populate_devices_into_dropdowns()
             self._sync_all_status_labels()
+            self._apply_absorbed_visuals()
             self._show_message("設定を再読込しました")
 
     def _reload_blocked(self) -> bool:

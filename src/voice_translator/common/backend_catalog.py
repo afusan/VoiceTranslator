@@ -74,9 +74,16 @@ class BackendCatalog:
             return False
 
     # ---- Translator 対応出力言語 ----
-    def get_supported_target_languages(self, backend_name: str) -> list[str]:
-        """指定 Translator backend の対応出力言語(ISO 639-1)。失敗時は空リスト。"""
-        cls = self._registry.get_backend_class(LayerKind.TRANSLATOR, backend_name)
+    def get_supported_target_languages(
+        self, backend_name: str, *, layer: LayerKind = LayerKind.TRANSLATOR,
+    ) -> list[str]:
+        """指定 backend の対応出力言語(ISO 639-1)。失敗時は空リスト。
+
+        通常は Translator レイヤに問い合わせる。翻訳ロールが複合 backend に
+        吸収されている場合は、吸収先のレイヤ(`layer=ASR` 等)を指定して
+        複合 backend の `supported_target_languages()` を引く。
+        """
+        cls = self._registry.get_backend_class(layer, backend_name)
         if cls is None:
             return []
         try:

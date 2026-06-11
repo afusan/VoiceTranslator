@@ -15,7 +15,7 @@
 ```
 [入力デバイス] → VAD → ASR → 翻訳 → TTS → [出力デバイス]
                  Input    ASR  Translator TTS   Output
-                       (5スレッド・4キュー構成)
+                       (標準構成: 5ステージ・4キュー)
 
 # TTS=(なし) のとき(text_only モード)
 [入力デバイス] → VAD → ASR → 翻訳 → (履歴表示で完了)
@@ -172,10 +172,20 @@ py -m uv run python -m voice_translator
   - 選択した PID は **アプリを閉じると保存されない**(再起動時は毎回プロセス選択し直し)。プロセス再起動で PID が変わるため、保存しても次回起動で別アプリの音を取り込む事故を防ぐ仕様。
   - 未選択のまま「▶ 開始」を押そうとすると、ボタンが「プロセス未選択」になり Start を阻止する。
 - VAD: `silero` / `webrtcvad` / `pyannote` / `pvcobra`(後 3 つは `--extra vad-extra` で追加)
-- ASR: `faster_whisper` / `openai_whisper` / `openai_whisper_api` / `google_stt` / `deepgram`
+- ASR: `faster_whisper` / `faster_whisper_translate` / `openai_whisper` / `openai_whisper_api` / `google_stt` / `deepgram`
 - 翻訳: `nllb200` / `deepl` / `openai_gpt` / `anthropic_claude`
 - TTS: `sapi` / `piper` / `elevenlabs` / `openai_tts` / `google_cloud_tts` / **`(なし)`**
 - 音声出力: `soundcard`
+
+#### ASR+翻訳の一括バックエンド(`faster_whisper_translate`)
+ASR に `faster_whisper_translate` を選ぶと、Whisper が**書き起こしと英語への翻訳を 1 回の推論で**行う:
+- **翻訳レイヤは使われなくなる**(ロードもされない)。翻訳行のステータス欄は
+  「(ASR に吸収済み)」のグレー表示になる。プルダウンの選択自体は記憶され、ASR を
+  単体バックエンドに戻すと従来どおり翻訳レイヤが復帰する。
+- **翻訳先は英語固定**。出力言語プルダウンの候補は `en` のみになり、`ja` 等を選んでいた
+  場合は自動的に `en` へ切り替わる(通知バナーで明示)。
+- 履歴の「原文」欄は空になる(Whisper の translate は翻訳結果だけを出力するため)。
+- NLLB のロード(約 2.5GB)が不要になるぶん、起動が軽い。英語字幕/英語読み上げ用途向け。
 
 ### 5-4-0. TTS=(なし) でテキスト字幕モードにする
 TTS プルダウンの末尾に `(なし)` の選択肢がある。これを選ぶと:
