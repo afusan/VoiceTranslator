@@ -109,12 +109,26 @@ class AppController:
         self._stage_dump: StageDumpWriter | NullStageDumpWriter | None = None
 
         # バックエンド実体のキャッシュ(レイヤごとに1つ)。
-        # load_models() で埋め、backends 設定の変更時に該当レイヤを破棄して再ロードする。
+        # load_models() で埋め、backends 設定の変更時は該当レイヤを破棄する(再ロードは
+        # 開始 / ↻ ロード / auto_load のタイミング)。
         self._backends: dict[LayerKind, Any] = {}
         # backend ごとの状態変化購読(load 時に subscribe、eviction で unsubscribe)。
         self._backend_subscriptions: dict[LayerKind, Subscription] = {}
-        # _backends と self._coord の生成・破棄を排他的に行う(ロード/起動の競合防止)
+        # _backends / 構築管理 / self._coord の短い読み書きを排他する。
+        # 原則: このロックを保持したまま重い処理(モデル構築)をしない。UI スレッドも
+        # evict のために取るので、長時間保持すると UI が固まる(過去にロード中の
+        # バックエンド変更でフリーズした実害あり)。
         self._load_lock = threading.Lock()
+        # 同一レイヤの二重構築防止。構築中レイヤは _inflight に入り、完了を
+        # _load_cond(_load_lock を共有)で待ち合わせる。待つのは loader スレッド
+        # 同士だけ(UI スレッドはロード API を呼ばない)。
+        self._load_cond = threading.Condition(self._load_lock)
+        self._inflight: set[LayerKind] = set()
+        # レイヤ別世代カウンタ。evict のたびに進める。構築完了時に世代が進んでいたら
+        # その結果は破棄して最新の設定でロードし直す(last-write-wins)。
+        self._layer_generations: dict[LayerKind, int] = {
+            layer: 0 for layer in LayerKind
+        }
 
         # UI 側からの multi-listener(R2-6 / P2 で全イベント種に汎用化)。
         # token → (event 名, callback)。解除は Subscription.unsubscribe()。
@@ -716,17 +730,15 @@ class AppController:
         (backend 由来の最終状態) を通知するので、GUI 側で進捗を観測できる。
         text_only モードでは TTS / Output レイヤを skip する。
         """
-        with self._load_lock:
-            for layer in self._active_layers():
-                self._load_layer_locked(layer)
+        for layer in self._active_layers():
+            self._load_layer(layer)
 
     def load_model_layer(self, layer: LayerKind) -> None:
         """単一レイヤだけをロードする(冪等)。Phase B 以降の手動ロードボタンの入口。
 
         既にロード済みなら何もしない。失敗時は例外を伝播し、状態は NOT_DOWNLOADED に戻す。
         """
-        with self._load_lock:
-            self._load_layer_locked(layer)
+        self._load_layer(layer)
 
     def reload_model_layer(self, layer: LayerKind) -> None:
         """単一レイヤを強制的に作り直す(既ロードでも evict してから load)。
@@ -737,8 +749,8 @@ class AppController:
         """
         with self._load_lock:
             self._evict_backend_locked(layer)
-            self._emit_status(layer, ModelStatus.INIT)
-            self._load_layer_locked(layer)
+        self._emit_status(layer, ModelStatus.INIT)
+        self._load_layer(layer)
 
     def evict_model_layer(self, layer: LayerKind) -> None:
         """単一レイヤの backend を破棄するが、再 load はしない(2026-05-30)。
@@ -749,42 +761,78 @@ class AppController:
         """
         with self._load_lock:
             self._evict_backend_locked(layer)
-            self._emit_status(layer, ModelStatus.INIT)
+        self._emit_status(layer, ModelStatus.INIT)
 
-    def _load_layer_locked(self, layer: LayerKind) -> None:
-        """`load_lock` を保持中の caller から呼ぶ実体。
+    def _load_layer(self, layer: LayerKind) -> None:
+        """単一レイヤのロード実体(ロック保持なしで呼ぶ)。
 
-        既ロードならスキップ。LOADING を emit → backend 生成 → subscribe → backend 現状を emit。
-        失敗時は NOT_DOWNLOADED を emit して例外を伝播。
+        原則: **モデル構築(`_create`)はロック外**で行い、ロックは
+        `_backends` / `_inflight` / 世代カウンタの短い読み書きに限る。
+        ロックを保持したまま構築すると、evict のためにロックを取る UI スレッドが
+        構築完了までブロックされ UI が固まる(過去の実害)。
 
-        進捗ログ(2026-05-30 追加): どのレイヤが何秒かかったかが分かるように info ログを出す。
-        ロード中に「何も起きていない」ように見えても、実は重いモデルの DL/ロードが進んでいる
-        ケースを切り分けるため。
+        - 既ロードならスキップ(冪等)。
+        - 同一レイヤを別スレッドが構築中なら完了を待ってから再判定(二重構築防止)。
+        - 構築中に evict(バックエンド変更 / 設定保存 / 認証更新)で世代が進んだら、
+          完成品は捨てて最新の設定でロードし直す(last-write-wins。
+          モデル構築は中断できないため完走させてから破棄する)。
+        - 失敗時は NOT_DOWNLOADED を emit して例外を伝播。
+
+        進捗ログ: どのレイヤが何秒かかったかが分かるように info ログを出す。
+        ロード中に「何も起きていない」ように見えても、実は重いモデルの DL/ロードが
+        進んでいるケースを切り分けるため。
         """
-        if layer in self._backends:
-            return
-        self._emit_status(layer, ModelStatus.LOADING)
         from time import monotonic
 
-        t0 = monotonic()
-        self._logger.info("レイヤ %s のロード開始", layer.value)
-        try:
-            inst = self._create(layer)
-        except Exception:
-            elapsed = monotonic() - t0
-            self._logger.error(
-                "レイヤ %s のロード失敗 (%.1fs 経過)", layer.value, elapsed
+        while True:
+            with self._load_cond:
+                while layer in self._inflight:
+                    self._load_cond.wait()
+                if layer in self._backends:
+                    return
+                generation = self._layer_generations[layer]
+                self._inflight.add(layer)
+
+            self._emit_status(layer, ModelStatus.LOADING)
+            self._logger.info("レイヤ %s のロード開始", layer.value)
+            t0 = monotonic()
+            try:
+                inst = self._create(layer)
+            except Exception:
+                self._logger.error(
+                    "レイヤ %s のロード失敗 (%.1fs 経過)",
+                    layer.value, monotonic() - t0,
+                )
+                with self._load_cond:
+                    self._inflight.discard(layer)
+                    self._load_cond.notify_all()
+                self._emit_status(layer, ModelStatus.NOT_DOWNLOADED)
+                raise
+
+            stale = False
+            with self._load_cond:
+                self._inflight.discard(layer)
+                self._load_cond.notify_all()
+                if self._layer_generations[layer] != generation:
+                    stale = True
+                else:
+                    self._backends[layer] = inst
+                    # backend のその後の状態変化を購読
+                    # (DOWNLOADING on reload / MISSING_CREDENTIALS 等)
+                    self._subscribe_backend(layer, inst)
+            if stale:
+                self._logger.info(
+                    "レイヤ %s のロード結果を破棄(構築中に設定が変わった)。"
+                    "最新の設定でロードし直す", layer.value,
+                )
+                del inst
+                continue
+            self._logger.info(
+                "レイヤ %s のロード完了 (%.1fs)", layer.value, monotonic() - t0
             )
-            self._emit_status(layer, ModelStatus.NOT_DOWNLOADED)
-            raise
-        elapsed = monotonic() - t0
-        self._logger.info("レイヤ %s のロード完了 (%.1fs)", layer.value, elapsed)
-        self._backends[layer] = inst
-        # backend のその後の状態変化を購読(将来 DOWNLOADING on reload / MISSING_CREDENTIALS 等)
-        self._subscribe_backend(layer, inst)
-        # 生成時点での backend 状態(通常 LOADED)を最終通知
-        final_status = self._safe_backend_status(inst)
-        self._emit_status(layer, final_status)
+            # 生成時点での backend 状態(通常 LOADED)を最終通知
+            self._emit_status(layer, self._safe_backend_status(inst))
+            return
 
     def _subscribe_backend(self, layer: LayerKind, backend: Any) -> None:
         """backend の状態変化購読を登録する(失敗しても本体は止めない)。"""
@@ -815,7 +863,12 @@ class AppController:
         return ModelStatus.LOADED
 
     def _evict_backend_locked(self, layer: LayerKind) -> None:
-        """`load_lock` 保持中の caller から呼ぶ。subscribe 解除 + キャッシュ削除。"""
+        """`load_lock` 保持中の caller から呼ぶ。subscribe 解除 + キャッシュ削除。
+
+        世代カウンタも進める: このレイヤを構築中のスレッドがいたら、その完成品は
+        旧設定産なので破棄される(`_load_layer` の stale 判定)。
+        """
+        self._layer_generations[layer] += 1
         sub = self._backend_subscriptions.pop(layer, None)
         if sub is not None:
             try:
