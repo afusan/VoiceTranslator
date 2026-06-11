@@ -16,7 +16,7 @@ import logging
 from .backend_registry import BackendRegistry
 from .config_store import ConfigStore
 from .credentials import CredentialsStore
-from .types import LayerKind, VerifyResult
+from .types import AuthState, LayerKind, VerifyResult
 
 
 class CredentialsService:
@@ -88,6 +88,33 @@ class CredentialsService:
         backend 実装の例外ハンドラから呼ばれて、次回 Start を gate する仕組み。
         """
         self._config.set("credentials", "verified", backend_name, False)
+
+    def get_auth_state(self, layer: LayerKind, backend_name: str) -> AuthState:
+        """指定 backend の認証準備状態を静的に判定する(インスタンス不要)。
+
+        判定順は start 時の認証 gate(`_check_missing_credentials_gate`)と揃える:
+        認証不要 → NOT_REQUIRED / spec の鍵が 1 つでも未保存 → MISSING /
+        全鍵保存済みで verified=False → UNVERIFIED / それ以外 → VERIFIED。
+        未登録 backend・spec 取得失敗は NOT_REQUIRED に縮退する(表示・ガードを
+        誤判定で固めない。起動可否の最終判定は gate が行う)。
+        """
+        hint = self._registry.get_capability_hint(layer, backend_name)
+        if hint is None or not hint.requires_credentials:
+            return AuthState.NOT_REQUIRED
+        cls = self._registry.get_backend_class(layer, backend_name)
+        spec = []
+        if cls is not None:
+            try:
+                spec = list(cls.credential_spec())
+            except Exception:  # noqa: BLE001
+                self._logger.exception(
+                    "credential_spec の呼び出し失敗 backend=%s", backend_name
+                )
+        if any(not self.has(backend_name, f.key_name) for f in spec):
+            return AuthState.MISSING
+        if not self.is_backend_verified(backend_name):
+            return AuthState.UNVERIFIED
+        return AuthState.VERIFIED
 
     # ---- 疎通確認 ----
     def verify_and_save(

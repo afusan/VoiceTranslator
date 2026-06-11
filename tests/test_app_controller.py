@@ -601,7 +601,13 @@ class TestLoadModels:
     def test_backend_change_evicts_only_that_layer(
         self, populated_registry, config
     ) -> None:
-        """バックエンド名を変えると、当該レイヤだけがキャッシュから外れる。"""
+        """バックエンド名の変更は当該レイヤの evict + INIT のみ(自動再ロードはしない)。
+
+        変更即ロードは廃止済み: 実ロードは Start / ↻ ロード / auto_load に寄せる
+        (押し間違いで重いロードを走らせない・ロード中の再変更で UI を固めない)。
+        """
+        import threading
+
         # ASR にもう1つ実装を追加して切り替えできるようにする
         populated_registry.register(
             LayerKind.ASR, "alt_asr", _fake_simple_backend
@@ -613,15 +619,12 @@ class TestLoadModels:
         old_asr = ctrl._backends[LayerKind.ASR]
 
         ctrl.set_setting("backends", "asr", "alt_asr")
-        # ASR は破棄され、再ロードが起きる(別スレッドだが Mock の生成は瞬時)
-        import time
-        for _ in range(20):
-            if LayerKind.ASR in ctrl._backends:
-                break
-            time.sleep(0.05)
-        assert LayerKind.ASR in ctrl._backends, "ASR が再ロードされていない"
-        new_asr = ctrl._backends[LayerKind.ASR]
-        assert new_asr is not old_asr, "ASR インスタンスが置き換わっていない"
+        # 変更は「選択」のみ: キャッシュから外れ、ロードスレッドは起動しない
+        assert LayerKind.ASR not in ctrl._backends, "変更直後に自動ロードが走っている"
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT
+        assert not [
+            t for t in threading.enumerate() if t.name.startswith("vt_reload")
+        ], "廃止したはずの自動再ロードスレッドが起動している"
         # 他レイヤは触られていない
         for layer in LayerKind:
             if layer == LayerKind.ASR:
@@ -629,6 +632,9 @@ class TestLoadModels:
             assert ctrl._backends[layer] is kept_layers[layer], (
                 f"{layer}: 設定変更で触らなくていいキャッシュが破棄された"
             )
+        # 次の明示ロード(↻ ロード / Start 相当)で新しい選択が入る
+        ctrl.load_model_layer(LayerKind.ASR)
+        assert ctrl._backends[LayerKind.ASR] is not old_asr
 
     def test_load_models_async_invokes_on_done(
         self, populated_registry, config
@@ -658,6 +664,115 @@ class TestLoadModels:
                 assert ctrl._backends[layer] is snapshot[layer]
         finally:
             ctrl.stop_pipeline()
+
+
+class TestRunningEvent:
+    """パイプライン起動完了 / 停止の running イベント(動作中 UI ロックの材料)。"""
+
+    def _runnable_ctrl(self, populated_registry, config, tmp_path) -> AppController:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.set_setting("devices", "input", "mic_a")
+        ctrl.set_setting("devices", "output", "hp")
+        ctrl.set_setting("log", "directory", str(tmp_path / "logs"))
+        return ctrl
+
+    def test_emitted_on_start_and_stop(
+        self, populated_registry, config, tmp_path
+    ) -> None:
+        ctrl = self._runnable_ctrl(populated_registry, config, tmp_path)
+        events: list[bool] = []
+        ctrl.add_running_listener(lambda r: events.append(r))
+        ctrl.start_pipeline()
+        try:
+            assert events == [True]
+        finally:
+            ctrl.stop_pipeline()
+        assert events == [True, False]
+
+    def test_stop_without_start_does_not_emit(
+        self, populated_registry, config
+    ) -> None:
+        """未起動の stop(冪等呼び出し)ではイベントを出さない。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        events: list[bool] = []
+        ctrl.add_running_listener(lambda r: events.append(r))
+        ctrl.stop_pipeline()
+        assert events == []
+
+
+class TestLoadSettingsDiff:
+    """設定再読込は「実効内容が変わったレイヤだけ」evict する(全破棄しない)。
+
+    比較対象は (選択 backend 名, その backend の backends_config)。同一なら
+    ロード済みインスタンスと状態表示を維持する(再読込のたびに重いモデルの
+    再ロードが必要になるのを避ける)。
+    """
+
+    @staticmethod
+    def _rewrite_config_file(config, mutate) -> None:
+        """保存済み config.yaml を外部編集相当で書き換える。"""
+        import yaml
+
+        data = yaml.safe_load(config.path.read_text(encoding="utf-8"))
+        mutate(data)
+        config.path.write_text(
+            yaml.safe_dump(data, allow_unicode=True), encoding="utf-8"
+        )
+
+    def test_unchanged_layers_keep_loaded_instances(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.save_settings()  # 現状をファイル化(再読込しても同一内容)
+        ctrl.load_models()
+        snapshot = dict(ctrl._backends)
+
+        statuses: list = []
+        ctrl.add_status_listener(lambda l, s: statuses.append((l, s)))
+        ctrl.load_settings()
+
+        assert dict(ctrl._backends) == snapshot, "変更が無いのに evict された"
+        assert statuses == [], "変更が無いのに INIT が emit された"
+
+    def test_changed_backend_evicts_only_that_layer(
+        self, populated_registry, config
+    ) -> None:
+        populated_registry.register(LayerKind.ASR, "alt_asr", _fake_simple_backend)
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.save_settings()
+        ctrl.load_models()
+
+        self._rewrite_config_file(
+            config, lambda d: d["backends"].__setitem__("asr", "alt_asr")
+        )
+        ctrl.load_settings()
+
+        assert LayerKind.ASR not in ctrl._backends
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT
+        for layer in LayerKind:
+            if layer != LayerKind.ASR:
+                assert layer in ctrl._backends, f"{layer}: 無関係なレイヤが破棄された"
+
+    def test_changed_backends_config_evicts_that_layer(
+        self, populated_registry, config
+    ) -> None:
+        """選択名が同じでも backends_config(model_size 等)が変われば作り直し対象。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl.save_settings()
+        ctrl.load_models()
+
+        def _mutate(d):
+            d.setdefault("backends_config", {}).setdefault("faster_whisper", {})[
+                "model_size"
+            ] = "large-v3"
+
+        self._rewrite_config_file(config, _mutate)
+        ctrl.load_settings()
+
+        assert LayerKind.ASR not in ctrl._backends
+        for layer in LayerKind:
+            if layer != LayerKind.ASR:
+                assert layer in ctrl._backends
 
 
 class TestPipelineQueueConfig:
@@ -739,15 +854,9 @@ class TestPhaseA2StatusDelegation:
         old_sub = ctrl._backend_subscriptions[LayerKind.ASR]
 
         ctrl.set_setting("backends", "asr", "alt_asr")
-        # 再ロード完了を待つ
-        import time
-        for _ in range(20):
-            if LayerKind.ASR in ctrl._backends and (
-                ctrl._backend_subscriptions.get(LayerKind.ASR) is not old_sub
-            ):
-                break
-            time.sleep(0.05)
+        # evict は同期で完了する(自動再ロードはしないので待ち合わせ不要)
         assert old_sub.unsubscribe.called, "旧 backend の subscription が解除されていない"
+        assert LayerKind.ASR not in ctrl._backend_subscriptions
 
 
 class TestPhaseA2MultiListener:
@@ -843,17 +952,18 @@ class TestPhaseA2LoadModelLayer:
 
         populated_registry.register(LayerKind.ASR, "broken", _failing_factory)
         ctrl = AppController(registry=populated_registry, config=config)
-        ctrl.set_setting("backends", "asr", "broken")  # 再ロードは別スレッドで失敗
-        # set_setting 由来の再ロードが完了するのを待ち、最終状態が NOT_DOWNLOADED であること
-        import time
-        for _ in range(20):
-            if ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT:
-                # まだロードが始まっていない or 終わっていない
-                time.sleep(0.05)
-            else:
-                break
-        # 失敗ロードなので backend は不在
+        ctrl.set_setting("backends", "asr", "broken")  # 変更は選択のみ(自動ロードなし)
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT
+
+        statuses: list[ModelStatus] = []
+        ctrl.add_status_listener(
+            lambda l, s: statuses.append(s) if l == LayerKind.ASR else None
+        )
+        with pytest.raises(RuntimeError):
+            ctrl.load_model_layer(LayerKind.ASR)
+        # 失敗ロードなので backend は不在、最終通知は NOT_DOWNLOADED
         assert LayerKind.ASR not in ctrl._backends
+        assert statuses[-1] == ModelStatus.NOT_DOWNLOADED
 
 
 class TestPhaseA2RecentDurations:
@@ -1478,6 +1588,123 @@ class TestPhaseE2CredentialFlow:
             assert ctrl.is_running
         finally:
             ctrl.stop_pipeline()
+
+
+class TestAuthStateAndCredentialEvents:
+    """認証準備状態の互換窓(`get_auth_state`)と credentials イベントの発火。
+
+    セットアップは TestPhaseE2CredentialFlow と同じ fake cloud backend を共有する
+    (継承すると親のテストが二重実行されるため、ヘルパーだけ借りる)。
+    """
+
+    _setup_with_cloud_backend = TestPhaseE2CredentialFlow._setup_with_cloud_backend
+
+    def test_get_auth_state_for_selected_backend(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """選択中 backend の AuthState を静的に返す(ロード不要)。"""
+        from voice_translator.common.types import AuthState
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        # ローカル backend(既定の faster_whisper)は NOT_REQUIRED
+        assert ctrl.get_auth_state(LayerKind.ASR) == AuthState.NOT_REQUIRED
+        # cloud に切り替えると(未ロードのまま)MISSING になる
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        assert LayerKind.ASR not in ctrl._backends  # ロードされていないことを確認
+        assert ctrl.get_auth_state(LayerKind.ASR) == AuthState.MISSING
+        # 鍵だけ保存 → UNVERIFIED、verify 通過 → VERIFIED
+        ctrl.set_credential("fake_cloud_asr", "api_key", "sk-x")
+        assert ctrl.get_auth_state(LayerKind.ASR) == AuthState.UNVERIFIED
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-x"}
+        )
+        assert ctrl.get_auth_state(LayerKind.ASR) == AuthState.VERIFIED
+
+    def test_get_all_auth_states_covers_all_layers(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        from voice_translator.common.types import AuthState
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        states = ctrl.get_all_auth_states()
+        assert set(states.keys()) == set(LayerKind)
+        assert all(isinstance(s, AuthState) for s in states.values())
+
+    def test_credential_changes_emit_settings_event(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """set / delete / verify / invalidate が ("credentials", <backend>) を emit する。
+
+        AuthState は status イベントが出ない経路(store / config 直)で変わるため、
+        UI の再計算はこのイベントが頼り。
+        """
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        events: list[tuple[str, ...]] = []
+        ctrl.add_settings_listener(lambda keys: events.append(keys))
+
+        ctrl.set_credential("fake_cloud_asr", "api_key", "sk-1")
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-1"}
+        )
+        ctrl.invalidate_verification("fake_cloud_asr")
+        ctrl.delete_credential("fake_cloud_asr", "api_key")
+
+        cred_events = [k for k in events if k[0] == "credentials"]
+        assert cred_events == [("credentials", "fake_cloud_asr")] * 4
+
+    def test_verify_failure_does_not_emit_credentials_event(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, cls, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        cls.ok_value = False
+        events: list[tuple[str, ...]] = []
+        ctrl.add_settings_listener(lambda keys: events.append(keys))
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "bad"}
+        )
+        assert [k for k in events if k[0] == "credentials"] == []
+
+    def test_verify_success_evicts_loaded_instance(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """認証成功時、選択中レイヤのロード済みインスタンスは evict + INIT に戻る。
+
+        旧挙動(MISSING_CREDENTIALS のときだけ即 reload)は lazy 方針に置き換え:
+        古い認証情報で作られたインスタンスを捨て、次の Start / ↻ ロードで作り直す。
+        """
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        ctrl.load_model_layer(LayerKind.ASR)
+        assert LayerKind.ASR in ctrl._backends
+
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-new"}
+        )
+        assert LayerKind.ASR not in ctrl._backends
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT
+
+    def test_verify_for_unselected_backend_does_not_evict(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """選択されていない backend の認証ではキャッシュに触らない。"""
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        # ASR は既定(faster_whisper)のままロード
+        ctrl.load_model_layer(LayerKind.ASR)
+        inst = ctrl._backends[LayerKind.ASR]
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-x"}
+        )
+        assert ctrl._backends[LayerKind.ASR] is inst
 
 
 class TestAsrSupportedLanguages:

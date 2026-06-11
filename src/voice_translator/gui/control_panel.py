@@ -453,14 +453,19 @@ class ControlPanel(ctk.CTkFrame):
         self.after(0, lambda: self._apply_layer_status(layer, status))
 
     def _on_settings_changed_from_thread(self, keys: tuple[str, ...]) -> None:
-        """settings イベント受信。devices.* の変更だけ ready 状態の再計算につなげる。
+        """settings イベント受信。ready 状態の再計算が必要なキーだけつなげる。
 
-        PROCESS kind での PID 選択完了(「プロセス未選択」→「▶ 開始」遷移)と、
-        出力デバイス選択(出力テストボタンの enable)をカバーする(P2: 旧
-        `SettingsPanel → refresh_ready_state()` 直叩きの置き換え)。
+        - devices.*: PROCESS kind での PID 選択完了(「プロセス未選択」→「▶ 開始」遷移)と
+          出力デバイス選択(出力テストボタンの enable)をカバーする(P2: 旧
+          `SettingsPanel → refresh_ready_state()` 直叩きの置き換え)。
+        - credentials.*: 認証の入力 / 検証 / 失効で開始ボタンのガード
+          (「認証情報未設定」/「認証未検証」)を再計算する。
         """
-        if keys and keys[0] == "devices":
+        if keys and keys[0] in ("devices", "credentials"):
             self.after(0, self._sync_ready_state)
+        if keys and keys[0] == "credentials":
+            # ステータス集約(認証上書きの行)も即時更新する(30 秒周期を待たない)
+            self.after(0, self._refresh_status_text)
 
     def _apply_layer_status(self, layer: LayerKind, status: ModelStatus) -> None:
         self._layer_statuses[layer] = status
@@ -545,6 +550,7 @@ class ControlPanel(ctk.CTkFrame):
             has_input_source=self._ready_has_input_source(),
             has_output_device=self._ready_has_output_device(),
             absorbed=self._ready_absorbed_roles(),
+            auth_states=self._ready_auth_states(),
         )
         if rs is None:
             return
@@ -599,6 +605,14 @@ class ControlPanel(ctk.CTkFrame):
             return tuple(self._controller.get_absorbed_roles().keys())
         except Exception:  # noqa: BLE001
             return ()
+
+    def _ready_auth_states(self) -> dict:
+        """選択中 backend の認証準備状態(取得失敗は「判定なし」に縮退)。"""
+        try:
+            states = self._controller.get_all_auth_states()
+        except Exception:  # noqa: BLE001
+            return {}
+        return states if isinstance(states, dict) else {}
 
     def _ready_has_input_source(self) -> bool:
         """`devices.input` が選択済みか。取得失敗は未選択扱い(安全側 = Start を止める)。"""

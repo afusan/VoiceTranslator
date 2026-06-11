@@ -1,8 +1,11 @@
 """段階 3 で導入した「PROCESS kind の入力ソース」ライフサイクル周りのテスト。
 
 検証:
-- A-7 確定方針: `save_settings` / `load_settings` で PROCESS kind の `devices.input` を
-  空文字に正規化する(永続化しない / 起動時もセーフティで空)。
+- A-7 確定方針: PROCESS kind の `devices.input`(PID)は**ファイルに永続化しない**。
+  - save: 書き出し用コピーからのみ除外し、**in-memory のセッション中選択は維持する**
+    (以前は実メモリを空にしてから保存していたため、「設定を保存」のたびに
+    プロセス選択が内部で無効化されていた — 2026-06-11 修正)
+  - load: 起動 / 再読込直後は in-memory 側も空に正規化(再起動後の PID は無意味)
 - ControlPanel._sync_ready_state が「PROCESS kind かつ未選択」で Start を disable する。
 """
 
@@ -13,88 +16,78 @@ from unittest.mock import MagicMock
 import pytest
 
 from voice_translator.common.app_controller import AppController
+from voice_translator.common.config_store import ConfigStore
 from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
 
 
 # ============================================================
-# A-7: save / load で PROCESS source を空扱いに正規化
+# A-7: save はコピー除外(メモリ維持)/ load は in-memory 正規化
 # ============================================================
 class TestVolatileInputNormalization:
     def _make_shim(self, *, kind: CaptureKind, input_value: str = "1234"):
-        """AppController の `_strip_volatile_inputs_before_save` / `_normalize_volatile_inputs_after_load`
-        だけを叩ける薄い shim を作る。`_config` は MagicMock で、get/set を観察する。
-        """
+        """save/load の揮発キー処理だけを叩ける薄い shim。`_config` は実 ConfigStore。"""
         shim = MagicMock(spec=AppController)
-        # bind unbound method
-        shim._strip_volatile_inputs_before_save = (
-            AppController._strip_volatile_inputs_before_save.__get__(shim)
-        )
-        shim._normalize_volatile_inputs_after_load = (
-            AppController._normalize_volatile_inputs_after_load.__get__(shim)
-        )
-        shim._clear_process_input_if_applicable = (
-            AppController._clear_process_input_if_applicable.__get__(shim)
-        )
+        for name in (
+            "save_settings",
+            "_strip_volatile_inputs_for_save",
+            "_normalize_volatile_inputs_after_load",
+            "_is_process_capture_selected",
+        ):
+            setattr(shim, name, getattr(AppController, name).__get__(shim))
 
-        # 配下の ConfigStore モック
-        config_data = {
-            ("backends", "capture"): "proctap" if kind == CaptureKind.PROCESS else "soundcard",
-            ("devices", "input"): input_value,
-        }
-        set_calls: list[tuple] = []
-
-        def fake_get(*keys, default=None):
-            return config_data.get(keys, default)
-
-        def fake_set(*keys_and_value):
-            *keys, value = keys_and_value
-            config_data[tuple(keys)] = value
-            set_calls.append((tuple(keys), value))
-
-        shim._config = MagicMock()
-        shim._config.get.side_effect = fake_get
-        shim._config.set.side_effect = fake_set
-        # get_capture_kind は backend 名に応じて kind を返す
+        backend = "proctap" if kind == CaptureKind.PROCESS else "soundcard"
+        cfg = ConfigStore(path="dummy", data={})
+        cfg.set("backends", "capture", backend)
+        cfg.set("devices", "input", input_value)
+        shim._config = cfg
         shim.get_capture_kind.side_effect = lambda name: (
             CaptureKind.PROCESS if name == "proctap" else CaptureKind.DEVICE
         )
-        return shim, config_data, set_calls
+        return shim, cfg
 
-    def test_save_clears_input_when_process_kind(self):
-        shim, data, calls = self._make_shim(kind=CaptureKind.PROCESS, input_value="42")
-        shim._strip_volatile_inputs_before_save()
-        # devices.input が "" に書き換えられている
-        assert data[("devices", "input")] == ""
-        assert (("devices", "input"), "") in calls
+    def test_save_strips_only_written_copy_and_keeps_memory(self, tmp_path):
+        """PROCESS kind: ファイルには PID を書かないが、セッション中の選択は消えない。"""
+        import yaml
 
-    def test_save_keeps_input_when_device_kind(self):
-        shim, data, calls = self._make_shim(kind=CaptureKind.DEVICE, input_value="mic1")
-        shim._strip_volatile_inputs_before_save()
-        # DEVICE kind は触らない
-        assert data[("devices", "input")] == "mic1"
-        assert not calls  # set は呼ばれない
+        shim, cfg = self._make_shim(kind=CaptureKind.PROCESS, input_value="42")
+        cfg._path = tmp_path / "cfg.yaml"  # noqa: SLF001 - 実書き出し先を差し替え
+
+        shim.save_settings()
+
+        # in-memory は維持(これが消えると「保存のたびにプロセス選択が無効化」になる)
+        assert cfg.get("devices", "input") == "42"
+        # ファイル側は空(A-7: PID を永続化しない)
+        written = yaml.safe_load(cfg.path.read_text(encoding="utf-8"))
+        assert written["devices"]["input"] == ""
+
+    def test_save_keeps_input_when_device_kind(self, tmp_path):
+        import yaml
+
+        shim, cfg = self._make_shim(kind=CaptureKind.DEVICE, input_value="mic1")
+        cfg._path = tmp_path / "cfg.yaml"  # noqa: SLF001
+
+        shim.save_settings()
+
+        assert cfg.get("devices", "input") == "mic1"
+        written = yaml.safe_load(cfg.path.read_text(encoding="utf-8"))
+        assert written["devices"]["input"] == "mic1"
 
     def test_load_normalizes_stale_pid_in_process_kind(self):
-        shim, data, calls = self._make_shim(kind=CaptureKind.PROCESS, input_value="999")
+        shim, cfg = self._make_shim(kind=CaptureKind.PROCESS, input_value="999")
         shim._normalize_volatile_inputs_after_load()
-        assert data[("devices", "input")] == ""
+        assert cfg.get("devices", "input") == ""
 
     def test_load_keeps_input_when_device_kind(self):
-        shim, data, calls = self._make_shim(kind=CaptureKind.DEVICE, input_value="speakers")
+        shim, cfg = self._make_shim(kind=CaptureKind.DEVICE, input_value="speakers")
         shim._normalize_volatile_inputs_after_load()
-        assert data[("devices", "input")] == "speakers"
+        assert cfg.get("devices", "input") == "speakers"
 
     def test_no_backend_name_is_noop(self):
-        shim, data, calls = self._make_shim(kind=CaptureKind.PROCESS, input_value="7")
-        # backend 名を空に上書き
-        shim._config.get.side_effect = lambda *keys, default=None: (
-            "" if keys == ("backends", "capture") else (
-                "7" if keys == ("devices", "input") else default
-            )
-        )
-        shim._strip_volatile_inputs_before_save()
-        # 何も触らない
-        assert not calls
+        """backend 未選択時は判定不能 → 何も除外しない。"""
+        shim, cfg = self._make_shim(kind=CaptureKind.PROCESS, input_value="7")
+        cfg.set("backends", "capture", "")
+        data = {"devices": {"input": "7"}}
+        assert shim._strip_volatile_inputs_for_save(data) == {"devices": {"input": "7"}}
 
 
 # ============================================================

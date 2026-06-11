@@ -13,7 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Collection, Mapping
 
-from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
+from voice_translator.common.types import (
+    AuthState,
+    CaptureKind,
+    LayerKind,
+    ModelStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,16 @@ class ReadyState:
     test: WidgetSpec
 
 
+def _excluded_layers(
+    output_mode: str, absorbed: Collection[LayerKind],
+) -> set[LayerKind]:
+    """起動対象外(text_only の TTS/Output + 吸収されたロール)のレイヤ集合。"""
+    excluded = set(absorbed)
+    if output_mode == "text_only":
+        excluded.update((LayerKind.TTS, LayerKind.OUTPUT))
+    return excluded
+
+
 def filter_active_statuses(
     statuses: Mapping[LayerKind, ModelStatus],
     output_mode: str,
@@ -45,9 +60,7 @@ def filter_active_statuses(
     - 複合 backend に吸収されたロール(`absorbed`)も除外(ロードされないため、
       残すと「永遠に Init のレイヤ」が ready 判定を濁す)。
     """
-    excluded = set(absorbed)
-    if output_mode == "text_only":
-        excluded.update((LayerKind.TTS, LayerKind.OUTPUT))
+    excluded = _excluded_layers(output_mode, absorbed)
     return {
         layer: status
         for layer, status in statuses.items()
@@ -63,24 +76,39 @@ def compute_ready_state(
     has_input_source: bool,
     has_output_device: bool,
     absorbed: Collection[LayerKind] = (),
+    auth_states: Mapping[LayerKind, AuthState] | None = None,
 ) -> ReadyState | None:
     """idle 状態のときの 3 ボタン + ラベルの表示を一括計算する。
 
     statuses は全レイヤ分(フィルタ前)を渡す。対象レイヤが空のときは None を返し、
     View 側は何もしない。`absorbed` は複合 backend に吸収されたロール(判定対象外)。
+    `auth_states` は選択中 backend の認証準備状態(静的判定)。未ロードのクラウド
+    backend(Init のまま)や「鍵あり・未検証」でも開始ボタンを止められる —
+    押下時の認証 gate(FatalError)は最後の防波堤で、ここで先に伝えるのが本線。
 
     トグルの優先順位:
-    MISSING_CREDENTIALS > DOWNLOADING > (PROCESS kind かつ入力未選択) > 通常
+    認証未設定(static MISSING or instance MISSING_CREDENTIALS)> 認証未検証 >
+    DOWNLOADING > (PROCESS kind かつ入力未選択) > 通常
     """
     active = filter_active_statuses(statuses, output_mode, absorbed)
     vals = list(active.values())
     if not vals:
         return None
+    excluded = _excluded_layers(output_mode, absorbed)
+    auth_vals = [
+        a for layer, a in (auth_states or {}).items() if layer not in excluded
+    ]
 
     # --- トグルボタン + ステータスラベル ---
-    if any(s == ModelStatus.MISSING_CREDENTIALS for s in vals):
+    if (
+        any(a == AuthState.MISSING for a in auth_vals)
+        or any(s == ModelStatus.MISSING_CREDENTIALS for s in vals)
+    ):
         toggle = WidgetSpec("認証情報未設定", enabled=False)
         status_text = "認証情報未設定(詳細ダイアログで設定してください)"
+    elif any(a == AuthState.UNVERIFIED for a in auth_vals):
+        toggle = WidgetSpec("認証未検証", enabled=False)
+        status_text = "認証が未検証です(詳細ダイアログの「認証」でテストしてください)"
     elif any(s == ModelStatus.DOWNLOADING for s in vals):
         toggle = WidgetSpec("モデル DL 中…", enabled=False)
         status_text = "モデルダウンロード中…"

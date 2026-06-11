@@ -8,6 +8,7 @@ control_panel._refresh_status_text)の出力を byte 単位で固定したもの
 from __future__ import annotations
 
 from voice_translator.common.types import (
+    AuthState,
     ErrorRecord,
     LayerKind,
     LayerStatusLine,
@@ -181,3 +182,60 @@ class TestDispositionLines:
             status=ModelStatus.LOADED,
         )
         assert format_status_summary([line], [], []) == "[asr] faster_whisper: Loaded"
+
+
+class TestAuthOverrideLines:
+    """認証未完了(静的判定)の行はインスタンス状態より優先して表示する。
+
+    設定パネルの行ステータス上書き(auth_display)と同じ文言で揃える。
+    """
+
+    def test_auth_missing_overrides_init(self) -> None:
+        """未ロード(Init)でも鍵未入力なら Missing Credentials 表示。"""
+        line = LayerStatusLine(
+            layer=LayerKind.ASR,
+            backend_name="cloud_asr",
+            status=ModelStatus.INIT,
+            auth=AuthState.MISSING,
+        )
+        assert (
+            format_status_summary([line], [], [])
+            == "[asr] cloud_asr: Missing Credentials"
+        )
+
+    def test_auth_unverified_overrides_loaded(self) -> None:
+        """鍵あり・未検証は Loaded でも Not Verified 表示(表示と gate の矛盾防止)。"""
+        line = LayerStatusLine(
+            layer=LayerKind.ASR,
+            backend_name="cloud_asr",
+            status=ModelStatus.LOADED,
+            auth=AuthState.UNVERIFIED,
+        )
+        assert (
+            format_status_summary([line], [], [])
+            == "[asr] cloud_asr: Not Verified"
+        )
+
+    def test_auth_verified_keeps_normal_status(self) -> None:
+        line = LayerStatusLine(
+            layer=LayerKind.ASR,
+            backend_name="cloud_asr",
+            status=ModelStatus.LOADED,
+            auth=AuthState.VERIFIED,
+        )
+        assert format_status_summary([line], [], []) == "[asr] cloud_asr: Loaded"
+
+    def test_absorbed_takes_priority_over_auth(self) -> None:
+        """吸収行は編成表示のまま(動かない backend の認証状態は出さない)。"""
+        line = LayerStatusLine(
+            layer=LayerKind.TRANSLATOR,
+            backend_name="cloud_tr",
+            status=ModelStatus.INIT,
+            disposition="absorbed",
+            absorbed_into="asr",
+            absorbed_backend="gpt_audio_translate",
+            auth=AuthState.MISSING,
+        )
+        out = format_status_summary([line], [], [])
+        assert out == "[translator] (asr の gpt_audio_translate で実行)"
+        assert "Missing" not in out

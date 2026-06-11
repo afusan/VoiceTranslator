@@ -77,6 +77,7 @@ def _make_controller(tts_choice: str = "sapi") -> MagicMock:
     controller.supports_auto_detect.return_value = False
     controller.get_layer_device.return_value = None
     controller.get_backend_capability_hint.return_value = None
+    controller.is_running = False  # 動作中ロック(_interactive_state)の前提: 停止中
     return controller
 
 

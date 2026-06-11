@@ -64,6 +64,7 @@ from .pipeline_plan import (
 from .sequence import SequenceGenerator
 from .stage_dump import NullStageDumpWriter, StageDumpWriter
 from .types import (
+    AuthState,
     CaptureSource,
     CredentialField,
     ErrorRecord,
@@ -108,12 +109,26 @@ class AppController:
         self._stage_dump: StageDumpWriter | NullStageDumpWriter | None = None
 
         # バックエンド実体のキャッシュ(レイヤごとに1つ)。
-        # load_models() で埋め、backends 設定の変更時に該当レイヤを破棄して再ロードする。
+        # load_models() で埋め、backends 設定の変更時は該当レイヤを破棄する(再ロードは
+        # 開始 / ↻ ロード / auto_load のタイミング)。
         self._backends: dict[LayerKind, Any] = {}
         # backend ごとの状態変化購読(load 時に subscribe、eviction で unsubscribe)。
         self._backend_subscriptions: dict[LayerKind, Subscription] = {}
-        # _backends と self._coord の生成・破棄を排他的に行う(ロード/起動の競合防止)
+        # _backends / 構築管理 / self._coord の短い読み書きを排他する。
+        # 原則: このロックを保持したまま重い処理(モデル構築)をしない。UI スレッドも
+        # evict のために取るので、長時間保持すると UI が固まる(過去にロード中の
+        # バックエンド変更でフリーズした実害あり)。
         self._load_lock = threading.Lock()
+        # 同一レイヤの二重構築防止。構築中レイヤは _inflight に入り、完了を
+        # _load_cond(_load_lock を共有)で待ち合わせる。待つのは loader スレッド
+        # 同士だけ(UI スレッドはロード API を呼ばない)。
+        self._load_cond = threading.Condition(self._load_lock)
+        self._inflight: set[LayerKind] = set()
+        # レイヤ別世代カウンタ。evict のたびに進める。構築完了時に世代が進んでいたら
+        # その結果は破棄して最新の設定でロードし直す(last-write-wins)。
+        self._layer_generations: dict[LayerKind, int] = {
+            layer: 0 for layer in LayerKind
+        }
 
         # UI 側からの multi-listener(R2-6 / P2 で全イベント種に汎用化)。
         # token → (event 名, callback)。解除は Subscription.unsubscribe()。
@@ -154,6 +169,7 @@ class AppController:
     # - "fatal" / "warn": (message, *, exc, stage, seq_id, suppressed)
     # - "settings":       (keys: tuple[str, ...]) … set_setting のキー(値は含めない)
     # - "restart":        (event: PipelineRestartEvent)
+    # - "running":        (running: bool) … パイプライン起動完了 / 停止
     # listener は emit 元スレッド(Loader / Coordinator / vt_restart 等)で呼ばれる。
     # UI 側は `widget.after(0, ...)` でメインスレッドへ marshalling すること。
     def add_status_listener(self, callback: UiStatusListener) -> Subscription:
@@ -185,6 +201,14 @@ class AppController:
     def add_restart_listener(self, callback: Callable[..., None]) -> Subscription:
         """動作中デバイス変更に伴う自動 restart のライフサイクル通知を購読する。"""
         return self._add_listener("restart", callback)
+
+    def add_running_listener(self, callback: Callable[[bool], None]) -> Subscription:
+        """パイプラインの起動完了 / 停止を購読する(running: bool が届く)。
+
+        用途: SettingsPanel が動作中にバックエンド行をロックする等、
+        「動作中かどうか」で UI を切り替える Panel 間同期(直接参照の代わり)。
+        """
+        return self._add_listener("running", callback)
 
     def _add_listener(self, event: str, callback: Callable[..., None]) -> Subscription:
         with self._listeners_lock:
@@ -273,6 +297,10 @@ class AppController:
                 disposition, absorbed_into, absorbed_backend = "skipped", "", ""
             else:
                 disposition, absorbed_into, absorbed_backend = "active", "", ""
+            try:
+                auth = self.get_auth_state(layer)
+            except Exception:  # noqa: BLE001 - 表示用スナップショットは止めない
+                auth = AuthState.NOT_REQUIRED
             lines.append(
                 LayerStatusLine(
                     layer=layer,
@@ -282,6 +310,7 @@ class AppController:
                     disposition=disposition,
                     absorbed_into=absorbed_into,
                     absorbed_backend=absorbed_backend,
+                    auth=auth,
                 )
             )
         return lines, self._collect_recent_errors()
@@ -320,10 +349,12 @@ class AppController:
     def set_credential(self, backend: str, key: str, value: str) -> None:
         """互換窓 → `CredentialsService.set`(verified を False に戻す)。"""
         self._credentials_service.set(backend, key, value)
+        self._emit_credentials_changed(backend)
 
     def delete_credential(self, backend: str, key: str) -> None:
         """互換窓 → `CredentialsService.delete`。"""
         self._credentials_service.delete(backend, key)
+        self._emit_credentials_changed(backend)
 
     def has_credential(self, backend: str, key: str) -> bool:
         """互換窓 → `CredentialsService.has`。"""
@@ -336,6 +367,31 @@ class AppController:
     def invalidate_verification(self, backend_name: str) -> None:
         """互換窓 → `CredentialsService.invalidate_verification`。"""
         self._credentials_service.invalidate_verification(backend_name)
+        self._emit_credentials_changed(backend_name)
+
+    def _emit_credentials_changed(self, backend_name: str) -> None:
+        """認証情報の変化を settings イベントとして UI へ通知する。
+
+        認証状態(AuthState)は ConfigStore / CredentialsStore 由来で status イベントが
+        発火しないため、専用キー `("credentials", <backend>)` で再計算を促す
+        (SettingsPanel の行ステータス上書き / ControlPanel の ready 再計算)。
+        """
+        self._emit("settings", ("credentials", backend_name))
+
+    def get_auth_state(self, layer: LayerKind) -> AuthState:
+        """選択中 backend の認証準備状態(静的判定)を返す。
+
+        backend 未選択のレイヤは NOT_REQUIRED。実体は
+        `CredentialsService.get_auth_state`(インスタンス不要の判定)。
+        """
+        name = self._config.get("backends", layer.value, default=None)
+        if not name:
+            return AuthState.NOT_REQUIRED
+        return self._credentials_service.get_auth_state(layer, str(name))
+
+    def get_all_auth_states(self) -> dict[LayerKind, AuthState]:
+        """全レイヤ分の認証準備状態(ready_state / ステータス表示の入力)。"""
+        return {layer: self.get_auth_state(layer) for layer in LayerKind}
 
     def get_backend_capability_hint(self, layer: LayerKind, name: str):
         """互換窓 → `BackendCatalog.get_capability_hint`。"""
@@ -399,32 +455,22 @@ class AppController:
         values: dict[str, str],
     ) -> VerifyResult:
         """認証の疎通確認 + 保存(実体は `CredentialsService.verify_and_save`)に加え、
-        ランタイム側の後処理(Phase F1)を行う互換窓。
+        ランタイム側の後処理を行う互換窓。
 
-        Phase F1: 認証成功時、該当レイヤで本 backend が選択中かつ MISSING_CREDENTIALS
-        状態に詰まっていれば、新しい認証情報で生成し直す。これをしないと、認証が通っても
-        backend インスタンスは「credentials 無しで作られた MISSING_CREDENTIALS」状態の
-        ままなので、Start ボタンの gate(`_check_missing_credentials_gate`)が落ち続ける。
-        backend キャッシュに触るため、この後処理だけはランタイム(本クラス)の責務。
+        認証成功時、該当レイヤで本 backend が選択中かつロード済みなら evict して
+        INIT に戻す(古い認証情報で作られたインスタンスを使い続けない)。即時の
+        作り直しはしない — 実ロードは Start / ↻ ロード / auto_load に寄せる方針
+        (バックエンド変更時の evict-only と同じ規則)。backend キャッシュに触るため、
+        この後処理だけはランタイム(本クラス)の責務。
         """
         result = self._credentials_service.verify_and_save(layer, backend_name, values)
         if not result.ok:
             return result
 
         current_choice = self._config.get("backends", layer.value, default=None)
-        if current_choice == backend_name:
-            existing = self._backends.get(layer)
-            if existing is not None:
-                try:
-                    status = existing.get_status()
-                except Exception:  # noqa: BLE001
-                    status = None
-                if status == ModelStatus.MISSING_CREDENTIALS:
-                    try:
-                        self.reload_model_layer(layer)
-                    except Exception:  # noqa: BLE001
-                        # ロード失敗は backend の record_error / emit_status 側で扱う
-                        pass
+        if current_choice == backend_name and layer in self._backends:
+            self.evict_model_layer(layer)
+        self._emit_credentials_changed(backend_name)
         return result
 
     def _collect_recent_errors(self):
@@ -493,9 +539,12 @@ class AppController:
 
     def set_setting(self, *keys_and_value: Any) -> None:
         self._config.set(*keys_and_value)
-        # バックエンド名が変わったら、該当レイヤのキャッシュを破棄してステータスを更新する。
-        # (実体ロードはバックグラウンドで自動的に走らせる: ユーザは設定を変えたら
-        # すぐに「準備中→完了」が見える方が自然)
+        # バックエンド名が変わったら、該当レイヤのキャッシュを破棄して INIT に戻すだけ。
+        # 実ロードは「開始ボタン押下 / ↻ ロード / 起動時 auto_load」の 3 経路に寄せる。
+        # 変更即ロードは廃止: 押し間違いでも数 GB のロードが走る・ロード中の再変更で
+        # UI スレッドがロック待ちで固まる、の 2 点が実害で、即ロードを要した前提
+        # (全レイヤ LOADED でないと開始不可)は「押下時にロード」方式で消滅している。
+        # 詳細ダイアログ保存(evict のみ)とも同じ規則になる。
         if len(keys_and_value) == 3 and keys_and_value[0] == "backends":
             try:
                 layer_changed = LayerKind(keys_and_value[1])
@@ -506,21 +555,6 @@ class AppController:
                     self._evict_backend_locked(layer_changed)
                 # 該当レイヤは INIT に戻す(まだロード起動前の状態)
                 self._emit_status(layer_changed, ModelStatus.INIT)
-                # text_only モードでは TTS / Output は対象外。再ロードしない
-                # (BackendRegistry に "none" backend は存在しないので再ロードは
-                #  必ず失敗する。レイヤは INIT のまま残し、Start 時に skip される)。
-                if (
-                    layer_changed in (LayerKind.TTS, LayerKind.OUTPUT)
-                    and self.output_mode == "text_only"
-                ):
-                    pass
-                else:
-                    # バックグラウンドで即座にロードを試みる(GUI 側で進捗が見える)
-                    threading.Thread(
-                        target=lambda: self._safe_load_layer(layer_changed),
-                        daemon=True,
-                        name=f"vt_reload_{layer_changed.value}",
-                    ).start()
 
         # 言語設定が変わったら、動作中の Coordinator にも反映する(P2)。
         # `is_running` でないときは Coordinator が無いか停止中なので、次回 Start 時に
@@ -581,53 +615,92 @@ class AppController:
         # 段階 3 / A-7 確定方針: PROCESS kind の capture backend が選ばれているときは
         # `devices.input` を永続化しない。PID はアプリ再起動で別プロセスに振られるので、
         # 残しても次回起動で意味を持たない(誤って別アプリの音を取り込む事故も防ぐ)。
-        self._strip_volatile_inputs_before_save()
-        self._config.save()
+        # 除外は**書き出し用コピー**に対して行い、in-memory の選択は維持する
+        # (実メモリを空にしてから保存すると、保存のたびにセッション中のプロセス選択が
+        #  消えてしまう)。
+        self._config.save(transform=self._strip_volatile_inputs_for_save)
 
     def load_settings(self) -> None:
+        """設定ファイルを読み直し、**実効内容が変わったレイヤだけ** キャッシュを破棄する。
+
+        比較対象はレイヤごとに「選択 backend 名」+「その backend の backends_config」。
+        どちらも同じレイヤはロード済みインスタンスと状態表示を維持する(全破棄だと
+        再読込のたびに全モデルの再ロードが必要になり、重いローカルモデルで待ち時間が
+        無駄になるため)。破棄されたレイヤは INIT に戻り、次の 開始 / ↻ ロードで
+        新しい設定のインスタンスが入る。
+        """
+        before = self._layer_effective_settings()
         self._config.load()
         # A-7 確定方針: 古い config に PROCESS kind の `devices.input` が残っていても、
         # 起動時には空扱いに正規化する(save 側でも除外しているが、手動編集や旧版から
         # 引き継いだ config を想定したセーフティ)。
         self._normalize_volatile_inputs_after_load()
-        # 設定再読込ではバックエンド名が変わっている可能性があるので、キャッシュを全破棄して
-        # INIT に戻す。GUI 側で自動ロードを再度発火する想定。
-        with self._load_lock:
-            for layer in list(self._backends.keys()):
-                self._evict_backend_locked(layer)
+        after = self._layer_effective_settings()
         for layer in LayerKind:
+            if before[layer] == after[layer]:
+                continue
+            with self._load_lock:
+                self._evict_backend_locked(layer)
             self._emit_status(layer, ModelStatus.INIT)
 
-    def _strip_volatile_inputs_before_save(self) -> None:
-        """save 直前のフック: PROCESS kind の capture backend なら `devices.input` を空にする。
+    def _layer_effective_settings(self) -> dict[LayerKind, tuple[Any, Any]]:
+        """レイヤごとの「ロード結果に効く設定」のスナップショット(差分判定用)。
 
-        ConfigStore を直接書き換える(`set_setting` だと UI 通知が発火するため、
-        save コミット用の静かな書き換え)。
+        (選択 backend 名, その backend の backends_config サブツリー) のペア。
+        `_config.load()` は内部 dict を丸ごと置き換えるため、参照のままでも
+        load 前後のスナップショットが混ざることはない。
         """
-        self._clear_process_input_if_applicable()
+        snapshot: dict[LayerKind, tuple[Any, Any]] = {}
+        for layer in LayerKind:
+            name = self._config.get("backends", layer.value)
+            cfg = (
+                self._config.get("backends_config", str(name)) if name else None
+            )
+            snapshot[layer] = (name, cfg)
+        return snapshot
+
+    def _strip_volatile_inputs_for_save(
+        self, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """save 直前の書き出しコピー変換: PROCESS kind なら `devices.input` を空にする。
+
+        in-memory の設定には触らない(実メモリを空にしてから保存すると、保存のたびに
+        セッション中のプロセス選択が消えてしまうため、除外はコピー側だけに行う)。
+        """
+        if not self._is_process_capture_selected():
+            return data
+        devices = data.get("devices")
+        if isinstance(devices, dict):
+            devices["input"] = ""
+        return data
 
     def _normalize_volatile_inputs_after_load(self) -> None:
-        """load 直後のフック: PROCESS kind なら `devices.input` を空にする(セーフティ)。"""
-        self._clear_process_input_if_applicable()
+        """load 直後のフック: PROCESS kind なら `devices.input` を空にする(セーフティ)。
 
-    def _clear_process_input_if_applicable(self) -> None:
-        """現在の capture backend が PROCESS kind なら `devices.input` を空文字に揃える。"""
+        再起動 / 再読込後の PID は別プロセスを指し得るため、in-memory 側も空に揃える
+        (手動編集や旧版から引き継いだ config を想定。読み込み直後なので消える
+        セッション状態は無い)。
+        """
+        if not self._is_process_capture_selected():
+            return
+        try:
+            self._config.set("devices", "input", "")
+        except Exception:  # noqa: BLE001 - 失敗しても load を止めない
+            pass
+
+    def _is_process_capture_selected(self) -> bool:
+        """現在の capture backend が PROCESS kind か(判定不能は False)。"""
         backend_name = str(
             self._config.get("backends", LayerKind.CAPTURE.value, default="")
         )
         if not backend_name:
-            return
+            return False
         try:
             kind = self.get_capture_kind(backend_name)
         except Exception:  # noqa: BLE001
-            return
+            return False
         from .types import CaptureKind as _CK
-        if kind != _CK.PROCESS:
-            return
-        try:
-            self._config.set("devices", "input", "")
-        except Exception:  # noqa: BLE001 - 失敗しても save / load を止めない
-            pass
+        return kind == _CK.PROCESS
 
     # ============================================================
     # ロード / 起動 / 停止
@@ -705,17 +778,15 @@ class AppController:
         (backend 由来の最終状態) を通知するので、GUI 側で進捗を観測できる。
         text_only モードでは TTS / Output レイヤを skip する。
         """
-        with self._load_lock:
-            for layer in self._active_layers():
-                self._load_layer_locked(layer)
+        for layer in self._active_layers():
+            self._load_layer(layer)
 
     def load_model_layer(self, layer: LayerKind) -> None:
         """単一レイヤだけをロードする(冪等)。Phase B 以降の手動ロードボタンの入口。
 
         既にロード済みなら何もしない。失敗時は例外を伝播し、状態は NOT_DOWNLOADED に戻す。
         """
-        with self._load_lock:
-            self._load_layer_locked(layer)
+        self._load_layer(layer)
 
     def reload_model_layer(self, layer: LayerKind) -> None:
         """単一レイヤを強制的に作り直す(既ロードでも evict してから load)。
@@ -726,8 +797,8 @@ class AppController:
         """
         with self._load_lock:
             self._evict_backend_locked(layer)
-            self._emit_status(layer, ModelStatus.INIT)
-            self._load_layer_locked(layer)
+        self._emit_status(layer, ModelStatus.INIT)
+        self._load_layer(layer)
 
     def evict_model_layer(self, layer: LayerKind) -> None:
         """単一レイヤの backend を破棄するが、再 load はしない(2026-05-30)。
@@ -738,42 +809,78 @@ class AppController:
         """
         with self._load_lock:
             self._evict_backend_locked(layer)
-            self._emit_status(layer, ModelStatus.INIT)
+        self._emit_status(layer, ModelStatus.INIT)
 
-    def _load_layer_locked(self, layer: LayerKind) -> None:
-        """`load_lock` を保持中の caller から呼ぶ実体。
+    def _load_layer(self, layer: LayerKind) -> None:
+        """単一レイヤのロード実体(ロック保持なしで呼ぶ)。
 
-        既ロードならスキップ。LOADING を emit → backend 生成 → subscribe → backend 現状を emit。
-        失敗時は NOT_DOWNLOADED を emit して例外を伝播。
+        原則: **モデル構築(`_create`)はロック外**で行い、ロックは
+        `_backends` / `_inflight` / 世代カウンタの短い読み書きに限る。
+        ロックを保持したまま構築すると、evict のためにロックを取る UI スレッドが
+        構築完了までブロックされ UI が固まる(過去の実害)。
 
-        進捗ログ(2026-05-30 追加): どのレイヤが何秒かかったかが分かるように info ログを出す。
-        ロード中に「何も起きていない」ように見えても、実は重いモデルの DL/ロードが進んでいる
-        ケースを切り分けるため。
+        - 既ロードならスキップ(冪等)。
+        - 同一レイヤを別スレッドが構築中なら完了を待ってから再判定(二重構築防止)。
+        - 構築中に evict(バックエンド変更 / 設定保存 / 認証更新)で世代が進んだら、
+          完成品は捨てて最新の設定でロードし直す(last-write-wins。
+          モデル構築は中断できないため完走させてから破棄する)。
+        - 失敗時は NOT_DOWNLOADED を emit して例外を伝播。
+
+        進捗ログ: どのレイヤが何秒かかったかが分かるように info ログを出す。
+        ロード中に「何も起きていない」ように見えても、実は重いモデルの DL/ロードが
+        進んでいるケースを切り分けるため。
         """
-        if layer in self._backends:
-            return
-        self._emit_status(layer, ModelStatus.LOADING)
         from time import monotonic
 
-        t0 = monotonic()
-        self._logger.info("レイヤ %s のロード開始", layer.value)
-        try:
-            inst = self._create(layer)
-        except Exception:
-            elapsed = monotonic() - t0
-            self._logger.error(
-                "レイヤ %s のロード失敗 (%.1fs 経過)", layer.value, elapsed
+        while True:
+            with self._load_cond:
+                while layer in self._inflight:
+                    self._load_cond.wait()
+                if layer in self._backends:
+                    return
+                generation = self._layer_generations[layer]
+                self._inflight.add(layer)
+
+            self._emit_status(layer, ModelStatus.LOADING)
+            self._logger.info("レイヤ %s のロード開始", layer.value)
+            t0 = monotonic()
+            try:
+                inst = self._create(layer)
+            except Exception:
+                self._logger.error(
+                    "レイヤ %s のロード失敗 (%.1fs 経過)",
+                    layer.value, monotonic() - t0,
+                )
+                with self._load_cond:
+                    self._inflight.discard(layer)
+                    self._load_cond.notify_all()
+                self._emit_status(layer, ModelStatus.NOT_DOWNLOADED)
+                raise
+
+            stale = False
+            with self._load_cond:
+                self._inflight.discard(layer)
+                self._load_cond.notify_all()
+                if self._layer_generations[layer] != generation:
+                    stale = True
+                else:
+                    self._backends[layer] = inst
+                    # backend のその後の状態変化を購読
+                    # (DOWNLOADING on reload / MISSING_CREDENTIALS 等)
+                    self._subscribe_backend(layer, inst)
+            if stale:
+                self._logger.info(
+                    "レイヤ %s のロード結果を破棄(構築中に設定が変わった)。"
+                    "最新の設定でロードし直す", layer.value,
+                )
+                del inst
+                continue
+            self._logger.info(
+                "レイヤ %s のロード完了 (%.1fs)", layer.value, monotonic() - t0
             )
-            self._emit_status(layer, ModelStatus.NOT_DOWNLOADED)
-            raise
-        elapsed = monotonic() - t0
-        self._logger.info("レイヤ %s のロード完了 (%.1fs)", layer.value, elapsed)
-        self._backends[layer] = inst
-        # backend のその後の状態変化を購読(将来 DOWNLOADING on reload / MISSING_CREDENTIALS 等)
-        self._subscribe_backend(layer, inst)
-        # 生成時点での backend 状態(通常 LOADED)を最終通知
-        final_status = self._safe_backend_status(inst)
-        self._emit_status(layer, final_status)
+            # 生成時点での backend 状態(通常 LOADED)を最終通知
+            self._emit_status(layer, self._safe_backend_status(inst))
+            return
 
     def _subscribe_backend(self, layer: LayerKind, backend: Any) -> None:
         """backend の状態変化購読を登録する(失敗しても本体は止めない)。"""
@@ -804,7 +911,12 @@ class AppController:
         return ModelStatus.LOADED
 
     def _evict_backend_locked(self, layer: LayerKind) -> None:
-        """`load_lock` 保持中の caller から呼ぶ。subscribe 解除 + キャッシュ削除。"""
+        """`load_lock` 保持中の caller から呼ぶ。subscribe 解除 + キャッシュ削除。
+
+        世代カウンタも進める: このレイヤを構築中のスレッドがいたら、その完成品は
+        旧設定産なので破棄される(`_load_layer` の stale 判定)。
+        """
+        self._layer_generations[layer] += 1
         sub = self._backend_subscriptions.pop(layer, None)
         if sub is not None:
             try:
@@ -841,16 +953,6 @@ class AppController:
             target=_target, name="vt_loader", daemon=True
         )
         self._loader_thread.start()
-
-    def _safe_load_layer(self, layer: LayerKind) -> None:
-        """指定レイヤを単独でロードし直す(バックエンド差し替え時に使う)。
-
-        例外は握りつぶし(ログのみ)・status は `_load_layer_locked` 側で適切に発火する。
-        """
-        try:
-            self.load_model_layer(layer)
-        except Exception:  # noqa: BLE001
-            self._logger.exception("レイヤ %s の再ロードに失敗", layer.value)
 
     # ---- 起動 ----
     def get_auto_load_layers(self) -> list[LayerKind]:
@@ -1168,9 +1270,11 @@ class AppController:
         self._coord.start(
             capture_source_id=input_id, output_device_id=output_id
         )
+        self._emit("running", True)
 
     def stop_pipeline(self) -> None:
         """Coordinator を停止する。バックエンド実体は常駐させたまま残す。"""
+        was_running = self._coord is not None
         if self._coord is not None:
             self._coord.stop()
             self._coord = None
@@ -1180,6 +1284,8 @@ class AppController:
             except Exception:  # noqa: BLE001 - ダンプ停止失敗で本体は止めない
                 self._logger.exception("StageDumpWriter.stop_run に失敗")
             self._stage_dump = None
+        if was_running:
+            self._emit("running", False)
 
     def test_output_playback(self, text: str = "テスト音声") -> None:
         """選択中の TTS / Output backend / 出力デバイスで `text` を 1 回だけ再生する。

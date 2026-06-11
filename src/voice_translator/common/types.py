@@ -105,6 +105,29 @@ class ModelStatus(str, Enum):
     LOADED = "Loaded"
 
 
+class AuthState(str, Enum):
+    """選択中 backend の認証準備状態(インスタンス不要の静的判定)。
+
+    役割: GUI 表示(設定パネルの行ステータス上書き / 開始ボタンのガード)の材料。
+    判定材料は「backend クラスの requires_credentials / credential_spec」
+    「CredentialsStore の保存鍵」「credentials.verified.<backend> フラグ」のみで、
+    backend インスタンスの有無・状態(ModelStatus)には依存しない。
+    インスタンス由来の MISSING_CREDENTIALS と違い、未ロード(Init)のままでも
+    「認証が必要・未完了」を表示やガードに使える。
+
+    - NOT_REQUIRED: 認証不要(ローカル backend 等)。判定不能もここに縮退する
+                    (起動可否の最終判定は start 時の認証 gate が行う)。
+    - MISSING:      必要な認証情報が未入力。
+    - UNVERIFIED:   鍵は保存済みだが疎通確認(verify)を通していない。
+    - VERIFIED:     疎通確認済み(認証 gate を通過できる)。
+    """
+
+    NOT_REQUIRED = "not_required"
+    MISSING = "missing"
+    UNVERIFIED = "unverified"
+    VERIFIED = "verified"
+
+
 @dataclass(frozen=True)
 class BackendCapabilities:
     """バックエンドの性能/対応特性を表すメタ情報。
@@ -166,6 +189,9 @@ class LayerStatusLine:
     - `"absorbed"` : 複合 backend に吸収(`absorbed_into` のレイヤの
                      `absorbed_backend` が代行。自レイヤの backend は使われない)
     - `"skipped"`  : 編成に載らない(text_only の TTS/Output 等。何も動かない)
+
+    `auth` は選択中 backend の認証準備状態(静的判定)。認証が未完了なら表示側で
+    status より優先して見せる(未ロードでも「認証が必要」が伝わるように)。
     """
 
     layer: LayerKind
@@ -175,6 +201,7 @@ class LayerStatusLine:
     disposition: str = "active"
     absorbed_into: str = ""      # 吸収先レイヤの value(例: "asr")
     absorbed_backend: str = ""   # 吸収先で実際に動く backend 名
+    auth: AuthState = AuthState.NOT_REQUIRED
 
 
 @dataclass(frozen=True)

@@ -40,9 +40,11 @@ def stub_panel():
         "_absorbed_roles",
         "_skipped_roles",
         "_restore_text_color",
+        "_interactive_state",
     )
     shim._controller = MagicMock(name="controller")
     shim._controller.output_mode = "audio"
+    shim._controller.is_running = False
     shim._default_row_text_color = _DEFAULT_COLOR
 
     row_label = MagicMock(spec=ctk.CTkLabel, name="row_label")
@@ -116,9 +118,10 @@ class TestTtsNoneVisualScope:
         from voice_translator.gui.settings_panel import SettingsPanel
 
         shim = MagicMock(spec=SettingsPanel)
-        _bind(shim, "_apply_tts_none_visual", "_restore_text_color")
+        _bind(shim, "_apply_tts_none_visual", "_restore_text_color", "_interactive_state")
         shim._controller = MagicMock(name="controller")
         shim._controller.get_setting.return_value = tts_setting
+        shim._controller.is_running = False
         shim._default_row_text_color = _DEFAULT_COLOR
 
         out_row_label = MagicMock(spec=ctk.CTkLabel, name="out_row_label")

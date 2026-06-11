@@ -38,6 +38,41 @@ class TestConfigStoreSetGet:
             store.set("only_one_arg")
 
 
+class TestSaveTransform:
+    """save(transform=...): 書き出し直前のコピー変換(in-memory は不変)。"""
+
+    def test_transform_applies_to_written_copy_only(
+        self, tmp_config_path: Path
+    ) -> None:
+        import yaml
+
+        store = ConfigStore(tmp_config_path)
+        store.set("devices", "input", "pid-42")
+
+        def strip(data):
+            data["devices"]["input"] = ""
+            return data
+
+        store.save(transform=strip)
+
+        # in-memory は変換の影響を受けない
+        assert store.get("devices", "input") == "pid-42"
+        # ファイル側には変換結果が書かれる
+        written = yaml.safe_load(tmp_config_path.read_text(encoding="utf-8"))
+        assert written["devices"]["input"] == ""
+
+    def test_save_without_transform_writes_data_as_is(
+        self, tmp_config_path: Path
+    ) -> None:
+        import yaml
+
+        store = ConfigStore(tmp_config_path)
+        store.set("devices", "input", "pid-42")
+        store.save()
+        written = yaml.safe_load(tmp_config_path.read_text(encoding="utf-8"))
+        assert written["devices"]["input"] == "pid-42"
+
+
 class TestConfigStorePersistence:
     def test_save_and_load_roundtrip(self, tmp_config_path: Path) -> None:
         store = ConfigStore(tmp_config_path)
