@@ -64,6 +64,7 @@ from .pipeline_plan import (
 from .sequence import SequenceGenerator
 from .stage_dump import NullStageDumpWriter, StageDumpWriter
 from .types import (
+    AuthState,
     CaptureSource,
     CredentialField,
     ErrorRecord,
@@ -273,6 +274,10 @@ class AppController:
                 disposition, absorbed_into, absorbed_backend = "skipped", "", ""
             else:
                 disposition, absorbed_into, absorbed_backend = "active", "", ""
+            try:
+                auth = self.get_auth_state(layer)
+            except Exception:  # noqa: BLE001 - 表示用スナップショットは止めない
+                auth = AuthState.NOT_REQUIRED
             lines.append(
                 LayerStatusLine(
                     layer=layer,
@@ -282,6 +287,7 @@ class AppController:
                     disposition=disposition,
                     absorbed_into=absorbed_into,
                     absorbed_backend=absorbed_backend,
+                    auth=auth,
                 )
             )
         return lines, self._collect_recent_errors()
@@ -320,10 +326,12 @@ class AppController:
     def set_credential(self, backend: str, key: str, value: str) -> None:
         """互換窓 → `CredentialsService.set`(verified を False に戻す)。"""
         self._credentials_service.set(backend, key, value)
+        self._emit_credentials_changed(backend)
 
     def delete_credential(self, backend: str, key: str) -> None:
         """互換窓 → `CredentialsService.delete`。"""
         self._credentials_service.delete(backend, key)
+        self._emit_credentials_changed(backend)
 
     def has_credential(self, backend: str, key: str) -> bool:
         """互換窓 → `CredentialsService.has`。"""
@@ -336,6 +344,31 @@ class AppController:
     def invalidate_verification(self, backend_name: str) -> None:
         """互換窓 → `CredentialsService.invalidate_verification`。"""
         self._credentials_service.invalidate_verification(backend_name)
+        self._emit_credentials_changed(backend_name)
+
+    def _emit_credentials_changed(self, backend_name: str) -> None:
+        """認証情報の変化を settings イベントとして UI へ通知する。
+
+        認証状態(AuthState)は ConfigStore / CredentialsStore 由来で status イベントが
+        発火しないため、専用キー `("credentials", <backend>)` で再計算を促す
+        (SettingsPanel の行ステータス上書き / ControlPanel の ready 再計算)。
+        """
+        self._emit("settings", ("credentials", backend_name))
+
+    def get_auth_state(self, layer: LayerKind) -> AuthState:
+        """選択中 backend の認証準備状態(静的判定)を返す。
+
+        backend 未選択のレイヤは NOT_REQUIRED。実体は
+        `CredentialsService.get_auth_state`(インスタンス不要の判定)。
+        """
+        name = self._config.get("backends", layer.value, default=None)
+        if not name:
+            return AuthState.NOT_REQUIRED
+        return self._credentials_service.get_auth_state(layer, str(name))
+
+    def get_all_auth_states(self) -> dict[LayerKind, AuthState]:
+        """全レイヤ分の認証準備状態(ready_state / ステータス表示の入力)。"""
+        return {layer: self.get_auth_state(layer) for layer in LayerKind}
 
     def get_backend_capability_hint(self, layer: LayerKind, name: str):
         """互換窓 → `BackendCatalog.get_capability_hint`。"""
@@ -399,32 +432,22 @@ class AppController:
         values: dict[str, str],
     ) -> VerifyResult:
         """認証の疎通確認 + 保存(実体は `CredentialsService.verify_and_save`)に加え、
-        ランタイム側の後処理(Phase F1)を行う互換窓。
+        ランタイム側の後処理を行う互換窓。
 
-        Phase F1: 認証成功時、該当レイヤで本 backend が選択中かつ MISSING_CREDENTIALS
-        状態に詰まっていれば、新しい認証情報で生成し直す。これをしないと、認証が通っても
-        backend インスタンスは「credentials 無しで作られた MISSING_CREDENTIALS」状態の
-        ままなので、Start ボタンの gate(`_check_missing_credentials_gate`)が落ち続ける。
-        backend キャッシュに触るため、この後処理だけはランタイム(本クラス)の責務。
+        認証成功時、該当レイヤで本 backend が選択中かつロード済みなら evict して
+        INIT に戻す(古い認証情報で作られたインスタンスを使い続けない)。即時の
+        作り直しはしない — 実ロードは Start / ↻ ロード / auto_load に寄せる方針
+        (バックエンド変更時の evict-only と同じ規則)。backend キャッシュに触るため、
+        この後処理だけはランタイム(本クラス)の責務。
         """
         result = self._credentials_service.verify_and_save(layer, backend_name, values)
         if not result.ok:
             return result
 
         current_choice = self._config.get("backends", layer.value, default=None)
-        if current_choice == backend_name:
-            existing = self._backends.get(layer)
-            if existing is not None:
-                try:
-                    status = existing.get_status()
-                except Exception:  # noqa: BLE001
-                    status = None
-                if status == ModelStatus.MISSING_CREDENTIALS:
-                    try:
-                        self.reload_model_layer(layer)
-                    except Exception:  # noqa: BLE001
-                        # ロード失敗は backend の record_error / emit_status 側で扱う
-                        pass
+        if current_choice == backend_name and layer in self._backends:
+            self.evict_model_layer(layer)
+        self._emit_credentials_changed(backend_name)
         return result
 
     def _collect_recent_errors(self):

@@ -7,7 +7,12 @@
 
 from __future__ import annotations
 
-from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
+from voice_translator.common.types import (
+    AuthState,
+    CaptureKind,
+    LayerKind,
+    ModelStatus,
+)
 from voice_translator.gui.logic.ready_state import (
     compute_ready_state,
     filter_active_statuses,
@@ -187,6 +192,87 @@ class TestTestButton:
             has_output_device=False,
         )
         assert rs.test.text == "🔊 (TTS なし)"
+
+
+class TestAuthGate:
+    """静的認証状態(AuthState)による開始ボタンのガード。
+
+    インスタンス状態(MISSING_CREDENTIALS)だけでは「未ロードのクラウド backend」
+    「鍵あり・未検証」を止められない穴を塞ぐ。押下時の認証 gate(FatalError)は
+    最後の防波堤として残る。
+    """
+
+    def test_auth_missing_disables_start_even_when_init(self) -> None:
+        """未ロード(Init)でも鍵未入力なら「認証情報未設定」で disable。"""
+        statuses = _all_statuses(ModelStatus.INIT)
+        rs = _compute(statuses, auth_states={LayerKind.ASR: AuthState.MISSING})
+        assert rs.toggle.text == "認証情報未設定"
+        assert rs.toggle.enabled is False
+        assert "詳細ダイアログ" in rs.status_text
+
+    def test_auth_unverified_disables_start_even_when_loaded(self) -> None:
+        """鍵あり・未検証は Loaded 表示でも「認証未検証」で disable
+        (従来は押せてしまい、押下後に FatalError ポップアップだった)。"""
+        statuses = _all_statuses(ModelStatus.LOADED)
+        rs = _compute(statuses, auth_states={LayerKind.ASR: AuthState.UNVERIFIED})
+        assert rs.toggle.text == "認証未検証"
+        assert rs.toggle.enabled is False
+        assert "認証" in rs.status_text
+
+    def test_auth_verified_does_not_block(self) -> None:
+        statuses = _all_statuses(ModelStatus.LOADED)
+        rs = _compute(
+            statuses,
+            auth_states={layer: AuthState.VERIFIED for layer in LayerKind},
+        )
+        assert rs.toggle.text == "▶ 開始"
+        assert rs.toggle.enabled is True
+
+    def test_missing_takes_priority_over_unverified(self) -> None:
+        statuses = _all_statuses(ModelStatus.LOADED)
+        rs = _compute(
+            statuses,
+            auth_states={
+                LayerKind.ASR: AuthState.UNVERIFIED,
+                LayerKind.TRANSLATOR: AuthState.MISSING,
+            },
+        )
+        assert rs.toggle.text == "認証情報未設定"
+
+    def test_unverified_takes_priority_over_downloading(self) -> None:
+        statuses = _all_statuses(ModelStatus.LOADED)
+        statuses[LayerKind.VAD] = ModelStatus.DOWNLOADING
+        rs = _compute(statuses, auth_states={LayerKind.ASR: AuthState.UNVERIFIED})
+        assert rs.toggle.text == "認証未検証"
+
+    def test_text_only_excludes_tts_output_auth(self) -> None:
+        """text_only では TTS / OUTPUT の認証不足は判定対象外。"""
+        statuses = _all_statuses(ModelStatus.LOADED)
+        rs = _compute(
+            statuses,
+            output_mode="text_only",
+            auth_states={LayerKind.TTS: AuthState.MISSING},
+        )
+        assert rs.toggle.text == "▶ 開始"
+        assert rs.toggle.enabled is True
+
+    def test_absorbed_role_auth_excluded(self) -> None:
+        """吸収されたロールの認証不足は判定対象外(その backend は動かない)。"""
+        statuses = _all_statuses(ModelStatus.LOADED)
+        rs = _compute(
+            statuses,
+            absorbed=(LayerKind.TRANSLATOR,),
+            auth_states={LayerKind.TRANSLATOR: AuthState.MISSING},
+        )
+        assert rs.toggle.text == "▶ 開始"
+        assert rs.toggle.enabled is True
+
+    def test_no_auth_states_keeps_legacy_behavior(self) -> None:
+        """auth_states 省略時は従来どおり(インスタンス状態のみで判定)。"""
+        statuses = _all_statuses(ModelStatus.LOADED)
+        rs = _compute(statuses)
+        assert rs.toggle.text == "▶ 開始"
+        assert rs.toggle.enabled is True
 
 
 class TestAbsorbedRoleFiltering:

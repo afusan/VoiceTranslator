@@ -16,7 +16,13 @@ from tests._fixtures import InMemoryKeyring
 from voice_translator.common.backend_registry import BackendRegistry
 from voice_translator.common.config_store import ConfigStore
 from voice_translator.common.credentials_service import CredentialsService
-from voice_translator.common.types import LayerKind, VerifyResult
+from voice_translator.common.types import (
+    AuthState,
+    BackendCapabilities,
+    CredentialField,
+    LayerKind,
+    VerifyResult,
+)
 
 
 class _VerifyOkCls:
@@ -40,6 +46,26 @@ class _VerifyRaisesCls:
         raise RuntimeError("network down")
 
 
+class _CloudSpecCls:
+    """requires_credentials=True + api_key 1 つの cloud backend(AuthState 判定用)。"""
+
+    @classmethod
+    def credential_spec(cls) -> list[CredentialField]:
+        return [CredentialField("api_key", "API Key", secret=True)]
+
+    @classmethod
+    def verify_credentials(cls, values: dict[str, str]) -> VerifyResult:
+        return VerifyResult(ok=True, message="ok")
+
+
+class _SpecRaisesCls:
+    """credential_spec が例外を投げる仕様逸脱 backend(縮退確認用)。"""
+
+    @classmethod
+    def credential_spec(cls) -> list[CredentialField]:
+        raise RuntimeError("broken spec")
+
+
 @pytest.fixture()
 def service():
     """InMemoryKeyring を注入した CredentialsService(レジストリに verify 用クラス登録)。"""
@@ -49,6 +75,15 @@ def service():
     reg.register(LayerKind.ASR, "ng_backend", lambda: MagicMock(), backend_cls=_VerifyNgCls)
     reg.register(
         LayerKind.ASR, "raise_backend", lambda: MagicMock(), backend_cls=_VerifyRaisesCls,
+    )
+    reg.register(
+        LayerKind.ASR, "cloud_backend", lambda: MagicMock(), backend_cls=_CloudSpecCls,
+        capabilities=BackendCapabilities(requires_credentials=True),
+    )
+    reg.register(
+        LayerKind.ASR, "broken_spec_backend", lambda: MagicMock(),
+        backend_cls=_SpecRaisesCls,
+        capabilities=BackendCapabilities(requires_credentials=True),
     )
     config = ConfigStore(path="dummy", data={})
     return CredentialsService(registry=reg, config=config, logger=None)
@@ -119,6 +154,66 @@ class TestVerifyAndSave:
         assert result.ok is False
         assert "検証中に例外" in result.message
         assert service.is_backend_verified("raise_backend") is False
+
+
+class TestGetAuthState:
+    """認証準備状態の静的判定(インスタンス不要)。判定順は start 時の認証 gate と揃える。"""
+
+    def test_not_required_for_local_backend(self, service) -> None:
+        """requires_credentials が無い(ローカル)backend は NOT_REQUIRED。"""
+        assert (
+            service.get_auth_state(LayerKind.ASR, "ok_backend")
+            == AuthState.NOT_REQUIRED
+        )
+
+    def test_not_required_for_unregistered_backend(self, service) -> None:
+        """未登録 backend は NOT_REQUIRED に縮退(最終判定は gate が行う)。"""
+        assert service.get_auth_state(LayerKind.ASR, "nope") == AuthState.NOT_REQUIRED
+
+    def test_missing_when_key_not_saved(self, service) -> None:
+        assert (
+            service.get_auth_state(LayerKind.ASR, "cloud_backend")
+            == AuthState.MISSING
+        )
+
+    def test_unverified_when_key_saved_but_not_verified(self, service) -> None:
+        service.set("cloud_backend", "api_key", "sk-1")
+        assert (
+            service.get_auth_state(LayerKind.ASR, "cloud_backend")
+            == AuthState.UNVERIFIED
+        )
+
+    def test_verified_after_verify_and_save(self, service) -> None:
+        service.verify_and_save(LayerKind.ASR, "cloud_backend", {"api_key": "sk-1"})
+        assert (
+            service.get_auth_state(LayerKind.ASR, "cloud_backend")
+            == AuthState.VERIFIED
+        )
+
+    def test_reentering_key_returns_to_unverified(self, service) -> None:
+        """鍵を入れ直すと verified が落ちて UNVERIFIED に戻る(再認証必須)。"""
+        service.verify_and_save(LayerKind.ASR, "cloud_backend", {"api_key": "sk-1"})
+        service.set("cloud_backend", "api_key", "sk-2")
+        assert (
+            service.get_auth_state(LayerKind.ASR, "cloud_backend")
+            == AuthState.UNVERIFIED
+        )
+
+    def test_invalidate_returns_to_unverified(self, service) -> None:
+        """実行時 401 等での失効(invalidate)も UNVERIFIED に戻す。"""
+        service.verify_and_save(LayerKind.ASR, "cloud_backend", {"api_key": "sk-1"})
+        service.invalidate_verification("cloud_backend")
+        assert (
+            service.get_auth_state(LayerKind.ASR, "cloud_backend")
+            == AuthState.UNVERIFIED
+        )
+
+    def test_broken_spec_degrades_to_verified_check(self, service) -> None:
+        """spec 取得失敗時は MISSING 判定をスキップし verified だけ見る(gate と同じ)。"""
+        assert (
+            service.get_auth_state(LayerKind.ASR, "broken_spec_backend")
+            == AuthState.UNVERIFIED
+        )
 
 
 class TestLazyStoreInit:

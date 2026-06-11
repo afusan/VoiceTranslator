@@ -1481,6 +1481,123 @@ class TestPhaseE2CredentialFlow:
             ctrl.stop_pipeline()
 
 
+class TestAuthStateAndCredentialEvents:
+    """認証準備状態の互換窓(`get_auth_state`)と credentials イベントの発火。
+
+    セットアップは TestPhaseE2CredentialFlow と同じ fake cloud backend を共有する
+    (継承すると親のテストが二重実行されるため、ヘルパーだけ借りる)。
+    """
+
+    _setup_with_cloud_backend = TestPhaseE2CredentialFlow._setup_with_cloud_backend
+
+    def test_get_auth_state_for_selected_backend(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """選択中 backend の AuthState を静的に返す(ロード不要)。"""
+        from voice_translator.common.types import AuthState
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        # ローカル backend(既定の faster_whisper)は NOT_REQUIRED
+        assert ctrl.get_auth_state(LayerKind.ASR) == AuthState.NOT_REQUIRED
+        # cloud に切り替えると(未ロードのまま)MISSING になる
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        assert LayerKind.ASR not in ctrl._backends  # ロードされていないことを確認
+        assert ctrl.get_auth_state(LayerKind.ASR) == AuthState.MISSING
+        # 鍵だけ保存 → UNVERIFIED、verify 通過 → VERIFIED
+        ctrl.set_credential("fake_cloud_asr", "api_key", "sk-x")
+        assert ctrl.get_auth_state(LayerKind.ASR) == AuthState.UNVERIFIED
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-x"}
+        )
+        assert ctrl.get_auth_state(LayerKind.ASR) == AuthState.VERIFIED
+
+    def test_get_all_auth_states_covers_all_layers(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        from voice_translator.common.types import AuthState
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        states = ctrl.get_all_auth_states()
+        assert set(states.keys()) == set(LayerKind)
+        assert all(isinstance(s, AuthState) for s in states.values())
+
+    def test_credential_changes_emit_settings_event(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """set / delete / verify / invalidate が ("credentials", <backend>) を emit する。
+
+        AuthState は status イベントが出ない経路(store / config 直)で変わるため、
+        UI の再計算はこのイベントが頼り。
+        """
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        events: list[tuple[str, ...]] = []
+        ctrl.add_settings_listener(lambda keys: events.append(keys))
+
+        ctrl.set_credential("fake_cloud_asr", "api_key", "sk-1")
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-1"}
+        )
+        ctrl.invalidate_verification("fake_cloud_asr")
+        ctrl.delete_credential("fake_cloud_asr", "api_key")
+
+        cred_events = [k for k in events if k[0] == "credentials"]
+        assert cred_events == [("credentials", "fake_cloud_asr")] * 4
+
+    def test_verify_failure_does_not_emit_credentials_event(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        ctrl, cls, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        cls.ok_value = False
+        events: list[tuple[str, ...]] = []
+        ctrl.add_settings_listener(lambda keys: events.append(keys))
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "bad"}
+        )
+        assert [k for k in events if k[0] == "credentials"] == []
+
+    def test_verify_success_evicts_loaded_instance(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """認証成功時、選択中レイヤのロード済みインスタンスは evict + INIT に戻る。
+
+        旧挙動(MISSING_CREDENTIALS のときだけ即 reload)は lazy 方針に置き換え:
+        古い認証情報で作られたインスタンスを捨て、次の Start / ↻ ロードで作り直す。
+        """
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        ctrl.set_setting("backends", "asr", "fake_cloud_asr")
+        ctrl.load_model_layer(LayerKind.ASR)
+        assert LayerKind.ASR in ctrl._backends
+
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-new"}
+        )
+        assert LayerKind.ASR not in ctrl._backends
+        assert ctrl.get_model_status(LayerKind.ASR) == ModelStatus.INIT
+
+    def test_verify_for_unselected_backend_does_not_evict(
+        self, populated_registry, config, tmp_path, monkeypatch
+    ) -> None:
+        """選択されていない backend の認証ではキャッシュに触らない。"""
+        ctrl, _, _ = self._setup_with_cloud_backend(
+            populated_registry, config, tmp_path, monkeypatch
+        )
+        # ASR は既定(faster_whisper)のままロード
+        ctrl.load_model_layer(LayerKind.ASR)
+        inst = ctrl._backends[LayerKind.ASR]
+        ctrl.verify_and_save_credentials(
+            LayerKind.ASR, "fake_cloud_asr", {"api_key": "sk-x"}
+        )
+        assert ctrl._backends[LayerKind.ASR] is inst
+
+
 class TestAsrSupportedLanguages:
     """ASR の対応言語問い合わせ口(`get_supported_input_languages` / `supports_auto_detect`)。
 

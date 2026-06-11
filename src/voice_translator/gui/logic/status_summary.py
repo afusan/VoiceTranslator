@@ -12,7 +12,14 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from voice_translator.common.types import ErrorRecord, LayerKind, LayerStatusLine
+from voice_translator.common.types import (
+    AuthState,
+    ErrorRecord,
+    LayerKind,
+    LayerStatusLine,
+)
+
+from .auth_display import AUTH_MISSING_TEXT, AUTH_UNVERIFIED_TEXT
 
 
 def format_status_summary(
@@ -46,6 +53,8 @@ def _format_layer_line(line: LayerStatusLine) -> str:
     - 吸収:   `[translator] (asr の faster_whisper_translate で実行)`
       — 設定されている backend 名や状態を出すと「それが動く」ように見えるため出さない
     - 対象外: `[tts] (なし)`
+    - 認証未完了(static 判定)はインスタンス状態より優先して出す
+      (設定パネルの行ステータス上書きと同じ文言: `Missing Credentials` / `Not Verified`)
     """
     if line.disposition == "absorbed":
         return (
@@ -54,10 +63,12 @@ def _format_layer_line(line: LayerStatusLine) -> str:
         )
     if line.disposition == "skipped":
         return f"[{line.layer.value}] (なし)"
-    return (
-        f"[{line.layer.value}] {line.backend_name}: "
-        f"{line.status.value}{line.dl_size_hint}"
-    )
+    status_text = f"{line.status.value}{line.dl_size_hint}"
+    if line.auth == AuthState.MISSING:
+        status_text = AUTH_MISSING_TEXT
+    elif line.auth == AuthState.UNVERIFIED:
+        status_text = AUTH_UNVERIFIED_TEXT
+    return f"[{line.layer.value}] {line.backend_name}: {status_text}"
 
 
 def append_gui_events(
