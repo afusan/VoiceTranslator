@@ -490,3 +490,63 @@ class TestProctapInputGainConfig:
         patched_backend_setup["ProcTapCaptureBackend"].assert_called_with(
             resample_quality="best", input_gain=4.0,
         )
+
+
+class TestRequiresModulesDeclarations:
+    """opt-in extras backend の必要 import 名宣言を固定する(導入済み判定の材料)。
+
+    宣言は各 backend の遅延 import 名と一致させること。宣言漏れ = 未導入でも
+    プルダウンに出る(選んで Not Downloaded)、過剰宣言 = 導入済みなのに隠れる。
+    """
+
+    _EXPECTED: dict[tuple[LayerKind, str], tuple[str, ...]] = {
+        (LayerKind.CAPTURE, "proctap"): ("proctap", "scipy", "pycaw", "psutil"),
+        (LayerKind.VAD, "webrtcvad"): ("webrtcvad",),
+        (LayerKind.VAD, "pyannote"): ("pyannote.audio",),
+        (LayerKind.VAD, "pvcobra"): ("pvcobra",),
+        (LayerKind.ASR, "openai_whisper"): ("whisper",),
+        (LayerKind.ASR, "openai_whisper_api"): ("httpx",),
+        (LayerKind.ASR, "openai_whisper_api_translate"): ("httpx",),
+        (LayerKind.ASR, "gpt_audio_translate"): ("httpx",),
+        (LayerKind.ASR, "google_stt"): ("google.cloud.speech",),
+        (LayerKind.ASR, "deepgram"): ("deepgram",),
+        (LayerKind.TRANSLATOR, "deepl"): ("httpx",),
+        (LayerKind.TRANSLATOR, "openai_gpt"): ("httpx",),
+        (LayerKind.TRANSLATOR, "anthropic_claude"): ("httpx",),
+        (LayerKind.TTS, "piper"): ("piper", "huggingface_hub"),
+        (LayerKind.TTS, "elevenlabs"): ("httpx",),
+        (LayerKind.TTS, "openai_tts"): ("httpx",),
+        (LayerKind.TTS, "google_tts"): ("google.cloud.texttospeech",),
+    }
+    # base 依存だけで動く backend(宣言なし = 常に導入済み)
+    _BASE: list[tuple[LayerKind, str]] = [
+        (LayerKind.CAPTURE, "soundcard"),
+        (LayerKind.VAD, "silero"),
+        (LayerKind.ASR, "faster_whisper"),
+        (LayerKind.ASR, "faster_whisper_translate"),
+        (LayerKind.TRANSLATOR, "nllb200"),
+        (LayerKind.TTS, "sapi"),
+        (LayerKind.OUTPUT, "soundcard"),
+    ]
+
+    def test_opt_in_backends_declare_required_modules(
+        self, patched_backend_setup
+    ) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        for (layer, name), expected in self._EXPECTED.items():
+            assert registry.get_requires_modules(layer, name) == expected, (
+                f"{layer.value}/{name} の requires_modules 宣言が期待と不一致"
+            )
+
+    def test_base_backends_declare_nothing(self, patched_backend_setup) -> None:
+        from voice_translator.common.backend_setup import register_default_backends
+
+        registry = BackendRegistry()
+        register_default_backends(registry)
+        for layer, name in self._BASE:
+            assert registry.get_requires_modules(layer, name) == (), (
+                f"{layer.value}/{name} は base 依存のみ(宣言不要)のはず"
+            )

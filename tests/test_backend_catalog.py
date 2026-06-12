@@ -193,3 +193,45 @@ class TestNonCaptureKindValuePassesThrough:
         )
         catalog = BackendCatalog(reg)
         assert catalog.get_capture_kind("odd") == "not-a-kind"
+
+
+class TestIsBackendAvailable:
+    """導入済み判定(requires_modules × find_spec、実 import なし)。
+
+    縮退規約: 宣言なし / 未登録 / 判定不能 → True(誤判定で隠すより、選んで
+    ロード失敗 + エラー案内に倒す)。モジュール不在(dotted 名の親不在含む)→ False。
+    """
+
+    @staticmethod
+    def _catalog_with(requires: tuple[str, ...]) -> BackendCatalog:
+        reg = BackendRegistry()
+        reg.register(
+            LayerKind.ASR, "b", lambda: MagicMock(), requires_modules=requires,
+        )
+        return BackendCatalog(reg)
+
+    def test_no_declaration_is_always_available(self) -> None:
+        catalog = self._catalog_with(())
+        assert catalog.is_backend_available(LayerKind.ASR, "b") is True
+
+    def test_unregistered_backend_is_available(self) -> None:
+        catalog = BackendCatalog(BackendRegistry())
+        assert catalog.is_backend_available(LayerKind.ASR, "nope") is True
+
+    def test_installed_module_is_available(self) -> None:
+        catalog = self._catalog_with(("wave",))  # 標準ライブラリ = 必ず存在する
+        assert catalog.is_backend_available(LayerKind.ASR, "b") is True
+
+    def test_missing_module_is_unavailable(self) -> None:
+        catalog = self._catalog_with(("totally_missing_module_xyz",))
+        assert catalog.is_backend_available(LayerKind.ASR, "b") is False
+
+    def test_missing_dotted_parent_is_unavailable(self) -> None:
+        """"pyannote.audio" 型の宣言で親パッケージ不在(ModuleNotFoundError)も未導入扱い。"""
+        catalog = self._catalog_with(("totally_missing_pkg_xyz.sub",))
+        assert catalog.is_backend_available(LayerKind.ASR, "b") is False
+
+    def test_any_missing_module_makes_unavailable(self) -> None:
+        catalog = self._catalog_with(("wave", "totally_missing_module_xyz"))
+        assert catalog.is_backend_available(LayerKind.ASR, "b") is False
+

@@ -180,7 +180,7 @@ class SettingsPanel(ctk.CTkFrame):
             if self._default_row_text_color is None:
                 self._default_row_text_color = label_widget.cget("text_color")
             label_widget.grid(row=row, column=0, sticky="w", padx=4, pady=2)
-            internal_names = self._controller.list_backends(layer) or ["(未登録)"]
+            internal_names = self._available_backend_names(layer) or ["(未登録)"]
             # 表示用候補(layer ごとに display フォーマットを変換)
             names = self._render_backend_choices(layer, internal_names)
             current_internal = str(
@@ -219,6 +219,25 @@ class SettingsPanel(ctk.CTkFrame):
         body.columnconfigure(2, weight=0)
         body.columnconfigure(3, weight=0)
         return section
+
+    def _available_backend_names(self, layer: LayerKind) -> list[str]:
+        """プルダウンに列挙する backend 名の収集(未導入の extras backend は出さない)。
+
+        判定は `BackendCatalog.is_backend_available`(必要 import 名の find_spec、
+        実 import なし)。「未導入のものを選んで Not Downloaded になる」混乱を
+        候補の時点で防ぐ。導入方法は manual の extras 対応表に記載。
+        判定失敗・全滅時は無濾過に縮退する(誤判定で隠すより、選んでロード失敗
+        + エラー案内に倒す方が安全)。
+        """
+        names = self._controller.list_backends(layer)
+        try:
+            available = [
+                n for n in names
+                if self._controller.catalog.is_backend_available(layer, n)
+            ]
+        except Exception:  # noqa: BLE001 - 判定不能は無濾過に縮退
+            return names
+        return available or names
 
     # ----------------------------------------------------------
     # backend プルダウンの表示形式 ↔ 内部値変換(各レイヤの特例を吸収)

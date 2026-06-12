@@ -41,6 +41,11 @@ class BackendRegistry:
         self._classes: dict[LayerKind, dict[str, type]] = {
             layer: {} for layer in LayerKind
         }
+        # opt-in extras backend が必要とする import 名(導入済み判定に使う)。
+        # 未宣言(空タプル)は「base 依存のみ = 常に導入済み」を意味する。
+        self._requires_modules: dict[LayerKind, dict[str, tuple[str, ...]]] = {
+            layer: {} for layer in LayerKind
+        }
 
     def register(
         self,
@@ -50,6 +55,7 @@ class BackendRegistry:
         *,
         backend_cls: type | None = None,
         capabilities: BackendCapabilities | None = None,
+        requires_modules: tuple[str, ...] = (),
     ) -> None:
         """指定レイヤに名前付きでバックエンドのファクトリを登録する。
 
@@ -57,12 +63,17 @@ class BackendRegistry:
         `capabilities` が指定されていれば `get_capability_hint` で参照できる。
         `backend_cls` が指定されていれば `get_backend_class` で参照でき、
         `credential_spec` / `verify_credentials` 等の classmethod を呼べる(Phase E-2)。
+        `requires_modules` は opt-in extras backend が動くのに必要な import 名
+        (例: ("httpx",))。`BackendCatalog.is_backend_available` の判定材料で、
+        base 依存だけで動く backend は宣言不要。
         """
         self._factories[layer][name] = factory
         if capabilities is not None:
             self._capabilities[layer][name] = capabilities
         if backend_cls is not None:
             self._classes[layer][name] = backend_cls
+        if requires_modules:
+            self._requires_modules[layer][name] = tuple(requires_modules)
 
     def is_registered(self, layer: LayerKind, name: str) -> bool:
         """指定レイヤ + 名前が登録済みか。"""
@@ -102,3 +113,7 @@ class BackendRegistry:
         未登録なら None。
         """
         return self._classes.get(layer, {}).get(name)
+
+    def get_requires_modules(self, layer: LayerKind, name: str) -> tuple[str, ...]:
+        """登録時に宣言された必要 import 名を返す。未宣言は空タプル(= 常に導入済み)。"""
+        return self._requires_modules.get(layer, {}).get(name, ())
