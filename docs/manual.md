@@ -30,8 +30,15 @@
 
 ## 2. 動作環境
 
-- **OS**: Windows 11(動作確認の主対象)。macOS / Linux は一部 backend を除き動作
-  (SAPI TTS・ProcTap が Windows 専用。詳細は README の OS 対応表)
+- **OS**: Windows 11(動作確認の主対象)。macOS / Linux は一部 backend を除き動作:
+
+  | Windows 専用 | 影響 | 他 OS での代替 |
+  |---|---|---|
+  | `sapi` TTS(既定 TTS) | 読み上げ不可 | `piper` / クラウド TTS / TTS=「(なし)」(字幕モード) |
+  | `proc-tap`(per-process キャプチャ) | 特定アプリの音だけ翻訳が不可 | 代替なし |
+  | スピーカループバック(`[LB] ...`) | OS ごとに仕組みが違う | macOS: BlackHole 等 / Linux: PipeWire monitor を別途用意 |
+
+  VAD / ASR / 翻訳 / Piper TTS / クラウド系 backend はクロス OS で動作する。
 - **Python**: 3.12 以上(`uv` が自動取得する。手動インストール不要)
 - **ディスク**: 5〜6GB 程度(モデル + PyTorch 等。extras を足すと増える)
 - **メモリ**: 8GB 以上推奨(翻訳モデル NLLB-200 600M を CPU で動かすため)
