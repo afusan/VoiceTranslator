@@ -108,7 +108,9 @@ py -m uv run --extra cpu python -m voice_translator
 
 | backend | 形態 | 同意 / 認証 |
 |---|---|---|
-| `soundcard` / `silero` / `webrtcvad` / `faster_whisper` / `nllb200` / `sapi` / `piper` / `proc-tap` / `openai_whisper` | ローカル | OSS ライセンス(MIT / BSD / Apache 等)。同意手続き・認証不要 |
+| `soundcard` / `silero` / `webrtcvad` / `faster_whisper` / `sapi` / `proc-tap` / `openai_whisper` | ローカル | OSS ライセンス(MIT / BSD / MPL 等)。同意手続き・認証不要 |
+| `nllb200`(既定の翻訳) | ローカル | ライブラリは OSS だが**モデル重みは [CC-BY-NC 4.0(非商用限定)](https://huggingface.co/facebook/nllb-200-distilled-600M)**。商用文脈ではクラウド翻訳へ切替を |
+| `piper`(TTS) | ローカル | [piper-tts は GPL-3.0](https://github.com/OHF-Voice/piper1-gpl)(同梱せず extras で利用者が導入)。voice モデルのライセンスは voice ごとに異なる |
 | `pyannote`(VAD) | ローカル(gated) | [HF でモデル利用同意](https://huggingface.co/pyannote/segmentation-3.0) + HF Token |
 | `pvcobra`(VAD) | ローカル | [Picovoice](https://picovoice.ai/pricing/)(個人非商用 / 商用は別ライセンス)+ Access Key |
 | `openai_whisper_api` / `openai_tts` / `openai_gpt` / `gpt_audio_translate` 等 | クラウド | [OpenAI 利用規約](https://openai.com/policies/terms-of-use) + API key |
@@ -119,6 +121,9 @@ py -m uv run --extra cpu python -m voice_translator
 
 API key 等は **OS の資格情報ストア**(Windows Credential Manager / macOS Keychain)に
 保管される。使えない環境ではプロジェクト直下 `local.secrets` に平文 fallback(git 管理外)。
+
+本体のライセンスと、使用している言語・フレームワーク・モデルの一覧(リンク付き)は
+[LICENSE.md](LICENSE.md) を参照。
 
 ---
 
