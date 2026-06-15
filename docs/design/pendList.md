@@ -551,7 +551,15 @@
 
 ---
 
-## [2026-05-28] 翻訳/LLM バックエンドの生成パラメータを設定可能にする
+## [✅完了(degenerate 防止)2026-06-16 / ⏳設定可能化は保留] 翻訳/LLM バックエンドの生成パラメータを設定可能にする
+> **決着(2026-06-16)**: 本エントリの主眼だった **degenerate output 防止は実装済み**。
+> `Nllb200TranslatorBackend` のコンストラクタ既定が `num_beams=4 / no_repeat_ngram_size=3 /
+> repetition_penalty=1.1 / early_stopping=True` になり、`translate()` の `generate()` に渡している。
+> 専用テスト(`tests/test_nllb200_degeneration.py` / `tests/test_nllb200.py`)で既定の反復抑制を契約化済み。
+> dev runner(`runner_translator.py` / `runner_pipeline.py`)からも CLI で上書き可能。
+> **残る保留**: 本番の `config.yaml`(`backends_config.nllb200.*`)/ レイヤ別「設定」ダイアログ
+> 経由での設定可能化(下記「対応方針(案)」の汎用スキーマ化)。これは第二の翻訳 backend 追加時に
+> 設定スキーマの汎用化と一緒に検討する。
 - **問題の具体(発生事例)**: `translations.jsonl` L184 で、920文字の英文(イラン国内インターネット復旧の話題、`internet` / `online` / `restrictions` / `businesses` が密集して反復)を入力した際、`tgt_text` が「ウェブのインターネットは,インターネットの普及を 妨げている.」を約 28 回繰り返すなど、明確な **degenerate output**(同じ n-gram に吸着して max_length まで延々と回る現象)が発生した。L180 や L183 は同等の長文だが語彙が散らばっており崩れていない。
 - **直接の要因**: `Nllb200TranslatorBackend.translate()` の `generate()` 呼び出しが `forced_bos_token_id` と `max_length` しか渡しておらず、`num_beams=1`(greedy)/ `no_repeat_ngram_size=0` / `repetition_penalty=1.0` という HF デフォルトのまま。NLLB-200 distilled 600M は容量が小さく、greedy 探索が局所最適に落ちると抜け出せない。修正は `num_beams=4` / `no_repeat_ngram_size=3` / `repetition_penalty=1.1` / `early_stopping=True` を渡すだけで効くことが確認できる。
 - **抽象化した課題**: **翻訳バックエンド(将来 LLM ベースも含む)の "生成パラメータ" は、バックエンドごとに名前/意味/値域が異なる**。NLLB の `num_beams`、Marian の `length_penalty`、Ollama の `temperature` / `top_p`、OpenAI 互換 API の `max_tokens` / `frequency_penalty` … 共通化できない。一律な GUI 化は事故のもと(切替えたら効かない・値が無意味になる)。
