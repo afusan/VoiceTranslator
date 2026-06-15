@@ -193,7 +193,7 @@ ASR に以下を選ぶと、書き起こしと翻訳を 1 回の処理で行う(
   disabled、ステータス欄は空表示になる。選択値は記憶されており、ASR を単体 backend に
   戻すと翻訳レイヤが復帰する。どの backend が代行しているかは動作タブのステータス集約で
   確認できる(例: `[translator] (asr の faster_whisper_translate で実行)`)。
-- 出力言語の候補は複合 backend が決める(英語固定の 2 つでは `en` のみ)。
+- 出力言語の候補は複合 backend が決める(英語固定の 2 つでは `eng` のみ)。
 - クラウド 2 種の API key 未登録時は、同じ OpenAI key を使う既存 backend
   (`openai_whisper_api` / `openai_gpt`)の保存済み key を自動で使い回す。
 
@@ -424,7 +424,7 @@ backends_config:
 
 ### ① 海外配信を日本語音声で聞く
 - 音声取得 `soundcard` / 入力 `[LB] Speakers` / 出力 `Headphones`
-- 言語 src `auto` → tgt `ja`
+- 言語 src `auto` → tgt `jpn`
 
 ### ② 通話アプリの相手の声だけ翻訳する(Windows)
 - 音声取得 `プロセス (proctap)` → 「プロセス選択…」で通話アプリを選ぶ
