@@ -4,6 +4,41 @@
 
 ---
 
+## [2026-06-16] ASR 対応・翻訳非対応の入力言語が「英語誤認」で訳される(src↔翻訳のカバレッジ不一致)
+
+- **内容**: 入力言語(src)に「ASR(Whisper)は対応するが Translator(NLLB)が対応しない言語」を
+  選ぶ / `auto` でそれが検出されると、NLLB のソース言語が `eng_Latn` にフォールバックし、
+  **原文を英語と誤認した翻訳**になる(エラーも警告も出ない)。出力(tgt)側は「翻訳∩TTS」で
+  絞っているが、**src 側は翻訳側で絞っていない**のが根本。
+- **メカニズム(再開時に読む)**:
+  - src ドロップダウンは ASR の `supported_input_languages()`(= Whisper 99 言語)で構築。
+    翻訳側で絞り込まない(`gui/settings_panel.py` の `_refresh_input_language_choices`)。
+  - 翻訳時 `nllb200_backend._to_nllb_code(src, fallback="eng_Latn")` が、対応表
+    (`ISO_TO_NLLB` 639-1 / `CANONICAL_TO_NLLB` 639-3)に無いコードを **`eng_Latn`** に倒す。
+  - src 言語の流れは `common/pipeline.py`(L557-562, L580-581): `src=auto` のときは
+    **ASR 検出言語**が、明示時はその指定が translate に渡る。よって auto/明示どちらでも発生する。
+- **該当言語(2026-06-16 時点、実コードで算出 = Whisper正準 − NLLB申告)13 件**:
+  `afr, bre, haw, lat, lin, ltz, mlg, mri, oci, san, snd, tuk, yid`。
+  - うち **`afr`(アフリカーンス)/ `lin`(リンガラ)/ `mlg`(マダガスカル)/ `snd`(シンド)** は
+    **NLLB-200 本体は対応**(FLORES に `afr_Latn` 等あり)。当アプリの申告表に未登録なだけなので、
+    表追加で正しく翻訳可能になる。残りは NLLB 自体が非対応寄り。
+- **対応案(2 系統。組合せ可)**:
+  - (a) **申告表の拡充**: NLLB が実対応する言語(まず上記 4 件)を `CANONICAL_TO_NLLB` に
+    FLORES コードで追加。`docs/design/feature-mms-multilingual/gen_lang_table.py` と同様に
+    NLLB tokenizer の `_extra_special_tokens` から FLORES コードを確認して足す(推測しない)。
+  - (b) **入力側の警告/絞り込み**: 出力側の TTS 非対応警告(`gui/logic/language_choices.py:
+    tts_warning_needed` / `format_tts_warning_message`)と対称に、「現 Translator が src を
+    訳せないとき警告」または「src 候補を翻訳可能言語に絞る」を入れる。判断は logic、表示は View。
+- **対応の見送り理由**:
+  - **639-3 移行による回帰ではない**(移行前も `ISO_TO_NLLB` にこれら 639-1 が無く、同じく
+    英語フォールバックしていた)。`feature/mms-multilingual` は出力側(MMS-TTS)の多言語化が主題で、
+    本件は**入力側の ASR↔翻訳カバレッジ**という別テーマ。スコープを切るためブランチ外とした。
+  - ユーザ判断(2026-06-16)で pendList 起票。
+- **再検討トリガ**: 低資源言語の**入力**を実運用し始めたとき / 翻訳の品質崩れがドッグフーディングで
+  顕在化したとき / 出力側に倣って「対応言語の警告」を体系的に入れる UI 改善に着手するとき。
+
+---
+
 ## [2026-06-10] 「設定を再読込」のスマート化(差分 evict + セッション内 PID 維持)
 - **内容**: `AppController.load_settings()` は現在、ファイル側で backend が変わっている可能性に
   備えて**全 backend キャッシュを無条件 evict** する(全レイヤ INIT に戻る)。これを
