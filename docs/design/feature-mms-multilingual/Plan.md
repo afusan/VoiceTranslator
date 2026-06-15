@@ -46,6 +46,8 @@
       extras(`tts-mms`)・`requires_modules`・宣言固定テストは各 Phase で追従済み(確認済み)。
 
 > **全 Phase 完了(2026-06-16)。master へのマージ待ち**(ユーザ指示で「一通り終わるまで保留」)。
+> 敵対的レビュー実施済み([レビュー指摘.md](レビュー指摘.md))。要修正 5 件(M-1/M-2/L-1/L-3/L-5)は
+> 対応完了、M-3/M-4 はユーザ判断で見送り、L-2/I-1 は要検討(pendList 候補)。
 > 全 small テスト緑。MMS の実ロード(eng / swh)large テスト通過。
 > 再開・レビュー時の現物: `tts/mms_backend.py`(テンプレ `tts/piper_backend.py`)/
 > `common/languages.py`(639-3 正準 + 変換)/ `translator/nllb200_backend.py`(`CANONICAL_TO_NLLB`)/

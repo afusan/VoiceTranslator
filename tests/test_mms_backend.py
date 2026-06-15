@@ -34,12 +34,14 @@ def _make_backend(mocked_heavy_deps, **kwargs):
 
 
 class TestSupportedLanguages:
-    def test_returns_sorted_iso639_1_subset(self) -> None:
+    def test_returns_sorted_canonical_iso639_3(self) -> None:
         from voice_translator.tts.mms_backend import MmsTtsBackend
 
         langs = MmsTtsBackend.supported_output_languages()
         assert langs == sorted(langs)  # 安定ソート
-        assert langs, "初期集合が空になっている"
+        assert langs, "対応言語集合が空になっている"
+        # 申告は正準 ISO 639-3(3 文字以上。legacy 2 文字が混ざらない)
+        assert all(len(c) >= 3 for c in langs)
 
     def test_all_codes_are_displayable(self) -> None:
         """申告言語はすべて言語テーブルで表示できる(format で素のコードに化けない)。"""
@@ -74,10 +76,11 @@ class TestLazyCacheLru:
 
         monkeypatch.setattr(backend, "_load_voice", fake_load)
 
-        v1 = backend._ensure_language("en")
-        v1b = backend._ensure_language("en")
+        # 本番が渡すのは正準 639-3(eng 等)
+        v1 = backend._ensure_language("eng")
+        v1b = backend._ensure_language("eng")
         assert v1 is v1b
-        assert calls == ["en"]  # 2 回目は再ロードしない
+        assert calls == ["eng"]  # 2 回目は再ロードしない
 
     def test_lru_evicts_oldest(self, mocked_heavy_deps, monkeypatch) -> None:
         from voice_translator.tts import mms_backend as mod
@@ -92,11 +95,11 @@ class TestLazyCacheLru:
 
         monkeypatch.setattr(backend, "_load_voice", fake_load)
 
-        backend._ensure_language("en")
-        backend._ensure_language("fr")
-        backend._ensure_language("de")  # en が押し出される
+        backend._ensure_language("eng")
+        backend._ensure_language("fra")
+        backend._ensure_language("deu")  # eng が押し出される
 
-        assert set(backend._cache.keys()) == {"fr", "de"}
+        assert set(backend._cache.keys()) == {"fra", "deu"}
 
     def test_prefetch_unsupported_is_noop(self, mocked_heavy_deps, monkeypatch) -> None:
         backend = _make_backend(mocked_heavy_deps)

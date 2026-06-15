@@ -31,6 +31,7 @@ from typing import Any
 
 import numpy as np
 
+from voice_translator.common.device import resolve_torch_device
 from voice_translator.common.errors import FatalError, SkipError
 from voice_translator.common.languages import LANGUAGE_NAMES
 from voice_translator.common.types import BackendCapabilities, ModelStatus
@@ -112,21 +113,11 @@ class MmsTtsBackend(TtsBackend):
                 f"MMS-TTS の依存(transformers/torch)ロードに失敗: {e}", cause=e,
             ) from e
 
-        self._device = self._resolve_device()
+        # device 解決は共有ヘルパに委ねる(配布方針「device 切替はコードパス1本」)。
+        # auto → cuda → mps → cpu。明示指定(mps 含む)はそのまま通す。
+        self._device = resolve_torch_device(self._device_pref)
         # エンジン準備完了(言語モデルはオンデマンド)。
         self._set_status(ModelStatus.LOADED)
-
-    # ----------------------------------------------------------
-    def _resolve_device(self) -> str:
-        """`device="auto"` を実デバイスへ解決する(コードパスは 1 本)。"""
-        if self._device_pref in ("cpu", "cuda"):
-            return self._device_pref
-        try:
-            import torch  # type: ignore
-
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:  # noqa: BLE001
-            return "cpu"
 
     # ----------------------------------------------------------
     def prefetch_language(self, tgt_lang: str) -> None:

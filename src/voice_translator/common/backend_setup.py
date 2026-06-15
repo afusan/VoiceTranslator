@@ -422,7 +422,7 @@ def register_default_backends(
     # Google Cloud STT(クラウド)。サービスアカウント JSON ファイル認証。
     # extras: `asr-google-stt`(google-cloud-speech)。
     gstt_default_lang = _read_str(
-        config, ("backends_config", "google_stt", "default_language"), default="en"
+        config, ("backends_config", "google_stt", "default_language"), default="eng"
     )
     registry.register(
         LayerKind.ASR,
@@ -661,7 +661,7 @@ def register_default_backends(
     )
     google_tts_default_lang = _read_str(
         config, ("backends_config", "google_tts", "default_language"),
-        default="en",
+        default="eng",
     )
     registry.register(
         LayerKind.TTS,
