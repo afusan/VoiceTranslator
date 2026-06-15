@@ -34,6 +34,7 @@ _KEYED_FILES: tuple[Path, ...] = tuple(_LOGIC_DIR.glob("*.py")) + (
     _GUI_DIR / "process_select_dialog.py",
     _GUI_DIR / "consent_dialog.py",
     _GUI_DIR / "credential_dialog.py",
+    _GUI_DIR / "layer_settings_dialog.py",
 )
 # schema が SettingField に持たせる i18n キー登録源(`tr()` ではなくこの keyword で登録)。
 _KEY_REGISTERING_KWARGS = {"label_key", "help_key"}

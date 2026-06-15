@@ -45,15 +45,21 @@ if TYPE_CHECKING:
     from voice_translator.common.backend_base import Subscription
 
 
-# レイヤ表示名(`SettingsPanel` と揃えておく)
-_LAYER_DISPLAY: dict[LayerKind, str] = {
-    LayerKind.CAPTURE: "音声取得",
-    LayerKind.VAD: "VAD",
-    LayerKind.ASR: "ASR(書き起こし)",
-    LayerKind.TRANSLATOR: "翻訳",
-    LayerKind.TTS: "TTS(音声合成)",
-    LayerKind.OUTPUT: "音声出力",
-}
+# レイヤ表示名(`SettingsPanel` と揃えておく)。文言は i18n の layer.* キーから引く。
+def _layer_display(layer: LayerKind) -> str:
+    if layer == LayerKind.CAPTURE:
+        return tr("layer.capture")
+    if layer == LayerKind.VAD:
+        return tr("layer.vad")
+    if layer == LayerKind.ASR:
+        return tr("layer.asr")
+    if layer == LayerKind.TRANSLATOR:
+        return tr("layer.translator")
+    if layer == LayerKind.TTS:
+        return tr("layer.tts")
+    if layer == LayerKind.OUTPUT:
+        return tr("layer.output")
+    return layer.value
 
 
 class LayerSettingsDialog(ctk.CTkToplevel):
@@ -81,7 +87,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         # AppController 状態変化購読(R2-6)
         self._status_subscription: "Subscription | None" = None
 
-        self.title(f"{_LAYER_DISPLAY.get(layer, layer.value)} の設定")
+        self.title(tr("dialog.layer_settings.title", layer=_layer_display(layer)))
         # 初期 geometry は仮値。_build_widgets 後に必要高を計算して上書きする(2026-05-30)
         self.geometry("560x520")
         self.transient(parent)  # 親の前面に固定
@@ -121,17 +127,21 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         fields = visible_fields(self._layer, current_backend)
 
         ctk.CTkLabel(
-            self, text=f"{_LAYER_DISPLAY.get(self._layer, self._layer.value)}",
+            self, text=_layer_display(self._layer),
             font=("", 16, "bold"),
         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 0))
         ctk.CTkLabel(
-            self, text=f"バックエンド: {current_backend or '(未選択)'}",
+            self,
+            text=tr(
+                "dialog.layer_settings.backend_line",
+                backend=current_backend or tr("dialog.layer_settings.unselected"),
+            ),
             text_color="#94a3b8",
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
 
         if not fields:
             ctk.CTkLabel(
-                self, text="このレイヤに編集可能な設定はありません。",
+                self, text=tr("dialog.layer_settings.no_fields"),
                 text_color="#94a3b8",
             ).grid(row=2, column=0, columnspan=2, sticky="w", padx=12, pady=12)
             field_rows = 1
@@ -162,10 +172,10 @@ class LayerSettingsDialog(ctk.CTkToplevel):
             sticky="e", padx=12, pady=(10, 12),
         )
         ctk.CTkButton(
-            btn_frame, text="キャンセル", width=100, command=self._on_cancel,
+            btn_frame, text=tr("dialog.layer_settings.cancel"), width=100, command=self._on_cancel,
         ).pack(side="right", padx=(8, 0))
         ctk.CTkButton(
-            btn_frame, text="保存", width=100, command=self._on_save,
+            btn_frame, text=tr("dialog.layer_settings.save"), width=100, command=self._on_save,
         ).pack(side="right")
 
         self.columnconfigure(1, weight=1)
@@ -188,7 +198,10 @@ class LayerSettingsDialog(ctk.CTkToplevel):
             self._add_password_row(field, row=row)
         else:
             # 想定外型: ラベルだけ出して値は触らない(将来の追加に保険)
-            ctk.CTkLabel(self, text=f"{tr(field.label_key)}(未対応型: {ft})").grid(
+            ctk.CTkLabel(
+                self,
+                text=tr(field.label_key) + tr("dialog.layer_settings.unsupported_suffix", ft=ft),
+            ).grid(
                 row=row, column=0, columnspan=2, sticky="w", padx=12, pady=2
             )
 
@@ -246,7 +259,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         if not display_to_value:
             # 選択肢が空 → 既定値だけ出す(編集はできるがほぼ機能しない)
             fallback = str(field.default) if field.default is not None else ""
-            display_to_value[fallback or "(選択肢なし)"] = fallback
+            display_to_value[fallback or tr("dialog.layer_settings.no_options")] = fallback
 
         options = list(display_to_value.keys())
 
@@ -320,7 +333,10 @@ class LayerSettingsDialog(ctk.CTkToplevel):
             current = self._controller.get_credential(backend_name, key_name)
         except Exception:  # noqa: BLE001
             current = None
-        placeholder = "●●●●●●●● (設定済み、変更時のみ入力)" if current else "(未設定)"
+        placeholder = (
+            tr("dialog.layer_settings.cred_placeholder_set") if current
+            else tr("dialog.layer_settings.cred_placeholder_unset")
+        )
 
         var = ctk.StringVar(value="")
         ctk.CTkLabel(self, text=tr(field.label_key)).grid(
@@ -349,7 +365,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
 
     def _add_auth_button_row(self, backend_name: str, *, row: int) -> None:
         """「認証」ボタン + 現在の verified 状態ラベルを置く。"""
-        ctk.CTkLabel(self, text="認証").grid(
+        ctk.CTkLabel(self, text=tr("dialog.layer_settings.auth")).grid(
             row=row, column=0, sticky="w", padx=12, pady=(8, 0)
         )
         status_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -360,24 +376,24 @@ class LayerSettingsDialog(ctk.CTkToplevel):
             verified = self._controller.is_backend_verified(backend_name)
         except Exception:  # noqa: BLE001
             verified = False
-        status_text = "✓ 認証済み" if verified else "未認証"
+        status_text = (
+            tr("dialog.layer_settings.auth_verified") if verified
+            else tr("dialog.layer_settings.auth_unverified")
+        )
         status_color = "#16a34a" if verified else "#dc2626"
         ctk.CTkLabel(
             status_frame, text=status_text, text_color=status_color,
         ).pack(side="left", padx=(0, 12))
 
         ctk.CTkButton(
-            status_frame, text="認証を開く / 再認証", width=180,
+            status_frame, text=tr("dialog.layer_settings.auth_open"), width=180,
             command=lambda: self._open_credential_dialog(backend_name),
         ).pack(side="left")
 
         # ヘルプ行
         ctk.CTkLabel(
             self,
-            text=(
-                "API キー等を入力して疎通確認まで通すと、verified=True で保存されます。"
-                "キー失効 / サブスク切れ等で動作中にエラーが出た場合、verified は自動で False に戻ります。"
-            ),
+            text=tr("dialog.layer_settings.auth_help"),
             text_color="#94a3b8", wraplength=460, justify="left",
         ).grid(
             row=row + 1, column=0, columnspan=2,
@@ -401,7 +417,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         # 自身を作り直さずに済むよう、_message_label に状態をフィードバック
         if self._controller.is_backend_verified(backend_name):
             self._message_label.configure(
-                text="認証 OK が保存されました。", text_color="#16a34a"
+                text=tr("dialog.layer_settings.auth_saved"), text_color="#16a34a"
             )
 
     @staticmethod
@@ -493,7 +509,10 @@ class LayerSettingsDialog(ctk.CTkToplevel):
                 value = parse_field_value(field.field_type, raw)
             except ValueError as e:
                 self._message_label.configure(
-                    text=f"入力エラー({tr(field.label_key)}): {e}",
+                    text=tr(
+                        "dialog.layer_settings.input_error",
+                        label=tr(field.label_key), error=e,
+                    ),
                     text_color="#dc2626",
                 )
                 return
@@ -526,16 +545,17 @@ class LayerSettingsDialog(ctk.CTkToplevel):
                 self._controller.set_credential(backend, key_name, value)
             except Exception as e:  # noqa: BLE001
                 self._message_label.configure(
-                    text=f"認証情報保存に失敗: {e}", text_color="#dc2626"
+                    text=tr("dialog.layer_settings.cred_save_failed", error=e),
+                    text_color="#dc2626",
                 )
                 return
 
         # 3) 設定変更があれば該当レイヤを evict(中央ロードボタン押下で再読込される)
         if backend_config_changed:
             self._evict_current_layer()
-            msg = "保存しました。中央「↻ ロード」ボタンで新しい設定を反映してください。"
+            msg = tr("dialog.layer_settings.saved_reload")
         else:
-            msg = "保存しました。pipeline 値は次の「▶ 開始」で反映されます。"
+            msg = tr("dialog.layer_settings.saved_pipeline")
 
         self._message_label.configure(text=msg, text_color="#16a34a")
         # 短いタイマで閉じる(成功メッセージを一瞬見せる)

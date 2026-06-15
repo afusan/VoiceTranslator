@@ -264,6 +264,41 @@ _JA: dict[str, str] = {
     "dialog.credential.saved": "保存しました",
     "dialog.credential.failed": "✗ 認証失敗 — {message}",
     "dialog.credential.unknown_cause": "原因不明",
+    # --- layer 表示名(LayerSettingsDialog / SettingsPanel で共有) ---
+    "layer.capture": "音声取得",
+    "layer.vad": "VAD",
+    "layer.asr": "ASR(書き起こし)",
+    "layer.translator": "翻訳",
+    "layer.tts": "TTS(音声合成)",
+    "layer.output": "音声出力",
+    # --- dialog: LayerSettingsDialog(スキーマ項目のラベルは layer_settings.* 参照) ---
+    "dialog.layer_settings.title": "{layer} の設定",
+    "dialog.layer_settings.unselected": "(未選択)",
+    "dialog.layer_settings.backend_line": "バックエンド: {backend}",
+    "dialog.layer_settings.no_fields": "このレイヤに編集可能な設定はありません。",
+    "dialog.layer_settings.cancel": "キャンセル",
+    "dialog.layer_settings.save": "保存",
+    "dialog.layer_settings.unsupported_suffix": "(未対応型: {ft})",
+    "dialog.layer_settings.no_options": "(選択肢なし)",
+    "dialog.layer_settings.cred_placeholder_unset": "(未設定)",
+    "dialog.layer_settings.cred_placeholder_set": "●●●●●●●● (設定済み、変更時のみ入力)",
+    "dialog.layer_settings.auth": "認証",
+    "dialog.layer_settings.auth_verified": "✓ 認証済み",
+    "dialog.layer_settings.auth_unverified": "未認証",
+    "dialog.layer_settings.auth_open": "認証を開く / 再認証",
+    "dialog.layer_settings.auth_help": (
+        "API キー等を入力して疎通確認まで通すと、verified=True で保存されます。"
+        "キー失効 / サブスク切れ等で動作中にエラーが出た場合、verified は自動で False に戻ります。"
+    ),
+    "dialog.layer_settings.auth_saved": "認証 OK が保存されました。",
+    "dialog.layer_settings.input_error": "入力エラー({label}): {error}",
+    "dialog.layer_settings.cred_save_failed": "認証情報保存に失敗: {error}",
+    "dialog.layer_settings.saved_reload": (
+        "保存しました。中央「↻ ロード」ボタンで新しい設定を反映してください。"
+    ),
+    "dialog.layer_settings.saved_pipeline": (
+        "保存しました。pipeline 値は次の「▶ 開始」で反映されます。"
+    ),
     # --- dialog: LanguageSelectDialog ---
     "dialog.language_select.title": "言語を選択",
     "dialog.language_select.search_label": "言語を検索(コード / 英語名):",
