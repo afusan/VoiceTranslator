@@ -25,17 +25,10 @@ from voice_translator.gui.i18n import _CATALOGS, _DEFAULT_LOCALE, all_keys, curr
 _SRC_ROOT = Path(voice_translator.__file__).resolve().parent
 _I18N_FILE = _SRC_ROOT / "gui" / "i18n.py"
 _LOGIC_DIR = _SRC_ROOT / "gui" / "logic"
-# CJK 残存検査の対象(キー化済みモジュール)。Phase 3 で widget を変換するたびに追加し、
-# 完了時に gui/ 配下すべて(カタログ本体 i18n.py を除く)を覆う。
+# CJK 残存検査の対象 = gui/ 配下すべて(カタログ本体 i18n.py を除く)。Phase 3 完了。
 _GUI_DIR = _SRC_ROOT / "gui"
-_KEYED_FILES: tuple[Path, ...] = tuple(_LOGIC_DIR.glob("*.py")) + (
-    _GUI_DIR / "layer_settings_schema.py",
-    _GUI_DIR / "language_select_dialog.py",
-    _GUI_DIR / "process_select_dialog.py",
-    _GUI_DIR / "consent_dialog.py",
-    _GUI_DIR / "credential_dialog.py",
-    _GUI_DIR / "layer_settings_dialog.py",
-    _GUI_DIR / "control_panel.py",
+_KEYED_FILES: tuple[Path, ...] = tuple(
+    p for p in _GUI_DIR.rglob("*.py") if p != (_GUI_DIR / "i18n.py")
 )
 # schema が SettingField に持たせる i18n キー登録源(`tr()` ではなくこの keyword で登録)。
 _KEY_REGISTERING_KWARGS = {"label_key", "help_key"}
