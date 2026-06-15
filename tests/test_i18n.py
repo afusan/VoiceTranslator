@@ -62,6 +62,36 @@ def test_available_locales_includes_ja() -> None:
     assert "ja" in available_locales()
 
 
+def test_catalog_key_parity() -> None:
+    # 全ロケールのキー集合が ja と一致すること(翻訳漏れ / 余剰キーの検出)。
+    base = set(all_keys("ja"))
+    ja_cat = _CATALOGS["ja"]
+    for locale in available_locales():
+        cat = _CATALOGS[locale]
+        keys = set(cat.keys())
+        missing = base - keys
+        extra = keys - base
+        assert not missing, f"{locale}: ja にあって無いキー {sorted(missing)}"
+        assert not extra, f"{locale}: ja に無い余剰キー {sorted(extra)}"
+        # placeholder 名は全ロケールで一致(en の引数欠落で tr() が壊れるのを防ぐ)。
+        ph_mismatch = [
+            k for k in base
+            if _placeholders(ja_cat[k]) != _placeholders(cat[k])
+        ]
+        assert not ph_mismatch, f"{locale}: placeholder 不一致 {sorted(ph_mismatch)}"
+
+
+def test_en_renders_without_placeholder_leftover() -> None:
+    # en に切り替えても tr() がテンプレートを解決できる(プレースホルダ名が ja と一致)。
+    original = current_locale()
+    try:
+        set_locale("en")
+        assert tr("ready.toggle.start") == "▶ Start"
+        assert tr("control_panel.latency", avg="1.23", count=4) == "Avg latency: 1.23 s (last 4)"
+    finally:
+        set_locale(original)
+
+
 def test_locale_display_name() -> None:
     assert locale_display_name("ja") == "日本語"
     assert locale_display_name("xx") == "xx"  # 未知はコードをそのまま

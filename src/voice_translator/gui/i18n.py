@@ -369,8 +369,347 @@ _JA: dict[str, str] = {
     ),
 }
 
+# 英語カタログ(Phase 4b)。キー集合は _JA と一致させる(test_catalog_key_parity で担保)。
+_EN: dict[str, str] = {
+    # ready_state
+    "ready.toggle.auth_missing": "Credentials Not Set",
+    "ready.status.auth_missing": "Credentials not set (configure them in the details dialog)",
+    "ready.toggle.auth_unverified": "Auth Not Verified",
+    "ready.status.auth_unverified": "Auth not verified (test it in the details dialog's 'Auth' section)",
+    "ready.toggle.downloading": "Downloading model…",
+    "ready.status.downloading": "Downloading model…",
+    "ready.toggle.no_process": "No Process Selected",
+    "ready.status.no_process": "Select a process (Settings → Select process…)",
+    "ready.toggle.start": "▶ Start",
+    "ready.status.idle_will_load": "Stopped (loads on press)",
+    "ready.status.idle_loading": "Stopped (loading)",
+    "ready.status.idle": "Stopped",
+    "ready.load.loaded": "Loaded",
+    "ready.load.loading": "Loading…",
+    "ready.load.load": "↻ Load",
+    "ready.test.tts_none": "🔊 (No TTS)",
+    "ready.test.no_output": "🔊 No Output Selected",
+    "ready.test.run": "🔊 Test Output",
+    # language_choices
+    "language.src_fallback": (
+        "Changed input language from {old} to {new} ({backend} does not support {code})"
+    ),
+    "language.tgt_fallback": (
+        "Changed output language from {old} to {new} ({backend} does not support {code})"
+    ),
+    "language.tts_warning": (
+        "TTS backend {backend} does not support speech language {lang} "
+        "(change the Translator output language, or switch to another TTS backend)"
+    ),
+    # accel_summary
+    "accel.gpu": "Compute: GPU ({devices})",
+    "accel.cpu": "Compute: CPU only",
+    "accel.preparing": "Compute: - (preparing model)",
+    # status_summary
+    "status.recent_errors": "Recent errors:",
+    "status.gui_events": "Actions:",
+    "status.layer_skipped": "(none)",
+    "status.layer_absorbed": "(run by {into}'s {backend})",
+    # backend_display
+    "backend.tts_none": "(none)",
+    "backend.skipped_status": "(none)",
+    "capture_kind.device": "Device",
+    "capture_kind.process": "Process",
+    # restart_messages
+    "restart.device.input": "input",
+    "restart.device.output": "output",
+    "restart.started": "Switched {device} device (restarting…)",
+    "restart.failed": "Failed to restart after changing {device} device: {message}",
+    # layer_settings_schema
+    "layer_settings.auto_load.label": "Auto-load on startup",
+    "layer_settings.auto_load.help": (
+        "When ON, this backend is loaded automatically at app startup (default OFF). "
+        "If left OFF, it loads when you press '▶ Start'."
+    ),
+    "layer_settings.load_model.label": "(Re)load model",
+    "layer_settings.load_model.help": (
+        "(Re)load this layer's backend in the background now. "
+        "Even if already loaded, it is evicted once and rebuilt with the new settings."
+    ),
+    "layer_settings.recent_durations.label": "Recent processing time",
+    "layer_settings.recent_durations.help": "Average processing time of the last 5 completed utterances.",
+    "layer_settings.recent_durations.none": "No recent data",
+    "layer_settings.recent_durations.average": "Last {count} avg: {avg} ms",
+    "layer_settings.pipeline.captured_queue_max_bytes.label": "Input buffer capacity (bytes)",
+    "layer_settings.pipeline.captured_queue_max_bytes.help": (
+        "Byte limit of the buffer passing VAD-output PCM to the next stage (ASR). "
+        "At 16kHz×float32, 10MB ≈ about 156 seconds. "
+        "Applied when you press '▶ Start'."
+    ),
+    "layer_settings.backends_config.proctap.input_gain.label": "ProcTap: input gain (multiplier)",
+    "layer_settings.backends_config.proctap.input_gain.help": (
+        "Amplification multiplier applied to captured audio (1.0=unity, 2–8 is a rough guide). "
+        "Raise it when the target app's volume is too low to recognize (clips at ±1.0). "
+        "Volume 0 cannot be amplified. Apply via '(Re)load model' after changing."
+    ),
+    "layer_settings.backends_config.webrtcvad.aggressiveness.label": "WebRTC: sensitivity (0=low – 3=high)",
+    "layer_settings.backends_config.webrtcvad.aggressiveness.help": (
+        "Setting it to 3 makes speech detection stricter — less false detection from noise, "
+        "but more missed speech."
+    ),
+    "layer_settings.backends_config.webrtcvad.frame_ms.label": "WebRTC: frame length (ms)",
+    "layer_settings.backends_config.webrtcvad.frame_ms.help": (
+        "One of 10 / 20 / 30. Shorter reacts faster but raises CPU load↑."
+    ),
+    "layer_settings.backends_config.pyannote.model_id.label": "pyannote: model ID",
+    "layer_settings.backends_config.pyannote.model_id.help": (
+        "HuggingFace model ID. The standard is voice-activity-detection."
+    ),
+    "layer_settings.backends_config.pyannote.device.label": "pyannote: device",
+    "layer_settings.backends_config.pyannote.device.help": "cpu / cuda / mps / auto. Works on CPU but very heavy.",
+    "layer_settings.backends_config.pvcobra.threshold.label": "Cobra: threshold (0–1)",
+    "layer_settings.backends_config.pvcobra.threshold.help": (
+        "Voice probability threshold. Lowering it makes speech easier to pick up."
+    ),
+    "layer_settings.pipeline.recognized_queue_size.label": "Recognition result buffer count",
+    "layer_settings.pipeline.recognized_queue_size.help": (
+        "Max item count of the queue passing ASR-recognized text to the translation stage. "
+        "Text is a few hundred bytes per utterance, so it is managed by count."
+    ),
+    "layer_settings.backends_config.faster_whisper.model_size.label": "Whisper model",
+    "layer_settings.backends_config.faster_whisper.model_size.help": (
+        "Whisper model size. Larger is more accurate but uses more RAM/VRAM and time. "
+        "The ✓ recommended / ⚠ heavy / ✗ infeasible icons indicate fit with the current "
+        "environment (RAM/VRAM). Apply via the '(Re)load model' button after changing."
+    ),
+    "layer_settings.backends_config.openai_whisper.model_size.label": "Whisper model (official)",
+    "layer_settings.backends_config.openai_whisper.model_size.help": (
+        "openai-whisper (official) model size. Tends to be heavier than faster-whisper. "
+        "Choose from tiny/base/small/medium/large-v3."
+    ),
+    "layer_settings.backends_config.openai_whisper_api.model.label": "OpenAI API: model",
+    "layer_settings.backends_config.openai_whisper_api.model.help": (
+        "Model name for the OpenAI Whisper API. Currently only `whisper-1`."
+    ),
+    "layer_settings.backends_config.google_stt.default_language.label": "Google STT: default language (when auto)",
+    "layer_settings.backends_config.google_stt.default_language.help": (
+        "Google STT does not support automatic language detection, so when the input "
+        "language is `auto` it calls the API with the language specified here (ISO 639-3)."
+    ),
+    "layer_settings.backends_config.deepgram.model.label": "Deepgram: model",
+    "layer_settings.backends_config.deepgram.model.help": (
+        "Deepgram model name (e.g. nova-3 / nova-2). Default is nova-3."
+    ),
+    "layer_settings.pipeline.translated_queue_size.label": "Translation result buffer count",
+    "layer_settings.pipeline.translated_queue_size.help": "Max item count of the queue passing translated text to TTS.",
+    "layer_settings.backends_config.nllb200.model_name.label": "NLLB-200 model",
+    "layer_settings.backends_config.nllb200.model_name.help": (
+        "NLLB-200 model name (HF id). Choose from distilled-600M / distilled-1.3B / "
+        "1.3B / 3.3B. GPU recommended for large models."
+    ),
+    "layer_settings.backends_config.openai_gpt.model.label": "OpenAI GPT: model",
+    "layer_settings.backends_config.openai_gpt.model.help": (
+        "OpenAI Chat Completions model name (e.g. gpt-4o-mini / gpt-4o)."
+    ),
+    "layer_settings.backends_config.anthropic_claude.model.label": "Anthropic Claude: model",
+    "layer_settings.backends_config.anthropic_claude.model.help": (
+        "Anthropic Messages model name (e.g. claude-haiku-4-5-20251001)."
+    ),
+    "layer_settings.backends_config.sapi.rate.label": "Speech rate (rate)",
+    "layer_settings.backends_config.sapi.rate.help": (
+        "SAPI (pyttsx3) rate. Default 180 (normal). Faster shortens playback time. "
+        "Reloading settings or a restart is needed to apply in the GUI."
+    ),
+    "layer_settings.backends_config.piper.voice_name.label": "Piper: voice",
+    "layer_settings.backends_config.piper.voice_name.help": (
+        "Piper voice model name (`<lang_country>-<speaker>-<quality>` format). "
+        "Downloaded from Hugging Face `rhasspy/piper-voices` on first use. "
+        "No Japanese (ja) voice is distributed by default."
+    ),
+    "layer_settings.backends_config.elevenlabs.voice_id.label": "ElevenLabs: voice_id",
+    "layer_settings.backends_config.elevenlabs.voice_id.help": (
+        "ElevenLabs premade voice ID. Default is Rachel (English female). "
+        "Get other voice IDs from the Voices page of the ElevenLabs dashboard."
+    ),
+    "layer_settings.backends_config.elevenlabs.model_id.label": "ElevenLabs: model",
+    "layer_settings.backends_config.elevenlabs.model_id.help": (
+        "Multilingual: `eleven_multilingual_v2` (29 languages, quality-oriented). "
+        "Low latency: `eleven_turbo_v2_5`. "
+        "English-only: `eleven_monolingual_v1`."
+    ),
+    "layer_settings.backends_config.openai_tts.voice.label": "OpenAI TTS: voice",
+    "layer_settings.backends_config.openai_tts.voice.help": (
+        "6 premade voices (alloy / echo / fable / onyx / nova / shimmer)."
+    ),
+    "layer_settings.backends_config.openai_tts.model.label": "OpenAI TTS: model",
+    "layer_settings.backends_config.openai_tts.model.help": "tts-1 (low latency) / tts-1-hd (high quality).",
+    "layer_settings.backends_config.google_tts.voice_name.label": "Google TTS: voice name",
+    "layer_settings.backends_config.google_tts.voice_name.help": (
+        "Google TTS voice name (e.g. `en-US-Wavenet-A`, `ja-JP-Neural2-B`). "
+        "If blank, a default voice is auto-selected from the language code."
+    ),
+    "layer_settings.backends_config.google_tts.default_language.label": "Google TTS: default language",
+    "layer_settings.backends_config.google_tts.default_language.help": (
+        "Default language used when `tgt_lang` is empty (ISO 639-3)."
+    ),
+    "layer_settings.pipeline.synthesized_queue_max_bytes.label": "Output buffer capacity (bytes)",
+    "layer_settings.pipeline.synthesized_queue_max_bytes.help": (
+        "Byte limit of the buffer passing TTS-synthesized PCM to the playback stage. "
+        "At 16kHz×float32, 5MB ≈ about 78 seconds. "
+        "Applied when you press '▶ Start'."
+    ),
+    # common
+    "common.cancel": "Cancel",
+    "common.ok": "OK",
+    # dialog: ProcessSelectDialog
+    "dialog.process_select.title": "Select Process — ProcTap",
+    "dialog.process_select.heading": "Processes outputting audio",
+    "dialog.process_select.description": (
+        "Showing processes currently producing sound (or ready to).\n"
+        "Select one and press 'Start audition' to check its volume on the meter at right."
+    ),
+    "dialog.process_select.refresh": "↻ Refresh",
+    "dialog.process_select.audition_start": "▶ Start audition",
+    "dialog.process_select.audition_stop": "■ Stop",
+    "dialog.process_select.no_process": "(No matching process — play sound, then ↻ Refresh)",
+    # dialog: ConsentDialog
+    "dialog.consent.title": "Cloud Transmission Consent",
+    "dialog.consent.heading": "Consent to use a cloud service",
+    "dialog.consent.default_data_summary": "Audio data (per-utterance PCM) and text",
+    "dialog.consent.body": (
+        "backend: {backend}\n"
+        "Destination service: {service}\n"
+        "Data sent: {summary}\n\n"
+        "Using this service sends the above data to an external server. "
+        "Please review the service's privacy policy / terms of use and consent."
+    ),
+    "dialog.consent.terms": "Terms of use: {url}",
+    "dialog.consent.suppress": "Do not show this dialog again (suppress_dialogs)",
+    "dialog.consent.cancel": "Cancel",
+    "dialog.consent.accept": "Consent and use",
+    # dialog: CredentialDialog
+    "dialog.credential.title": "Enter credentials — {service}",
+    "dialog.credential.description": (
+        "Enter your API key etc. in the fields below and press 'Test'. "
+        "On success it is saved and the 'Start' button becomes available."
+    ),
+    "dialog.credential.no_spec": "This backend does not require credentials.",
+    "dialog.credential.cancel": "Cancel",
+    "dialog.credential.test": "Test",
+    "dialog.credential.testing": "Testing…",
+    "dialog.credential.browse": "Browse…",
+    "dialog.credential.placeholder_file": "(choose with the Browse button)",
+    "dialog.credential.placeholder_set": "●●●●●●●● (set; enter only to change)",
+    "dialog.credential.placeholder_unset": "(not set)",
+    "dialog.credential.file_picker_title": "Select the file for {label}",
+    "dialog.credential.missing_fields": "Some fields are empty: {fields}",
+    "dialog.credential.internal_error": "Internal error during verification: {error}",
+    "dialog.credential.ok": "✓ Auth OK — {message}",
+    "dialog.credential.saved": "Saved",
+    "dialog.credential.failed": "✗ Auth failed — {message}",
+    "dialog.credential.unknown_cause": "Unknown cause",
+    # layer 表示名
+    "layer.capture": "Audio Capture",
+    "layer.vad": "VAD",
+    "layer.asr": "ASR (Transcription)",
+    "layer.translator": "Translation",
+    "layer.tts": "TTS (Speech Synthesis)",
+    "layer.output": "Audio Output",
+    # dialog: LayerSettingsDialog
+    "dialog.layer_settings.title": "{layer} settings",
+    "dialog.layer_settings.unselected": "(not selected)",
+    "dialog.layer_settings.backend_line": "Backend: {backend}",
+    "dialog.layer_settings.no_fields": "This layer has no editable settings.",
+    "dialog.layer_settings.cancel": "Cancel",
+    "dialog.layer_settings.save": "Save",
+    "dialog.layer_settings.unsupported_suffix": "(unsupported type: {ft})",
+    "dialog.layer_settings.no_options": "(no options)",
+    "dialog.layer_settings.cred_placeholder_unset": "(not set)",
+    "dialog.layer_settings.cred_placeholder_set": "●●●●●●●● (set; enter only to change)",
+    "dialog.layer_settings.auth": "Auth",
+    "dialog.layer_settings.auth_verified": "✓ Verified",
+    "dialog.layer_settings.auth_unverified": "Not verified",
+    "dialog.layer_settings.auth_open": "Open auth / re-authenticate",
+    "dialog.layer_settings.auth_help": (
+        "Enter your API key etc. and pass the connectivity check to save with verified=True. "
+        "If an error occurs during operation due to an expired key / lapsed subscription, "
+        "verified automatically reverts to False."
+    ),
+    "dialog.layer_settings.auth_saved": "Auth OK has been saved.",
+    "dialog.layer_settings.input_error": "Input error ({label}): {error}",
+    "dialog.layer_settings.cred_save_failed": "Failed to save credentials: {error}",
+    "dialog.layer_settings.saved_reload": (
+        "Saved. Press the central '↻ Load' button to apply the new settings."
+    ),
+    "dialog.layer_settings.saved_pipeline": (
+        "Saved. pipeline values apply on the next '▶ Start'."
+    ),
+    # dialog: LanguageSelectDialog
+    "dialog.language_select.title": "Select Language",
+    "dialog.language_select.search_label": "Search language (code / English name):",
+    "dialog.language_select.search_placeholder": "e.g. swahili / swh",
+    "dialog.language_select.no_match": "(no match)",
+    # ControlPanel
+    "control_panel.section_action": "Operation",
+    "control_panel.section_status": "Status",
+    "control_panel.latency_none": "Avg latency: -",
+    "control_panel.latency": "Avg latency: {avg} s (last {count})",
+    "control_panel.accel_init": "Compute: -",
+    "control_panel.clear_events": "Clear actions",
+    "control_panel.recent_translations": "Recent translations:",
+    "control_panel.clear": "Clear",
+    "control_panel.test_playback_text": "Test audio",
+    "control_panel.playing": "Playing…",
+    "control_panel.starting": "Starting…",
+    "control_panel.stopping": "Stopping…",
+    "control_panel.running": "Running",
+    "control_panel.stop": "■ Stop",
+    "control_panel.load_btn_starting": "(starting)",
+    "control_panel.load_btn_stopping": "(stopping)",
+    "control_panel.load_btn_running": "(running)",
+    "control_panel.test_btn_running": "🔊 (running)",
+    "control_panel.idle_start_failed": "Stopped (start failed)",
+    "control_panel.idle_error": "Stopped (error)",
+    "control_panel.load_start_failed": "Failed to start load: {error}",
+    "control_panel.load_failed": "Load failed: {error}",
+    "control_panel.event_load_failed": "[Load failed] {error}",
+    "control_panel.event_test_done": "[Output test] playback done: {text}",
+    "control_panel.test_failed": "Output test failed: {error}",
+    "control_panel.event_test_failed": "[Output test failed] {error}",
+    "control_panel.start_failed": "Start failed: {error}",
+    "control_panel.event_start_failed": "[Start failed] {error}",
+    "control_panel.event_stop_exception": "[Stop exception] {error}",
+    "control_panel.event_fatal": "[Fatal error] {error}",
+    "control_panel.suppressed_suffix": " (+{count} suppressed)",
+    "control_panel.status_fetch_failed": "(failed to fetch status: {error})",
+    # SettingsPanel
+    "settings_panel.section_backends": "Backends",
+    "settings_panel.section_devices": "Devices",
+    "settings_panel.section_languages": "Translation",
+    "settings_panel.config_btn": "Settings",
+    "settings_panel.input_device": "Input device:",
+    "settings_panel.output_device": "Output device:",
+    "settings_panel.enumerating": "(enumerating)",
+    "settings_panel.process_select": "Select process…",
+    "settings_panel.pid_selected": "PID {pid} ▼",
+    "settings_panel.src_lang": "Input language (src):",
+    "settings_panel.tgt_lang": "Output language (tgt):",
+    "settings_panel.log_dir": "Log output dir:",
+    "settings_panel.save": "Save settings",
+    "settings_panel.reload": "Reload settings",
+    "settings_panel.redetect_devices": "Re-detect devices",
+    "settings_panel.unselected": "(not selected)",
+    "settings_panel.fetch_failed": "(fetch failed: {error})",
+    "settings_panel.no_input_device": "(no input device)",
+    "settings_panel.no_output_device": "(no output device)",
+    "settings_panel.process_dialog_failed": "Failed to open process select dialog: {error}",
+    "settings_panel.save_failed": "Save failed: {error}",
+    "settings_panel.saved": "Settings saved",
+    "settings_panel.reload_blocked": "Cannot reload settings while running (stop first)",
+    "settings_panel.reload_failed": "Reload failed: {error}",
+    "settings_panel.reloaded": "Settings reloaded",
+    # MainWindow
+    "main_window.locale_running_blocked": "Cannot switch display language while running (stop first)",
+}
+
 _CATALOGS: dict[str, dict[str, str]] = {
     "ja": _JA,
+    "en": _EN,
 }
 
 _DEFAULT_LOCALE = "ja"
@@ -378,6 +717,7 @@ _DEFAULT_LOCALE = "ja"
 # 各ロケールの表示名は「その言語自身」で表記する(切替しても変わらないため tr 対象外)。
 _LOCALE_DISPLAY_NAMES: dict[str, str] = {
     "ja": "日本語",
+    "en": "English",
 }
 
 # 現在の UI ロケール(可変)。`set_locale` で切り替え、`current_locale` で参照する。

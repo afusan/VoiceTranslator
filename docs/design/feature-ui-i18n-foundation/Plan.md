@@ -97,7 +97,10 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
   `set_locale` / `available_locales` / `locale_display_name` を追加し `current_locale()` を
   可変化。MainWindow に言語スイッチャ(🌐)を置き、**停止中のみ**切替を許可して
   SettingsPanel / ControlPanel を destroy → 再生成(全 Panel 再構築方式)。`ui.locale` を永続化。
-- Phase 4b: en / zh / es 辞書追加(翻訳語彙)+ カタログ間整合検査(全ロケールのキー集合一致)。
+- **Phase 4b(進行中)**: 辞書追加(翻訳語彙)+ カタログ間整合検査。
+  - **en(完了)**: `_EN` カタログ(218 キー)を追加。`available_locales()` に en が出て切替可能。
+    カタログ間整合検査(キー集合一致 + placeholder 名一致)を `test_i18n.py` に追加。
+  - **zh / es(未着手)**: en と同じ手順で `_ZH` / `_ES` を追加するだけ(整合検査が漏れを担保)。
 
 ## 移行性メモ
 - `tr()` を単一窓口に保つことで、将来 gettext(案2)へ移るときの変更点が 1 か所に収まる。
