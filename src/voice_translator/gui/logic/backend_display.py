@@ -67,6 +67,8 @@ def capture_internal_to_display(internal: str, kind: CaptureKind | None) -> str:
     """
     if not internal or internal == "(未登録)":
         return internal
+    # CaptureKind を増やしたらここに分岐(と capture_kind.* キー)を追加する。
+    # 未対応 kind はラベル無しで backend 名のみ返す縮退(旧 dict 実装の get フォールバックと同等)。
     if kind == CaptureKind.DEVICE:
         label = tr("capture_kind.device")
     elif kind == CaptureKind.PROCESS:
