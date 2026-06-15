@@ -76,7 +76,7 @@ class TestTranslate:
             AnthropicClaudeTranslatorBackend,
         )
         b = AnthropicClaudeTranslatorBackend(api_key="sk-ant-x")
-        assert b.translate("", "en", "ja") == ""
+        assert b.translate("", "eng", "jpn") == ""
 
     def test_success(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -85,7 +85,7 @@ class TestTranslate:
             AnthropicClaudeTranslatorBackend,
         )
         b = AnthropicClaudeTranslatorBackend(api_key="sk-ant-x")
-        assert b.translate("hello", "en", "ja") == "こんにちは"
+        assert b.translate("hello", "eng", "jpn") == "こんにちは"
 
     def test_strips_prefix(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -94,7 +94,7 @@ class TestTranslate:
             AnthropicClaudeTranslatorBackend,
         )
         b = AnthropicClaudeTranslatorBackend(api_key="sk-ant-x")
-        assert b.translate("hello", "en", "ja") == "こんにちは"
+        assert b.translate("hello", "eng", "jpn") == "こんにちは"
 
     def test_uses_system_and_user(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -103,7 +103,7 @@ class TestTranslate:
             AnthropicClaudeTranslatorBackend,
         )
         b = AnthropicClaudeTranslatorBackend(api_key="sk-ant-x")
-        b.translate("hello", "en", "ja")
+        b.translate("hello", "eng", "jpn")
         payload = client.post.call_args.kwargs["json"]
         # Anthropic は system が messages の外
         assert "system" in payload
@@ -122,7 +122,7 @@ class TestTranslate:
         )
         b = AnthropicClaudeTranslatorBackend(api_key="bad")
         with pytest.raises(FatalError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_429_recoverable(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -132,7 +132,7 @@ class TestTranslate:
         )
         b = AnthropicClaudeTranslatorBackend(api_key="sk-ant-x")
         with pytest.raises(RecoverableError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_network_recoverable(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -142,7 +142,7 @@ class TestTranslate:
         )
         b = AnthropicClaudeTranslatorBackend(api_key="sk-ant-x")
         with pytest.raises(RecoverableError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_empty_response_skip(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -152,7 +152,7 @@ class TestTranslate:
         )
         b = AnthropicClaudeTranslatorBackend(api_key="sk-ant-x")
         with pytest.raises(SkipError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
 
 class TestSupportedTargetLanguages:
@@ -161,7 +161,7 @@ class TestSupportedTargetLanguages:
             AnthropicClaudeTranslatorBackend,
         )
         langs = AnthropicClaudeTranslatorBackend.supported_target_languages()
-        for code in ["en", "ja", "zh", "fr"]:
+        for code in ["eng", "jpn", "zho", "fra"]:
             assert code in langs
 
     def test_all_codes_in_common_language_table(self) -> None:

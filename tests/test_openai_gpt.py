@@ -76,7 +76,7 @@ class TestTranslate:
             OpenAiGptTranslatorBackend,
         )
         b = OpenAiGptTranslatorBackend(api_key="sk-x")
-        assert b.translate("", "en", "ja") == ""
+        assert b.translate("", "eng", "jpn") == ""
 
     def test_success(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -85,7 +85,7 @@ class TestTranslate:
             OpenAiGptTranslatorBackend,
         )
         b = OpenAiGptTranslatorBackend(api_key="sk-x")
-        assert b.translate("hello", "en", "ja") == "こんにちは"
+        assert b.translate("hello", "eng", "jpn") == "こんにちは"
 
     def test_strips_translation_prefix(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -94,7 +94,7 @@ class TestTranslate:
             OpenAiGptTranslatorBackend,
         )
         b = OpenAiGptTranslatorBackend(api_key="sk-x")
-        assert b.translate("hello", "en", "ja") == "こんにちは"
+        assert b.translate("hello", "eng", "jpn") == "こんにちは"
 
     def test_strips_japanese_prefix(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -103,7 +103,7 @@ class TestTranslate:
             OpenAiGptTranslatorBackend,
         )
         b = OpenAiGptTranslatorBackend(api_key="sk-x")
-        assert b.translate("hello", "en", "ja") == "こんにちは"
+        assert b.translate("hello", "eng", "jpn") == "こんにちは"
 
     def test_401_fatal(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -113,7 +113,7 @@ class TestTranslate:
         )
         b = OpenAiGptTranslatorBackend(api_key="bad")
         with pytest.raises(FatalError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_429_recoverable(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -123,7 +123,7 @@ class TestTranslate:
         )
         b = OpenAiGptTranslatorBackend(api_key="sk-x")
         with pytest.raises(RecoverableError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_network_recoverable(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -133,7 +133,7 @@ class TestTranslate:
         )
         b = OpenAiGptTranslatorBackend(api_key="sk-x")
         with pytest.raises(RecoverableError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_empty_response_skip(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -143,7 +143,7 @@ class TestTranslate:
         )
         b = OpenAiGptTranslatorBackend(api_key="sk-x")
         with pytest.raises(SkipError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
 
 class TestSupportedTargetLanguages:
@@ -152,7 +152,7 @@ class TestSupportedTargetLanguages:
             OpenAiGptTranslatorBackend,
         )
         langs = OpenAiGptTranslatorBackend.supported_target_languages()
-        for code in ["en", "ja", "zh", "fr", "de"]:
+        for code in ["eng", "jpn", "zho", "fra", "deu"]:
             assert code in langs
 
     def test_all_codes_in_common_language_table(self) -> None:

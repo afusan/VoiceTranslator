@@ -50,7 +50,7 @@ class TestWhisperApiTranslateDeclarations:
         assert B.covers_roles() == (LayerKind.ASR, LayerKind.TRANSLATOR)
         assert B.consumes_payload() == PayloadKind.RAW
         assert B.produces_payload() == PayloadKind.TRANSLATED
-        assert B.supported_target_languages() == ["en"]
+        assert B.supported_target_languages() == ["eng"]  # 正準 639-3
         assert B.supports_auto_detect() is True  # Whisper 系を継承
 
 
@@ -75,12 +75,12 @@ class TestWhisperApiTranslateCall:
         b = OpenAiWhisperApiTranslateBackend(api_key="sk-test")
 
         src_text, src_lang, tgt_text, tgt_lang = b.transcribe_translate(
-            _pcm(), src_lang_hint="auto", tgt_lang="en"
+            _pcm(), src_lang_hint="auto", tgt_lang="eng"
         )
         assert src_text == ""           # translations は源文を返さない
-        assert src_lang == "ja"          # 検出言語(英語名)を ISO に正規化
+        assert src_lang == "jpn"         # 検出言語(英語名)→ 639-1 → 正準 639-3
         assert tgt_text == "Hello world."
-        assert tgt_lang == "en"
+        assert tgt_lang == "eng"         # 英語固定を正準 639-3 で返す
 
         # translations エンドポイントに language パラメータを送らない
         kwargs = client.post.call_args.kwargs
@@ -94,8 +94,8 @@ class TestWhisperApiTranslateCall:
         _, client = fake_httpx
         client.post.return_value = _make_response(200, {"text": "hi", "language": "japanese"})
         b = OpenAiWhisperApiTranslateBackend(api_key="sk-test")
-        _, src_lang, _, _ = b.transcribe_translate(_pcm(), src_lang_hint="ko")
-        assert src_lang == "ko"
+        _, src_lang, _, _ = b.transcribe_translate(_pcm(), src_lang_hint="kor")
+        assert src_lang == "kor"  # hint(正準 639-3)が検出言語を上書き
 
     def test_empty_pcm_raises_skip(self, fake_httpx) -> None:
         from voice_translator.asr.openai_whisper_api_translate_backend import (
@@ -141,7 +141,7 @@ class TestGptAudioTranslateDeclarations:
         assert B.covers_roles() == (LayerKind.ASR, LayerKind.TRANSLATOR)
         assert B.consumes_payload() == PayloadKind.RAW
         assert B.produces_payload() == PayloadKind.TRANSLATED
-        assert "ja" in B.supported_target_languages()  # 任意言語(英語固定ではない)
+        assert "jpn" in B.supported_target_languages()  # 任意言語(正準 639-3)
         assert B.supports_auto_detect() is True
 
 
@@ -171,12 +171,12 @@ class TestGptAudioTranslateCall:
         b = GptAudioTranslateBackend(api_key="sk-test")
 
         src_text, src_lang, tgt_text, tgt_lang = b.transcribe_translate(
-            _pcm(), src_lang_hint="auto", tgt_lang="ja"
+            _pcm(), src_lang_hint="auto", tgt_lang="jpn"
         )
         assert src_text == "Hello."     # 複合でも原文が取れるパターン
-        assert src_lang == "en"
+        assert src_lang == "eng"        # モデルの 639-1 を正準 639-3 へ持ち上げる
         assert tgt_text == "こんにちは。"
-        assert tgt_lang == "ja"
+        assert tgt_lang == "jpn"        # tgt_lang(正準 639-3)はそのまま返る
 
         # 音声は input_audio(wav/base64)として送られる
         payload = client.post.call_args.kwargs["json"]
@@ -196,8 +196,8 @@ class TestGptAudioTranslateCall:
             ),
         )
         b = GptAudioTranslateBackend(api_key="sk-test")
-        src_text, src_lang, tgt_text, _ = b.transcribe_translate(_pcm(), tgt_lang="en")
-        assert (src_text, src_lang, tgt_text) == ("やあ", "ja", "Hi")
+        src_text, src_lang, tgt_text, _ = b.transcribe_translate(_pcm(), tgt_lang="eng")
+        assert (src_text, src_lang, tgt_text) == ("やあ", "jpn", "Hi")  # ja → 正準 jpn
 
     def test_non_json_degrades_to_whole_text(self, fake_httpx) -> None:
         """JSON 契約が守られなくても発話を無駄にしない(本文全体 = 翻訳)。"""

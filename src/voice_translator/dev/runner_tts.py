@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output", "-o", type=Path, required=True,
         help="出力 WAV パス(必須 — 再生したい場合は runner_output を別途使う)",
     )
-    p.add_argument("--tgt-lang", default="ja", help="合成言語ヒント(SAPI のボイス選択用)")
+    p.add_argument("--tgt-lang", default="jpn", help="合成言語ヒント(ISO 639-3。voice 選択用)")
     p.add_argument("--rate", type=int, default=180, help="読み上げ速度(WPM 相当)")
     p.add_argument(
         "--flush-delay-sec", type=float, default=0.1,

@@ -25,6 +25,7 @@ from voice_translator.common.errors import (
     RecoverableError,
     SkipError,
 )
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import (
     INTERNAL_SAMPLE_RATE,
     BackendCapabilities,
@@ -166,7 +167,8 @@ class DeepgramAsrBackend(AsrBackend):
         if src_lang_hint in ("auto", "", None):
             opts_kwargs["detect_language"] = True
         else:
-            opts_kwargs["language"] = src_lang_hint
+            # 入力ヒントは正準(639-3)。Deepgram は 639-1 を要求するので落とす。
+            opts_kwargs["language"] = iso3_to_iso1(src_lang_hint)
 
         try:
             options = self._dg_options_cls(**opts_kwargs)
@@ -199,7 +201,8 @@ class DeepgramAsrBackend(AsrBackend):
             ) from e
 
         if src_lang_hint in ("auto", "", None):
-            lang_out = detected or "auto"
+            # Deepgram の検出言語は 639-1。正準(639-3)へ持ち上げて返す。
+            lang_out = iso1_to_iso3(detected) if detected else "auto"
         else:
             lang_out = src_lang_hint
         return text, lang_out
@@ -219,7 +222,8 @@ class DeepgramAsrBackend(AsrBackend):
     # ----------------------------------------------------------
     @classmethod
     def supported_input_languages(cls) -> list[str]:
-        return list(_DEEPGRAM_INPUT_LANGUAGES)
+        # 元リストは 639-1。正準(639-3)へ持ち上げて申告する。
+        return sorted(iso1_to_iso3(c) for c in _DEEPGRAM_INPUT_LANGUAGES)
 
     @classmethod
     def supports_auto_detect(cls) -> bool:

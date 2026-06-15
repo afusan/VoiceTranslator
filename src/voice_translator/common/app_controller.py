@@ -572,6 +572,18 @@ class AppController:
             elif key == "tgt":
                 self._coord.set_languages(tgt=value)
 
+        # 出力言語が変わったら、言語単位の遅延ロードを持つ TTS backend に事前確保を促す。
+        # MMS-TTS のように「言語ごとにモデルが違う」backend では、会話中の初回発話で
+        # 100〜150MB の DL が走りパイプラインが固まる。出力言語の確定を契機に裏で確保
+        # しておく(ロード済みのときだけ意味を持つので helper 側で no-op 判定)。
+        # is_running 不問: ロード済みだが未開始でも、先に言語を確保しておきたい。
+        if (
+            len(keys_and_value) == 3
+            and keys_and_value[0] == "languages"
+            and keys_and_value[1] == "tgt"
+        ):
+            self._maybe_prefetch_tts_language(str(keys_and_value[2]))
+
         # デバイス設定が動作中に変わったら自動 restart(refactor-ui-3move P2)。
         # 「実行条件が変わったら反応する」規則を backends / languages と揃えた。
         # ユーザのプルダウン操作だけでなく、再列挙 fallback による書き込みでも発火する
@@ -880,6 +892,10 @@ class AppController:
             )
             # 生成時点での backend 状態(通常 LOADED)を最終通知
             self._emit_status(layer, self._safe_backend_status(inst))
+            # TTS をロードしたら、現在の出力言語を裏で事前確保する(MMS-TTS 等の
+            # 言語単位遅延ロードで、初回発話 DL によるパイプライン停止を避ける)。
+            if layer == LayerKind.TTS:
+                self._maybe_prefetch_tts_language()
             return
 
     def _subscribe_backend(self, layer: LayerKind, backend: Any) -> None:
@@ -893,6 +909,42 @@ class AppController:
             return
         # Subscription でない値が返るケース(古い backend、テストモック)も握る
         self._backend_subscriptions[layer] = sub
+
+    def _maybe_prefetch_tts_language(self, tgt: str | None = None) -> None:
+        """ロード済み TTS backend が言語単位の遅延ロードを持つなら、出力言語を裏で確保する。
+
+        会話中の初回発話で言語パックの DL が走りパイプラインが固まるのを避ける狙い
+        (MMS-TTS など)。`prefetch_language` を持たない backend / TTS 未ロードでは no-op。
+        確保はバックグラウンドスレッドで行い(本体・UI を止めない)、失敗は握る
+        (確保できなくても synthesize 時の同期ロードで縮退する)。
+
+        `tgt` 省略時は現在の設定値を使う(ロード完了契機の確保)。指定時はその言語
+        (出力言語変更契機の確保)。
+        """
+        backend = self._backends.get(LayerKind.TTS)
+        if backend is None:
+            return
+        prefetch = getattr(backend, "prefetch_language", None)
+        if not callable(prefetch):
+            return
+        lang = (
+            tgt if tgt is not None
+            else str(self._config.get("languages", "tgt", default="jpn") or "jpn")
+        )
+        if not lang:
+            return
+
+        def _worker() -> None:
+            try:
+                prefetch(lang)
+            except Exception as e:  # noqa: BLE001 - 確保失敗は致命でない(同期ロードへ縮退)
+                self._logger.info(
+                    "TTS 出力言語の事前確保に失敗 (lang=%s): %s", lang, e
+                )
+
+        threading.Thread(
+            target=_worker, name=f"tts-prefetch-{lang}", daemon=True,
+        ).start()
 
     @staticmethod
     def _safe_backend_status(backend: Any) -> ModelStatus:
@@ -1194,7 +1246,7 @@ class AppController:
             )
 
             src_lang = self._config.get("languages", "src", default="auto")
-            tgt_lang = self._config.get("languages", "tgt", default="ja")
+            tgt_lang = self._config.get("languages", "tgt", default="jpn")
 
             self._ledger = UtteranceLedger()
             self._sequence = SequenceGenerator()
@@ -1324,7 +1376,7 @@ class AppController:
         tts = self._backends[LayerKind.TTS]
         output = self._backends[LayerKind.OUTPUT]
 
-        tgt_lang = str(self._config.get("languages", "tgt", default="ja") or "ja")
+        tgt_lang = str(self._config.get("languages", "tgt", default="jpn") or "jpn")
         # 1) 合成
         pcm, samplerate = tts.synthesize(text, tgt_lang)
         if pcm is None or getattr(pcm, "size", 0) == 0:

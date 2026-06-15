@@ -37,8 +37,9 @@ class TestSupportedOutputLanguages:
     def test_returns_whisper_language_set(self) -> None:
         from voice_translator.tts.openai_tts_backend import OpenAiTtsBackend
         langs = OpenAiTtsBackend.supported_output_languages()
-        assert "en" in langs
-        assert "ja" in langs
+        # 申告は正準(ISO 639-3)
+        assert "eng" in langs
+        assert "jpn" in langs
         assert "auto" not in langs  # auto は出力言語に意味なし
 
 

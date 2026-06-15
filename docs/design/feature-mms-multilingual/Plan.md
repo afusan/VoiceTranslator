@@ -1,6 +1,58 @@
 # feature-mms-multilingual 作業計画(多言語対応の拡張)
 
-起票: 2026-06-14 / 親: master / 状態: 計画(未着手)
+起票: 2026-06-14 / 親: master / ブランチ: `feature/mms-multilingual`
+
+## 進捗(コンテキストをクリアしても再開できるよう、ここを更新する)
+
+- [x] **Phase 1-a: MMS-TTS backend 本体**(2026-06-15)。`tts/mms_backend.py` を追加。
+      言語単位の LRU 遅延ロード + `prefetch_language()` + `synthesize()`。`backend_setup` 登録
+      (`requires_modules=("transformers",)` → 常に列挙)、extras `tts-mms`(uroman)を `full` に追加。
+      small テスト(`tests/test_mms_backend.py`)+ large 実ロードテスト(`tests/test_mms_tts_large.py`、
+      `facebook/mms-tts-eng` で DL→合成を通過確認済み)。対応言語は 639-1 で表現できる高信頼の
+      初期集合 14 言語(`_ISO1_TO_MMS`)に限定。
+- [x] **Phase 1-b: prefetch 配線**(2026-06-15)。`AppController._maybe_prefetch_tts_language()` を
+      追加。`set_setting("languages","tgt",…)` の反応系(出力言語変更)と TTS レイヤのロード完了の
+      2 契機で、`prefetch_language` を持つ TTS backend に対しバックグラウンドで出力言語を事前確保。
+      未ロード/能力なし backend は no-op、失敗は握る(synthesize 時の同期ロードへ縮退)。
+      `tests/test_app_controller.py::TestTtsLanguagePrefetch`。
+- [x] **横断課題: 言語コード 639-3 正準化**(2026-06-16)。**内部標準を ISO 639-1 → ISO 639-3 に
+      全面移行**(ユーザ選択=正準化方式)。`common/languages.py` を 639-3 キーに再構成し、
+      `to_canonical`(legacy 639-1 config の後方互換)/ `iso1_to_iso3` / `iso3_to_iso1` を追加。
+      各 backend のベンダ変換表(NLLB→FLORES, Whisper 639-1, DeepL, BCP-47 等)は **639-1 キーの
+      まま据え置き**、申告と API 呼び出しの 2 境界で 639-3↔639-1 を変換(churn 最小)。config は
+      load 時に正準化、GUI 表示・fallback 定数も 639-3。全 ASR/Translator/TTS backend 移行済み、
+      small 全緑。これで 639-3 しか持たない低資源言語を `LANGUAGE_NAMES` に直接足せる土台が完成
+      (実際の言語追加=`_ISO1_TO_MMS`/`ISO_TO_NLLB` の拡充は Phase 2 で継続)。
+- [x] **Phase 2-a: 翻訳との AND 連携(仕組み)**(2026-06-16)。639-3 正準化により MMS と NLLB が
+      同一の内部コードで申告 → 既存 `restrict_to_tts` の積がそのまま広がる。`tests/test_multilingual_integration.py`
+      でスワヒリ/ヨルバ/ハウサ/アムハラが翻訳∩TTS に残ることを固定。新しい仕組みは不要だった。
+- [x] **Phase 2-b: 言語カバレッジ拡充**(2026-06-16、ユーザ選択=大きく拡充)。HF レジストリの
+      `facebook/mms-tts-*` 実在チェックポイント(1140)と NLLB tokenizer の FLORES 基底コードの
+      **積=99 言語**を機械的に確定(推測ゼロ・404 なし)。これを `_MMS_LANGS` / `CANONICAL_TO_NLLB` /
+      `LANGUAGE_NAMES` に反映(スワヒリ/ヨルバ/ハウサ/アムハラ/エウェ/チェワ/ガンダ/キクユ/
+      ティグリニャ等の低資源・アフリカ系を多数追加)。MMS チェックポイント名=正準 639-3 に一致する
+      ため MMS backend を canonical キーへ簡素化(`_ISO1_TO_MMS` 廃止)。Swahili の正準を swh に統一
+      (NLLB/MMS と整合)。検証(Italian は MMS 非対応=元の推測が誤りと判明、除外)。再生成元は
+      `gen_lang_table.py`。large テストで eng + swh の実 DL→合成を通過確認。
+- [x] **Phase 3: 言語選択フィルタリング**(2026-06-16、ユーザ選択=検索可能リスト/専用ダイアログ)。
+      `gui/logic/language_filter.py`(コード/英語名の部分一致 + 前方一致優先の純関数)+
+      `gui/language_select_dialog.py`(検索ボックス + 絞り込みリスト、クリックで即確定。
+      `ProcessSelectDialog` の流儀)。SettingsPanel の src/tgt 各行に「🔍」ボタンを追加し、
+      現在候補で検索ダイアログを開く。結果は既存ハンドラ経由で保存/ fallback/ TTS 互換チェックを
+      共有(配線のみ追加、OptionMenu は据え置き)。判断は logic 直テスト、適用は配線 smoke で検証。
+- [x] **Phase 4: ドキュメント/コマンド回りの最終確認**(2026-06-16)。README に多言語(99 言語)の
+      バレット追加。manual に「言語コードは 639-3」「🔍 検索」「§5-4b 多言語読み上げ(MMS-TTS)」
+      「OS 表に MMS 追記」。LICENSE.md に MMS-TTS(CC-BY-NC)+ transformers/uroman を追記。
+      extras(`tts-mms`)・`requires_modules`・宣言固定テストは各 Phase で追従済み(確認済み)。
+
+> **全 Phase 完了(2026-06-16)。master へのマージ待ち**(ユーザ指示で「一通り終わるまで保留」)。
+> 敵対的レビュー実施済み([レビュー指摘.md](レビュー指摘.md))。要修正 5 件(M-1/M-2/L-1/L-3/L-5)は
+> 対応完了、M-3/M-4 はユーザ判断で見送り、L-2/I-1 は要検討(pendList 候補)。
+> 全 small テスト緑。MMS の実ロード(eng / swh)large テスト通過。
+> 再開・レビュー時の現物: `tts/mms_backend.py`(テンプレ `tts/piper_backend.py`)/
+> `common/languages.py`(639-3 正準 + 変換)/ `translator/nllb200_backend.py`(`CANONICAL_TO_NLLB`)/
+> `gui/language_select_dialog.py` + `gui/logic/language_filter.py`(検索)/ 言語表の再生成は
+> `gen_lang_table.py`。
 
 ## 背景・狙い
 

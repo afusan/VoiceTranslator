@@ -85,7 +85,8 @@ class TestTranscribe:
         backend = FasterWhisperAsrBackend()
         text, lang = backend.transcribe(np.ones(16000, dtype=np.float32), "auto")
         assert text == "hello world"
-        assert lang == "en"  # 自動検出を採用
+        # Whisper の検出言語(639-1 "en")は正準 639-3 へ持ち上げて返す
+        assert lang == "eng"
 
     def test_explicit_lang_passed_to_model(self, fake_faster_whisper) -> None:
         _, fake_model = fake_faster_whisper
@@ -94,12 +95,13 @@ class TestTranscribe:
         )
 
         backend = FasterWhisperAsrBackend()
-        text, lang = backend.transcribe(np.ones(160, dtype=np.float32), "en")
+        # ヒントは正準 639-3。Whisper には 639-1 に落として渡す。
+        text, lang = backend.transcribe(np.ones(160, dtype=np.float32), "eng")
         kwargs = fake_model.transcribe.call_args.kwargs
         assert kwargs["language"] == "en"
         assert kwargs["task"] == "transcribe"
-        # 明示指定があれば検出結果ではなく指定を返す
-        assert lang == "en"
+        # 明示指定があれば検出結果ではなく指定(正準)を返す
+        assert lang == "eng"
 
     def test_auto_lang_passes_none(self, fake_faster_whisper) -> None:
         _, fake_model = fake_faster_whisper
@@ -227,10 +229,10 @@ class TestSupportedInputLanguages:
         )
 
         langs = FasterWhisperAsrBackend.supported_input_languages()
-        # Whisper 99 言語の代表をいくつか含む
-        assert "en" in langs
-        assert "ja" in langs
-        assert "zh" in langs
+        # Whisper 99 言語の代表をいくつか含む(申告は正準 639-3)
+        assert "eng" in langs
+        assert "jpn" in langs
+        assert "zho" in langs
         # "auto" はリストに含めない(supports_auto_detect で別途宣言)
         assert "auto" not in langs
 

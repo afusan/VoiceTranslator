@@ -99,7 +99,7 @@ class TestTranscribe:
         text, lang = backend.transcribe(np.zeros(160, dtype=np.float32), src_lang_hint="auto")
 
         assert text == "hello world"
-        assert lang == "en"
+        assert lang == "eng"  # 検出言語(639-1)を正準 639-3 へ持ち上げて返す
         # language 引数は auto なら省略される
         kwargs = fake_model.transcribe.call_args.kwargs
         assert "language" not in kwargs
@@ -114,11 +114,11 @@ class TestTranscribe:
         )
 
         backend = OpenAiWhisperAsrBackend(model_size="tiny", device="cpu")
-        text, lang = backend.transcribe(np.zeros(160, dtype=np.float32), src_lang_hint="ja")
+        text, lang = backend.transcribe(np.zeros(160, dtype=np.float32), src_lang_hint="jpn")
 
-        assert lang == "ja"  # hint が優先される
+        assert lang == "jpn"  # hint(正準 639-3)が優先される
         kwargs = fake_model.transcribe.call_args.kwargs
-        assert kwargs["language"] == "ja"
+        assert kwargs["language"] == "ja"  # Whisper には 639-1 で渡す
 
     def test_empty_pcm_raises_skip(
         self, fake_whisper, patch_cache_to_loaded
@@ -153,8 +153,8 @@ class TestSupportedInputLanguages:
         )
 
         langs = OpenAiWhisperAsrBackend.supported_input_languages()
-        assert "en" in langs
-        assert "ja" in langs
+        assert "eng" in langs  # 正準 639-3 で申告
+        assert "jpn" in langs
         assert "auto" not in langs
         assert len(langs) >= 90  # 99 言語のはず
 

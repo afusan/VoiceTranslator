@@ -11,6 +11,7 @@ from __future__ import annotations
 from voice_translator.common.cache_check import check_nllb200
 from voice_translator.common.device import resolve_torch_device
 from voice_translator.common.errors import FatalError, SkipError
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import BackendCapabilities, ModelInfo, ModelStatus
 
 from .backend import TranslatorBackend
@@ -50,10 +51,13 @@ _RECOMMENDED_MODELS: tuple[ModelInfo, ...] = (
 )
 
 
-# ISO 639-1 → NLLB-200 言語コード。
+# ISO 639-1 → NLLB-200 言語コード(FLORES 形式 "<lang>_<script>")。
 # 詳しい一覧は https://github.com/facebookresearch/flores/blob/main/flores200/README.md
-# NLLB-200 本体は 200 言語対応だが、UI に並べて意味があるメジャー言語(ISO 639-1
-# 表現可能 + 共通言語テーブルに英語名がある言語)に絞っている。上流追加時はここを追従。
+# NLLB-200 本体は 200 言語対応だが、UI に並べて意味があるメジャー言語に絞っている。
+# 内部標準は 639-3 だが、この表は「内部コード → ベンダ形式」のネイティブ変換表なので
+# 639-1 キーのまま据え置き、境界(`_to_nllb_code` / 申告)で 639-3↔639-1 を一段挟む。
+# 上流追加時はここを追従(639-1 を持たない低資源言語を足すときは 639-3 キーで足し、
+# `_to_nllb_code` の passthrough に乗せる)。
 ISO_TO_NLLB: dict[str, str] = {
     # MVP の 17 言語
     "en": "eng_Latn",
@@ -139,11 +143,58 @@ ISO_TO_NLLB: dict[str, str] = {
 }
 
 
-def _to_nllb_code(iso: str, *, fallback: str) -> str:
-    """ISO 639-1 を NLLB-200 のコードに変換。未知/auto は fallback。"""
-    if not iso or iso == "auto":
+# 正準(ISO 639-3)→ NLLB-200(FLORES)。低資源言語の拡張集合で、**MMS-TTS ∩ NLLB-200**
+# を機械的に確定したもの(HF レジストリと NLLB tokenizer の積。推測ゼロ)。多くは 639-1 を
+# 持たないため 639-3 キーで持つ。`common/languages.py` の名前表・`tts/mms_backend.py` の
+# `_MMS_LANGS` と同じ集合で揃える(更新は
+# docs/design/feature-mms-multilingual/gen_lang_table.py で再生成)。
+CANONICAL_TO_NLLB: dict[str, str] = {
+    "ace": "ace_Arab", "aka": "aka_Latn", "amh": "amh_Ethi", "asm": "asm_Beng",
+    "awa": "awa_Deva", "ayr": "ayr_Latn", "azb": "azb_Arab", "bak": "bak_Cyrl",
+    "bam": "bam_Latn", "ban": "ban_Latn", "bem": "bem_Latn", "ben": "ben_Beng",
+    "bod": "bod_Tibt", "bul": "bul_Cyrl", "cat": "cat_Latn", "ceb": "ceb_Latn",
+    "crh": "crh_Latn", "cym": "cym_Latn", "deu": "deu_Latn", "dik": "dik_Latn",
+    "dyu": "dyu_Latn", "dzo": "dzo_Tibt", "ell": "ell_Grek", "eng": "eng_Latn",
+    "eus": "eus_Latn", "ewe": "ewe_Latn", "fao": "fao_Latn", "fij": "fij_Latn",
+    "fin": "fin_Latn", "fon": "fon_Latn", "fra": "fra_Latn", "grn": "grn_Latn",
+    "guj": "guj_Gujr", "hat": "hat_Latn", "hau": "hau_Latn", "heb": "heb_Hebr",
+    "hin": "hin_Deva", "hne": "hne_Deva", "hun": "hun_Latn", "ilo": "ilo_Latn",
+    "ind": "ind_Latn", "isl": "isl_Latn", "jav": "jav_Latn", "kab": "kab_Latn",
+    "kac": "kac_Latn", "kan": "kan_Knda", "kaz": "kaz_Cyrl", "kbp": "kbp_Latn",
+    "khm": "khm_Khmr", "kik": "kik_Latn", "kin": "kin_Latn", "kir": "kir_Cyrl",
+    "kor": "kor_Hang", "lao": "lao_Laoo", "lug": "lug_Latn", "mag": "mag_Deva",
+    "mai": "mai_Deva", "mal": "mal_Mlym", "mar": "mar_Deva", "min": "min_Latn",
+    "mos": "mos_Latn", "mya": "mya_Mymr", "nld": "nld_Latn", "nus": "nus_Latn",
+    "nya": "nya_Latn", "ory": "ory_Orya", "pag": "pag_Latn", "pan": "pan_Guru",
+    "pap": "pap_Latn", "pol": "pol_Latn", "por": "por_Latn", "quy": "quy_Latn",
+    "ron": "ron_Latn", "run": "run_Latn", "rus": "rus_Cyrl", "sag": "sag_Latn",
+    "shn": "shn_Mymr", "smo": "smo_Latn", "sna": "sna_Latn", "som": "som_Latn",
+    "spa": "spa_Latn", "sun": "sun_Latn", "swe": "swe_Latn", "swh": "swh_Latn",
+    "tam": "tam_Taml", "taq": "taq_Latn", "tat": "tat_Cyrl", "tel": "tel_Telu",
+    "tgk": "tgk_Cyrl", "tgl": "tgl_Latn", "tha": "tha_Thai", "tir": "tir_Ethi",
+    "tpi": "tpi_Latn", "tso": "tso_Latn", "tur": "tur_Latn", "ukr": "ukr_Cyrl",
+    "vie": "vie_Latn", "war": "war_Latn", "yor": "yor_Latn",
+}
+
+
+def _to_nllb_code(canonical: str, *, fallback: str) -> str:
+    """正準(ISO 639-3)を NLLB-200 のコードに変換。未知/auto は fallback。
+
+    正準直引き(`CANONICAL_TO_NLLB`)を優先し、無ければ legacy 639-1 表(`ISO_TO_NLLB`、
+    正準を 639-1 に落として引く)へフォールバックする。
+    """
+    if not canonical or canonical == "auto":
         return fallback
-    return ISO_TO_NLLB.get(iso.lower(), fallback)
+    if canonical in CANONICAL_TO_NLLB:
+        return CANONICAL_TO_NLLB[canonical]
+    iso1 = iso3_to_iso1(canonical)
+    return ISO_TO_NLLB.get(iso1) or ISO_TO_NLLB.get(canonical, fallback)
+
+
+def _supported_canonical() -> list[str]:
+    """対応言語の正準(639-3)集合(legacy 639-1 表 + 拡張表の和、ソート済み)。"""
+    codes = set(CANONICAL_TO_NLLB) | {iso1_to_iso3(k) for k in ISO_TO_NLLB}
+    return sorted(codes)
 
 
 class Nllb200TranslatorBackend(TranslatorBackend):
@@ -252,7 +303,7 @@ class Nllb200TranslatorBackend(TranslatorBackend):
     # ----------------------------------------------------------
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
-            supported_languages=tuple(ISO_TO_NLLB.keys()),
+            supported_languages=tuple(_supported_canonical()),
             requires_gpu=False,  # GPU があれば高速だが必須ではない
             is_cloud=False,
             requires_credentials=False,
@@ -271,10 +322,11 @@ class Nllb200TranslatorBackend(TranslatorBackend):
     # ----------------------------------------------------------
     @classmethod
     def supported_target_languages(cls) -> list[str]:
-        """ISO_TO_NLLB に登録した ISO 639-1 コードを返す(ソート済み)。
+        """対応言語を正準(ISO 639-3)で返す(ソート済み)。
 
+        変換表は 639-1 キーなので 639-3 へ持ち上げて申告する。
         クラスメソッド: UI が backend をロードせずに問い合わせる。
         本 backend は対称(同じセットで src/tgt 双方向 OK)なので
         supported_source_languages はオーバーライドせず default を使う。
         """
-        return sorted(ISO_TO_NLLB.keys())
+        return _supported_canonical()

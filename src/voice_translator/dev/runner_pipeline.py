@@ -65,8 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="入力ファイル(vad/asr 開始は WAV、translate/tts 開始は txt または json)",
     )
     p.add_argument("--out-dir", "-O", type=Path, required=True, help="出力ディレクトリ")
-    p.add_argument("--src-lang", default="en", help="翻訳元言語")
-    p.add_argument("--tgt-lang", default="ja", help="翻訳先言語")
+    p.add_argument("--src-lang", default="eng", help="翻訳元言語(ISO 639-3)")
+    p.add_argument("--tgt-lang", default="jpn", help="翻訳先言語(ISO 639-3)")
     # VAD
     p.add_argument("--vad-threshold", type=float, default=0.5)
     p.add_argument("--vad-min-silence-ms", type=int, default=500)

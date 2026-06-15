@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from voice_translator.common.errors import FatalError, SkipError
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.messages import PayloadKind
 from voice_translator.common.types import BackendCapabilities, LayerKind
 
@@ -40,7 +41,11 @@ class FasterWhisperTranslateBackend(FasterWhisperAsrBackend, AsrTranslatorBacken
         if pcm is None or (hasattr(pcm, "size") and pcm.size == 0):
             raise SkipError("ASR入力PCMが空です")
 
-        language = None if src_lang_hint in ("auto", "", None) else src_lang_hint
+        # 入力ヒントは正準(639-3)。Whisper は 639-1 を要求するので落としてから渡す。
+        language = (
+            None if src_lang_hint in ("auto", "", None)
+            else iso3_to_iso1(src_lang_hint)
+        )
         try:
             segments_iter, info = self._model.transcribe(
                 pcm,
@@ -53,16 +58,18 @@ class FasterWhisperTranslateBackend(FasterWhisperAsrBackend, AsrTranslatorBacken
             raise FatalError(f"faster-whisper 推論失敗: {e}", cause=e) from e
 
         if src_lang_hint in ("auto", "", None):
+            # Whisper の検出言語は 639-1。正準(639-3)へ持ち上げて返す。
             detected = getattr(info, "language", None) or ""
-            src_lang = detected or "auto"
+            src_lang = iso1_to_iso3(detected) if detected else "auto"
         else:
             src_lang = src_lang_hint
-        return "", src_lang, text.strip(), "en"
+        # 翻訳先は英語固定。正準(639-3)で返す。
+        return "", src_lang, text.strip(), "eng"
 
     @classmethod
     def supported_target_languages(cls) -> list[str]:
-        """Whisper translate は英語のみ。"""
-        return ["en"]
+        """Whisper translate は英語のみ(正準 639-3 で申告)。"""
+        return [iso1_to_iso3("en")]
 
     # ---- 編成申告(MRO 先頭の FasterWhisperAsrBackend(単体 ASR)を上書き) ----
     @classmethod

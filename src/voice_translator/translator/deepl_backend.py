@@ -18,6 +18,7 @@ from voice_translator.common.errors import (
     RecoverableError,
     SkipError,
 )
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import (
     BackendCapabilities,
     CredentialField,
@@ -137,13 +138,16 @@ class DeepLTranslatorBackend(TranslatorBackend):
         if not text:
             return ""
 
+        # 受け取りは正準 639-3。639-1 キーのネイティブ変換表を引く直前に落とす。
+        tgt_iso1 = iso3_to_iso1(tgt_lang)
         data: dict[str, str] = {
             "text": text,
-            "target_lang": _to_deepl_lang(tgt_lang, fallback="JA"),
+            "target_lang": _to_deepl_lang(tgt_iso1, fallback="JA"),
         }
         # src_lang="auto" / 未知のときは DeepL に自動検出させる(source_lang 省略)
         if src_lang and src_lang.lower() not in ("auto", ""):
-            mapped = _ISO_TO_DEEPL.get(src_lang.lower())
+            src_iso1 = iso3_to_iso1(src_lang)
+            mapped = _ISO_TO_DEEPL.get(src_iso1.lower())
             if mapped:
                 data["source_lang"] = mapped
 
@@ -194,7 +198,7 @@ class DeepLTranslatorBackend(TranslatorBackend):
     # ============================================================
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
-            supported_languages=tuple(_ISO_TO_DEEPL.keys()),
+            supported_languages=tuple(sorted(iso1_to_iso3(c) for c in _ISO_TO_DEEPL)),
             requires_gpu=False,
             is_cloud=True,
             requires_credentials=True,
@@ -206,4 +210,5 @@ class DeepLTranslatorBackend(TranslatorBackend):
     # ============================================================
     @classmethod
     def supported_target_languages(cls) -> list[str]:
-        return sorted(_ISO_TO_DEEPL.keys())
+        # 変換表は 639-1 キーなので正準(639-3)へ持ち上げて申告する。
+        return sorted(iso1_to_iso3(c) for c in _ISO_TO_DEEPL)

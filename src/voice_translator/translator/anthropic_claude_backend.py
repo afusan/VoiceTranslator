@@ -20,7 +20,7 @@ from voice_translator.common.errors import (
     RecoverableError,
     SkipError,
 )
-from voice_translator.common.languages import language_name
+from voice_translator.common.languages import iso1_to_iso3, language_name
 from voice_translator.common.types import (
     BackendCapabilities,
     CredentialField,
@@ -202,7 +202,7 @@ class AnthropicClaudeTranslatorBackend(TranslatorBackend):
 
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
-            supported_languages=tuple(_SUPPORTED_TARGET_LANGUAGES),
+            supported_languages=tuple(sorted(iso1_to_iso3(c) for c in _SUPPORTED_TARGET_LANGUAGES)),
             requires_gpu=False,
             is_cloud=True,
             requires_credentials=True,
@@ -213,4 +213,5 @@ class AnthropicClaudeTranslatorBackend(TranslatorBackend):
 
     @classmethod
     def supported_target_languages(cls) -> list[str]:
-        return list(_SUPPORTED_TARGET_LANGUAGES)
+        # 内部表は 639-1 のまま据え置き、申告は正準(639-3)へ持ち上げる。
+        return sorted(iso1_to_iso3(c) for c in _SUPPORTED_TARGET_LANGUAGES)

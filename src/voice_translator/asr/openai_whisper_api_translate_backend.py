@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from voice_translator.common.errors import FatalError, RecoverableError, SkipError
+from voice_translator.common.languages import iso1_to_iso3
 from voice_translator.common.messages import PayloadKind
 from voice_translator.common.types import BackendCapabilities, LayerKind
 
@@ -91,19 +92,22 @@ class OpenAiWhisperApiTranslateBackend(OpenAiWhisperApiAsrBackend, AsrTranslator
         tgt_text = str(payload.get("text", "")).strip()
         if src_lang_hint in ("auto", "", None):
             # verbose_json の language は検出された源言語の英語名が入る想定。
+            # 英語名 → 639-1 へ正規化し、正準(639-3)へ持ち上げて返す。
             # 取れない/未知の表記なら "auto" に縮退(表示用にしか使われない)。
             api_lang = str(payload.get("language", "")).lower()
-            src_lang = _LANGUAGE_NAME_TO_CODE.get(
+            iso1 = _LANGUAGE_NAME_TO_CODE.get(
                 api_lang, "auto" if not api_lang else api_lang
             )
+            src_lang = "auto" if iso1 == "auto" else iso1_to_iso3(iso1)
         else:
             src_lang = src_lang_hint
-        return "", src_lang, tgt_text, "en"
+        # 翻訳先は英語固定。正準(639-3)で返す。
+        return "", src_lang, tgt_text, "eng"
 
     @classmethod
     def supported_target_languages(cls) -> list[str]:
-        """Whisper translations は英語のみ。"""
-        return ["en"]
+        """Whisper translations は英語のみ(正準 639-3 で申告)。"""
+        return [iso1_to_iso3("en")]
 
     # ---- 編成申告(MRO 先頭の単体 ASR 申告を上書き) ----
     @classmethod

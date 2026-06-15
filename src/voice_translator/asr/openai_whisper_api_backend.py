@@ -26,6 +26,7 @@ from voice_translator.common.errors import (
     RecoverableError,
     SkipError,
 )
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import (
     INTERNAL_SAMPLE_RATE,
     BackendCapabilities,
@@ -180,9 +181,10 @@ class OpenAiWhisperApiAsrBackend(AsrBackend):
             "model": self._model,
             "response_format": "verbose_json",
         }
-        # language は ISO 639-1。auto のときは送らない(API 側で自動検出)。
+        # 入力ヒントは正準(639-3)。API は ISO 639-1 を要求するので落としてから渡す。
+        # auto のときは送らない(API 側で自動検出)。
         if src_lang_hint not in ("auto", "", None):
-            data["language"] = src_lang_hint
+            data["language"] = iso3_to_iso1(src_lang_hint)
 
         try:
             resp = self._client.post(
@@ -210,9 +212,11 @@ class OpenAiWhisperApiAsrBackend(AsrBackend):
         text = str(payload.get("text", "")).strip()
         api_lang = str(payload.get("language", "")).lower()
         if src_lang_hint in ("auto", "", None):
-            # API が返す英語名("english")を ISO 639-1 ("en") に正規化。
-            # 未掲載コードは "auto" にフォールバック(下流は src_lang を表示用にしか使わない)。
-            lang_out = _LANGUAGE_NAME_TO_CODE.get(api_lang, "auto" if not api_lang else api_lang)
+            # API が返す英語名("english")を ISO 639-1 ("en") に正規化し、
+            # 正準(639-3)へ持ち上げて返す。未掲載コードは "auto" にフォールバック
+            # (下流は src_lang を表示用にしか使わない)。
+            iso1 = _LANGUAGE_NAME_TO_CODE.get(api_lang, "auto" if not api_lang else api_lang)
+            lang_out = "auto" if iso1 == "auto" else iso1_to_iso3(iso1)
         else:
             lang_out = src_lang_hint
         return text, lang_out
@@ -256,8 +260,9 @@ class OpenAiWhisperApiAsrBackend(AsrBackend):
     # ----------------------------------------------------------
     @classmethod
     def supported_input_languages(cls) -> list[str]:
+        # Whisper 語彙は 639-1。正準(639-3)へ持ち上げて申告する。
         from voice_translator.common.whisper_languages import WHISPER_INPUT_LANGUAGES
-        return list(WHISPER_INPUT_LANGUAGES)
+        return sorted(iso1_to_iso3(c) for c in WHISPER_INPUT_LANGUAGES)
 
     @classmethod
     def supports_auto_detect(cls) -> bool:

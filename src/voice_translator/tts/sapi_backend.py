@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from voice_translator.common.errors import FatalError, SkipError
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import BackendCapabilities, ModelStatus
 
 from .backend import TtsBackend
@@ -72,7 +73,9 @@ class SapiTtsBackend(TtsBackend):
             engine = pyttsx3.init()
             try:
                 engine.setProperty("rate", self._rate)
-                self._try_set_voice_for_lang(engine, tgt_lang or self._voice_lang_hint)
+                # tgt_lang は正準(639-3)。voice 選択ヒューリスティックは 639-1 前提なので落とす。
+                voice_hint = iso3_to_iso1(tgt_lang) if tgt_lang else self._voice_lang_hint
+                self._try_set_voice_for_lang(engine, voice_hint)
                 engine.save_to_file(text, wav_path)
                 engine.runAndWait()
             finally:
@@ -109,8 +112,10 @@ class SapiTtsBackend(TtsBackend):
         ことになるが、SAPI は voice 列挙時に言語コードを安定して取れないケースが
         多く、動的検出は信頼性が低い(`_try_set_voice_for_lang` のヒューリスティック
         と同じ理由)。明示宣言ベースに割り切る。
+
+        申告は正準(ISO 639-3)。
         """
-        return ["ja", "en"]
+        return [iso1_to_iso3("ja"), iso1_to_iso3("en")]
 
     # ----------------------------------------------------------
     def capabilities(self) -> BackendCapabilities:

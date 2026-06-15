@@ -51,16 +51,16 @@ def stub_panel():
 class TestSrcLanguageWiring:
     def test_rebuild_applies_choices_and_selection_to_widgets(self, stub_panel) -> None:
         """logic の計算結果(候補 + 選択値)が dropdown / StringVar に反映される。"""
-        stub_panel._controller.get_supported_input_languages.return_value = ["en", "ja"]
+        stub_panel._controller.get_supported_input_languages.return_value = ["eng", "jpn"]
         stub_panel._controller.supports_auto_detect.return_value = True
-        stub_panel._controller.get_setting.return_value = "ja"
+        stub_panel._controller.get_setting.return_value = "jpn"
 
         stub_panel._refresh_input_language_choices("fake_backend", notify_fallback=True)
 
         labels = stub_panel._src_dropdown.configure.call_args.kwargs["values"]
         assert labels[0] == "auto (Auto-detect)"
-        assert "ja (Japanese)" in labels
-        stub_panel._src_var.set.assert_called_with("ja (Japanese)")
+        assert "jpn (Japanese)" in labels
+        stub_panel._src_var.set.assert_called_with("jpn (Japanese)")
         # 現在値が対応言語なので設定の書き戻しは起きない
         stub_panel._controller.set_setting.assert_not_called()
 
@@ -132,17 +132,17 @@ class TestTgtLanguageWiring:
     ) -> None:
         """fallback 時: set_setting + バナー + TTS 互換チェック連鎖まで配線される。"""
         stub_tgt_panel._controller.get_effective_target_languages.return_value = [
-            "en", "ja", "fr",
+            "eng", "jpn", "fra",
         ]
         stub_tgt_panel._controller.get_target_language_provider.return_value = (
             LayerKind.TRANSLATOR, "fake_backend",
         )
-        stub_tgt_panel._controller.get_setting.return_value = "xx"  # 非対応
+        stub_tgt_panel._controller.get_setting.return_value = "xxx"  # 非対応
 
         stub_tgt_panel._refresh_target_language_choices(notify_fallback=True)
 
         stub_tgt_panel._controller.set_setting.assert_called_with(
-            "languages", "tgt", "ja"
+            "languages", "tgt", "jpn"
         )
         stub_tgt_panel._banner.show_warning.assert_called_once()
         # tgt が変わったので TTS 互換チェックに連鎖する(shim 上は auto-mock)
@@ -152,13 +152,13 @@ class TestTgtLanguageWiring:
 
     def test_keeps_current_if_supported(self, stub_tgt_panel) -> None:
         stub_tgt_panel._controller.get_effective_target_languages.return_value = [
-            "en", "ja",
+            "eng", "jpn",
         ]
-        stub_tgt_panel._controller.get_setting.return_value = "ja"
+        stub_tgt_panel._controller.get_setting.return_value = "jpn"
 
         stub_tgt_panel._refresh_target_language_choices(notify_fallback=True)
         stub_tgt_panel._controller.set_setting.assert_not_called()
-        stub_tgt_panel._tgt_var.set.assert_called_with("ja (Japanese)")
+        stub_tgt_panel._tgt_var.set.assert_called_with("jpn (Japanese)")
 
     def test_dropdown_missing_is_noop(self, stub_tgt_panel) -> None:
         stub_tgt_panel._tgt_dropdown = None
@@ -172,23 +172,23 @@ class TestTgtLanguageWiring:
             if keys[:2] == ("backends", "tts"):
                 return "sapi"
             if keys[:2] == ("languages", "tgt"):
-                return "fr"  # 翻訳は対応するが TTS が読めない言語
+                return "fra"  # 翻訳は対応するが TTS が読めない言語
             return default
 
         stub_tgt_panel._controller.get_setting.side_effect = _get_setting
         stub_tgt_panel._controller.get_effective_target_languages.return_value = [
-            "en", "ja", "fr",
+            "eng", "jpn", "fra",
         ]
         stub_tgt_panel._controller.get_supported_output_languages.return_value = [
-            "ja", "en",
+            "jpn", "eng",
         ]
 
         stub_tgt_panel._refresh_target_language_choices(notify_fallback=False)
 
         labels = stub_tgt_panel._tgt_dropdown.configure.call_args.kwargs["values"]
-        assert labels == ["en (English)", "ja (Japanese)"]  # fr は TTS 非対応で除外
+        assert labels == ["eng (English)", "jpn (Japanese)"]  # fra は TTS 非対応で除外
         stub_tgt_panel._controller.set_setting.assert_called_with(
-            "languages", "tgt", "ja"
+            "languages", "tgt", "jpn"
         )
 
     def test_unknown_tts_languages_do_not_restrict(self, stub_tgt_panel) -> None:
@@ -197,19 +197,19 @@ class TestTgtLanguageWiring:
             if keys[:2] == ("backends", "tts"):
                 return "some_tts"
             if keys[:2] == ("languages", "tgt"):
-                return "fr"
+                return "fra"
             return default
 
         stub_tgt_panel._controller.get_setting.side_effect = _get_setting
         stub_tgt_panel._controller.get_effective_target_languages.return_value = [
-            "en", "ja", "fr",
+            "eng", "jpn", "fra",
         ]
         stub_tgt_panel._controller.get_supported_output_languages.return_value = []
 
         stub_tgt_panel._refresh_target_language_choices(notify_fallback=False)
 
         labels = stub_tgt_panel._tgt_dropdown.configure.call_args.kwargs["values"]
-        assert "fr (French)" in labels
+        assert "fra (French)" in labels
         stub_tgt_panel._controller.set_setting.assert_not_called()
 
     def test_absorbed_translator_uses_composite_languages(
@@ -220,19 +220,19 @@ class TestTgtLanguageWiring:
         例: faster_whisper_translate(英語固定)→ 候補は en のみ。現在の ja は
         en へ fallback され、通知の backend 名も複合側になる。
         """
-        stub_tgt_panel._controller.get_effective_target_languages.return_value = ["en"]
+        stub_tgt_panel._controller.get_effective_target_languages.return_value = ["eng"]
         stub_tgt_panel._controller.get_target_language_provider.return_value = (
             LayerKind.ASR, "faster_whisper_translate",
         )
-        stub_tgt_panel._controller.get_setting.return_value = "ja"
+        stub_tgt_panel._controller.get_setting.return_value = "jpn"
 
         stub_tgt_panel._refresh_target_language_choices(notify_fallback=True)
 
         stub_tgt_panel._tgt_dropdown.configure.assert_called_with(
-            values=["en (English)"]
+            values=["eng (English)"]
         )
         stub_tgt_panel._controller.set_setting.assert_called_with(
-            "languages", "tgt", "en"
+            "languages", "tgt", "eng"
         )
         # fallback 通知の文言には複合 backend 名が入る
         msg = stub_tgt_panel._banner.show_warning.call_args[0][0]
@@ -262,6 +262,47 @@ def _make_setting_fn(table: dict):
     def fn(*keys, default=None):
         return table.get(keys, default)
     return fn
+
+
+class TestLanguageSearchWiring:
+    """🔍 検索ダイアログ結果の適用配線(候補多数時の選択補助)。"""
+
+    def _panel(self):
+        from voice_translator.gui.settings_panel import SettingsPanel
+
+        shim = MagicMock(spec=SettingsPanel)
+        _bind(
+            shim,
+            "_apply_language_choice",
+            "_on_src_lang_changed",
+            "_on_tgt_lang_changed",
+            "_dropdown_codes",
+        )
+        shim._src_var = MagicMock(name="src_var")
+        shim._tgt_var = MagicMock(name="tgt_var")
+        shim._controller = MagicMock(name="controller")
+        return shim
+
+    def test_apply_tgt_sets_var_and_saves_via_handler(self) -> None:
+        panel = self._panel()
+        panel._apply_language_choice("tgt", "yor")
+        # プルダウン選択と同じ経路: var に表示ラベル、controller に内部コード
+        panel._tgt_var.set.assert_called_with("yor (Yoruba)")
+        panel._controller.set_setting.assert_called_with("languages", "tgt", "yor")
+        # tgt は TTS 互換チェックに連鎖する(auto-mock)
+        panel._check_tts_output_lang_compatibility.assert_called_once()
+
+    def test_apply_src_sets_var_and_saves(self) -> None:
+        panel = self._panel()
+        panel._apply_language_choice("src", "swh")
+        panel._src_var.set.assert_called_with("swh (Swahili)")
+        panel._controller.set_setting.assert_called_with("languages", "src", "swh")
+
+    def test_dropdown_codes_parses_labels_back_to_codes(self) -> None:
+        panel = self._panel()
+        dropdown = MagicMock()
+        dropdown.cget.return_value = ["eng (English)", "jpn (Japanese)", "swh (Swahili)"]
+        assert panel._dropdown_codes(dropdown) == ["eng", "jpn", "swh"]
 
 
 class TestTtsCompatibilityWiring:

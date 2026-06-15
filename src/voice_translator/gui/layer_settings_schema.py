@@ -429,11 +429,11 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             keys=("backends_config", "google_stt", "default_language"),
             label="Google STT: default 言語(auto 時)",
             field_type="str",
-            default="en",
+            default="eng",
             applies_when_backend="google_stt",
             help_text=(
                 "Google STT は自動言語検出に未対応のため、入力言語が `auto` のときは"
-                "ここで指定した言語(ISO 639-1)で API を呼ぶ。"
+                "ここで指定した言語(ISO 639-3)で API を呼ぶ。"
             ),
         ),
         _auto_load_toggle("google_stt"),
@@ -582,9 +582,9 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             keys=("backends_config", "google_tts", "default_language"),
             label="Google TTS: default 言語",
             field_type="str",
-            default="en",
+            default="eng",
             applies_when_backend="google_tts",
-            help_text="`tgt_lang` が空のときに使う既定言語(ISO 639-1)。",
+            help_text="`tgt_lang` が空のときに使う既定言語(ISO 639-3)。",
         ),
         _auto_load_toggle("google_tts"),
     ],

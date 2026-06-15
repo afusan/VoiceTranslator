@@ -48,10 +48,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="出力 JSON パス(省略時は stdout)",
     )
     p.add_argument(
-        "--src-lang", default="en",
-        help="翻訳元言語(ISO 639-1)。.json 入力に src_lang があれば上書き可",
+        "--src-lang", default="eng",
+        help="翻訳元言語(ISO 639-3)。.json 入力に src_lang があれば上書き可",
     )
-    p.add_argument("--tgt-lang", default="ja", help="翻訳先言語(ISO 639-1)")
+    p.add_argument("--tgt-lang", default="jpn", help="翻訳先言語(ISO 639-3)")
     p.add_argument("--device", "-d", default="auto", help='"auto"/"cuda"/"mps"/"cpu"')
     p.add_argument(
         "--model-name", default="facebook/nllb-200-distilled-600M",

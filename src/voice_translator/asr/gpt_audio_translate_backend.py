@@ -28,7 +28,7 @@ from voice_translator.common.errors import (
     RecoverableError,
     SkipError,
 )
-from voice_translator.common.languages import language_name
+from voice_translator.common.languages import iso1_to_iso3, language_name
 from voice_translator.common.types import (
     BackendCapabilities,
     CredentialField,
@@ -227,8 +227,13 @@ class GptAudioTranslateBackend(AsrTranslatorBackend):
                 src_lang = src_lang_hint
             else:
                 raw = str(parsed.get("src_lang", "")).strip().lower()
-                # ISO 639-1 らしい 2〜3 文字のみ採用(自由記述は auto に縮退)
-                src_lang = raw if 2 <= len(raw) <= 3 and raw.isalpha() else "auto"
+                # モデルには 639-1 を返させているので、正準(639-3)へ持ち上げる。
+                # ISO 639-1/639-3 らしい 2〜3 文字のみ採用(自由記述は auto に縮退)。
+                src_lang = (
+                    iso1_to_iso3(raw)
+                    if 2 <= len(raw) <= 3 and raw.isalpha()
+                    else "auto"
+                )
         return src_text, src_lang, tgt_text, str(tgt_lang)
 
     # ============================================================
@@ -236,11 +241,13 @@ class GptAudioTranslateBackend(AsrTranslatorBackend):
     # ============================================================
     @classmethod
     def supported_input_languages(cls) -> list[str]:
-        return list(_SUPPORTED_TARGET_LANGUAGES)
+        # 元リストは 639-1。正準(639-3)へ持ち上げて申告する。
+        return sorted(iso1_to_iso3(c) for c in _SUPPORTED_TARGET_LANGUAGES)
 
     @classmethod
     def supported_target_languages(cls) -> list[str]:
-        return list(_SUPPORTED_TARGET_LANGUAGES)
+        # 元リストは 639-1。正準(639-3)へ持ち上げて申告する。
+        return sorted(iso1_to_iso3(c) for c in _SUPPORTED_TARGET_LANGUAGES)
 
     @classmethod
     def supports_auto_detect(cls) -> bool:
@@ -252,7 +259,9 @@ class GptAudioTranslateBackend(AsrTranslatorBackend):
     # ---- メタ情報 ----
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
-            supported_languages=tuple(_SUPPORTED_TARGET_LANGUAGES),
+            supported_languages=tuple(
+                sorted(iso1_to_iso3(c) for c in _SUPPORTED_TARGET_LANGUAGES)
+            ),
             requires_gpu=False,
             is_cloud=True,
             requires_credentials=True,

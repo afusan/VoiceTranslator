@@ -134,7 +134,8 @@ def test_asr_to_translate_skips_vad(
     tr = json.loads((out_dir / "seq_0001_translate.json").read_text(encoding="utf-8"))
     assert asr["stage"] == "asr"
     assert tr["src_text"] == asr["text"]
-    assert tr["tgt_text"] == f"[ja]{asr['text']}"
+    # runner の既定 --tgt-lang は正準 639-3(jpn)
+    assert tr["tgt_text"] == f"[jpn]{asr['text']}"
 
 
 # ============================================================

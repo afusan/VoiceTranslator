@@ -90,13 +90,17 @@ class TestComputeTgtSelection:
         assert sel.fallback_from is None
 
     def test_fallback_prefers_japanese(self) -> None:
-        sel = compute_tgt_selection(["en", "ja", "fr"], current="xx", fallback_pool=_POOL)
-        assert sel.selected == "ja"
-        assert sel.fallback_from == "xx"
+        sel = compute_tgt_selection(
+            ["eng", "jpn", "fra"], current="xxx", fallback_pool=_POOL,
+        )
+        assert sel.selected == "jpn"
+        assert sel.fallback_from == "xxx"
 
     def test_fallback_to_english_when_no_japanese(self) -> None:
-        sel = compute_tgt_selection(["en", "fr", "de"], current="xx", fallback_pool=_POOL)
-        assert sel.selected == "en"
+        sel = compute_tgt_selection(
+            ["eng", "fra", "deu"], current="xxx", fallback_pool=_POOL,
+        )
+        assert sel.selected == "eng"
 
     def test_fallback_to_first_when_no_en_no_ja(self) -> None:
         sel = compute_tgt_selection(["fr", "de", "es"], current="xx", fallback_pool=_POOL)
@@ -148,20 +152,20 @@ class TestMessageFormatting:
     """通知バナー文言(移行元と一字一句一致することを固定文字列で検証)。"""
 
     def test_src_fallback_message(self) -> None:
-        assert format_src_fallback_message("fr", "auto", "whisper") == (
-            "入力言語を fr (French) から auto (Auto-detect) に変更しました"
-            "(whisper が fr に対応していないため)"
+        assert format_src_fallback_message("fra", "auto", "whisper") == (
+            "入力言語を fra (French) から auto (Auto-detect) に変更しました"
+            "(whisper が fra に対応していないため)"
         )
 
     def test_tgt_fallback_message(self) -> None:
-        assert format_tgt_fallback_message("xx", "ja", "nllb200") == (
-            "出力言語を xx から ja (Japanese) に変更しました"
-            "(nllb200 が xx に対応していないため)"
+        assert format_tgt_fallback_message("xyz", "jpn", "nllb200") == (
+            "出力言語を xyz から jpn (Japanese) に変更しました"
+            "(nllb200 が xyz に対応していないため)"
         )
 
     def test_tts_warning_message(self) -> None:
-        assert format_tts_warning_message("fr", "sapi") == (
-            "TTS バックエンド sapi は読み上げ言語 fr (French) に対応していません"
+        assert format_tts_warning_message("fra", "sapi") == (
+            "TTS バックエンド sapi は読み上げ言語 fra (French) に対応していません"
             "(Translator 出力言語を変えるか、別の TTS バックエンドに切り替えてください)"
         )
 

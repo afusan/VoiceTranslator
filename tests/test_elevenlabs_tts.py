@@ -33,9 +33,13 @@ class TestSupportedOutputLanguages:
     def test_includes_multilingual_v2_set(self) -> None:
         from voice_translator.tts.elevenlabs_backend import ElevenLabsTtsBackend
         langs = ElevenLabsTtsBackend.supported_output_languages()
-        # eleven_multilingual_v2 の代表
-        for code in ("en", "ja", "zh", "fr", "de", "ko", "hi"):
+        # eleven_multilingual_v2 の代表(申告は正準 ISO 639-3)
+        for code in ("eng", "jpn", "zho", "fra", "deu", "kor", "hin"):
             assert code in langs, f"{code} がリストに無い"
+        # ElevenLabs の Filipino は正準 Tagalog(tgl)へ寄せて申告する
+        # (NLLB/MMS/Whisper と同じコードに揃え、出力言語の AND に乗せるため)。
+        assert "tgl" in langs
+        assert "fil" not in langs  # 共有テーブルを汚す fil 別名は使わない
 
 
 class TestInitialization:

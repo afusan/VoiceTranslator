@@ -158,13 +158,13 @@ class TestSupportedOutputLanguages:
     """SAPI 対応読み上げ言語の宣言(Windows 標準 voice 前提)。"""
 
     def test_returns_japanese_and_english(self) -> None:
-        """`["ja", "en"]` を classmethod として返す(インスタンス化不要)。"""
+        """`["jpn", "eng"]` を classmethod として返す(インスタンス化不要、正準 639-3)。"""
         from voice_translator.tts.sapi_backend import SapiTtsBackend
 
         langs = SapiTtsBackend.supported_output_languages()
         assert isinstance(langs, list)
-        assert "ja" in langs
-        assert "en" in langs
+        assert "jpn" in langs
+        assert "eng" in langs
 
     def test_classmethod_callable_without_instance(self) -> None:
         """pyttsx3 が無い環境でもクラスメソッドだけは呼べる(UI 用)。"""
@@ -173,4 +173,4 @@ class TestSupportedOutputLanguages:
 
         # インスタンス化は失敗する可能性があるが、classmethod は呼べる
         langs = SapiTtsBackend.supported_output_languages()
-        assert langs == ["ja", "en"]
+        assert langs == ["jpn", "eng"]

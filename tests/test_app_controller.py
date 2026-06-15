@@ -132,14 +132,14 @@ class TestSettings:
 
     def test_save_and_load(self, populated_registry, config, tmp_path) -> None:
         ctrl = AppController(registry=populated_registry, config=config)
-        ctrl.set_setting("languages", "tgt", "fr")
+        ctrl.set_setting("languages", "tgt", "fra")  # 内部標準 = 639-3
         ctrl.save_settings()
         assert config.path.exists()
         # 再ロードで反映
         new_config = ConfigStore(config.path)
         ctrl2 = AppController(registry=populated_registry, config=new_config)
         ctrl2.load_settings()
-        assert ctrl2.get_setting("languages", "tgt") == "fr"
+        assert ctrl2.get_setting("languages", "tgt") == "fra"
 
 
 class TestStartPipeline:
@@ -1850,6 +1850,69 @@ class TestTtsSupportedOutputLanguages:
         )
         ctrl = AppController(registry=reg, config=config)
         assert ctrl.get_supported_output_languages("broken_tts") == []
+
+
+class TestTtsLanguagePrefetch:
+    """言語単位の遅延ロードを持つ TTS backend への出力言語事前確保。
+
+    MMS-TTS のように言語ごとにモデルが違う backend で、初回発話の DL による
+    パイプライン停止を避けるため、出力言語の確定/ロード完了を契機に裏で確保する。
+    """
+
+    def _fake_prefetch_backend(self):
+        """`prefetch_language` を持ち、呼ばれたら Event を立てる fake TTS backend。"""
+        import threading as _t
+
+        called = _t.Event()
+        seen: list[str] = []
+
+        class _FakeTts:
+            def prefetch_language(self, lang: str) -> None:
+                seen.append(lang)
+                called.set()
+
+        return _FakeTts(), called, seen
+
+    def test_set_tgt_triggers_prefetch_when_loaded(
+        self, populated_registry, config
+    ) -> None:
+        ctrl = AppController(registry=populated_registry, config=config)
+        backend, called, seen = self._fake_prefetch_backend()
+        ctrl._backends[LayerKind.TTS] = backend
+
+        ctrl.set_setting("languages", "tgt", "fr")
+
+        assert called.wait(timeout=1.0), "prefetch がバックグラウンドで呼ばれていない"
+        assert seen == ["fr"]
+
+    def test_no_prefetch_when_tts_not_loaded(
+        self, populated_registry, config
+    ) -> None:
+        """TTS 未ロードなら何もしない(例外も出ない)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        # _backends に TTS なし
+        ctrl.set_setting("languages", "tgt", "fr")  # 例外が出なければ OK
+
+    def test_no_prefetch_for_backend_without_capability(
+        self, populated_registry, config
+    ) -> None:
+        """`prefetch_language` を持たない backend では no-op(属性誤呼びしない)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        ctrl._backends[LayerKind.TTS] = MagicMock(spec=[])  # 余計な属性を持たせない
+        ctrl.set_setting("languages", "tgt", "fr")  # 例外が出なければ OK
+
+    def test_src_change_does_not_prefetch(
+        self, populated_registry, config
+    ) -> None:
+        """入力言語(src)の変更では確保しない(出力言語のみが契機)。"""
+        ctrl = AppController(registry=populated_registry, config=config)
+        backend, called, seen = self._fake_prefetch_backend()
+        ctrl._backends[LayerKind.TTS] = backend
+
+        ctrl.set_setting("languages", "src", "en")
+
+        assert not called.wait(timeout=0.3)
+        assert seen == []
 
 
 class TestPhaseDCapabilityHint:

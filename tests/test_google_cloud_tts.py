@@ -61,7 +61,8 @@ class TestSupportedOutputLanguages:
     def test_includes_major_languages(self) -> None:
         from voice_translator.tts.google_cloud_tts_backend import GoogleCloudTtsBackend
         langs = GoogleCloudTtsBackend.supported_output_languages()
-        for code in ("en", "ja", "fr", "de", "es", "zh", "ko"):
+        # 申告は正準(ISO 639-3)
+        for code in ("eng", "jpn", "fra", "deu", "spa", "zho", "kor"):
             assert code in langs
 
 
