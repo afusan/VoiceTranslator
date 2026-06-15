@@ -8,6 +8,12 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
 本ブランチでは「キー化 → 辞書引き」の仕組みを最小コストで導入し、将来の多言語化の
 差し込み口を用意する。**語彙は ja のみ**で、実際の翻訳追加・実行中切替は後続に回す。
 
+**最終的な対応目標言語**: 日本語(ja)/ 英語(en)/ 中国語(zh)/ スペイン語(es)。
+本ブランチは土台のみで ja だけを実装するが、キー設計・`current_locale()` の窓口は
+この 4 言語を見据えた拡張可能な形にする(辞書ファイルを足すだけで言語が増える構造)。
+留意: zh は CJK でフォント差はあるが RTL は無く、es は語尾/複数形の差し分けがあるため、
+キーは前述のとおり文脈単位で持つ(文字列単位にまとめない)。
+
 ## 方式の選定理由(案1: 自前 dict + tr())
 実装方式 4 案(自前 dict / gettext / JSON / observable binding)を比較した
 (`tmp/i18n_options.md`)。本プロジェクトは「文言を固定文字列・golden テストで守る」方針で、
@@ -27,6 +33,19 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
    - 例: `control_panel.start_button` / `dialog.consent.title` /
      `layer_settings.capture.captured_queue_max_bytes.label`。
    - schema 由来のキーは `keys` tuple から機械的に導出できる規約にする。
+   - **キーの粒度は「文脈単位」**: 同一の日本語文言でも、出る場所/意味が異なれば
+     **別キー**にする(例: 「クリア」= `control_panel.clear_events` と
+     `control_panel.clear_translations`)。文字列単位でまとめると、別言語で訳し分けが
+     必要になったとき破綻するため。**例外**として、真に同一概念の再利用(共通の
+     Cancel / OK 等)のみ `common.cancel` / `common.ok` の共通キーに集約してよい。
+   - **キーはリテラルで渡す**(`tr("control_panel.start_button")`)。`tr(f"...{x}")` の
+     ような動的キー生成は禁止。理由は下記「キー健全性検査」を静的解析で成立させるため。
+     どうしても動的に選ぶ場合は候補キーを定数で明示列挙する。
+4. **キー健全性検査**(`tests/test_messages_i18n.py` の small テストとして実装)
+   - ソースを AST 解析して `tr("...")` のリテラルキーを全抽出し、ja 辞書と突合する。
+   - 検出する不整合: **(a) コードで使うが辞書に無いキー(欠落 → ランタイム例外予備軍)** /
+     **(b) 辞書にあるがコードで未使用のキー(死にキー)**。
+   - 文言が増えるほど目視突合は破綻するため、自動検査を最初から土台に含める。
 3. **logic 層の文言を `tr()` 経由に置換**(本ブランチの適用範囲はここまで)
    - 対象: `ready_state` / `restart_messages` / `language_choices` / `auth_display` /
      `accel_summary` / `status_summary` / `backend_display`。
@@ -34,7 +53,7 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
      呼び出し側(widget)の改修は不要。
 
 ## やらないこと(後続ブランチへ)
-- **en 等の他言語辞書の追加**(土台のみ。語彙は ja)。
+- **en / zh / es 辞書の追加**(土台のみ。語彙は ja。辞書を足すだけで増やせる構造にはする)。
 - **実行中のロケール切替 UI と再描画イベント**(`current_locale()` の差し込み口だけ用意)。
 - **schema(`layer_settings_schema.py` 60+ 件)の置換** → 後続 Phase 2。
 - **各 widget 直書き(control_panel / settings_panel / 各ダイアログ ~95 件)の置換**
@@ -45,7 +64,8 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
 - **Phase 1(本ブランチ)**: 土台 + logic 層置換。
 - Phase 2: `layer_settings_schema` のラベル/help をキー化。
 - Phase 3: 各 widget の直書き文言をキー化(f-string はテンプレート+引数へ)。
-- Phase 4: en 辞書追加 + ロケール切替 UI + 再描画イベント(`add_<event>_listener` に乗せる)。
+- Phase 4: en / zh / es 辞書追加 + ロケール切替 UI + 再描画イベント
+  (`add_<event>_listener` に乗せる)。
 
 ## 移行性メモ
 - `tr()` を単一窓口に保つことで、将来 gettext(案2)へ移るときの変更点が 1 か所に収まる。
