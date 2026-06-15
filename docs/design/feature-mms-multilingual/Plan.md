@@ -23,7 +23,13 @@
       load 時に正準化、GUI 表示・fallback 定数も 639-3。全 ASR/Translator/TTS backend 移行済み、
       small 全緑。これで 639-3 しか持たない低資源言語を `LANGUAGE_NAMES` に直接足せる土台が完成
       (実際の言語追加=`_ISO1_TO_MMS`/`ISO_TO_NLLB` の拡充は Phase 2 で継続)。
-- [ ] **Phase 2: 翻訳との AND 連携**(横断課題に依存)。
+- [x] **Phase 2-a: 翻訳との AND 連携(仕組み)**(2026-06-16)。639-3 正準化により MMS と NLLB が
+      同一の内部コードで申告 → 既存 `restrict_to_tts` の積がそのまま広がる。`tests/test_multilingual_integration.py`
+      でスワヒリ/ヨルバ/ハウサ/アムハラが翻訳∩TTS に残ることを固定。新しい仕組みは不要だった。
+- [ ] **Phase 2-b: 言語カバレッジ拡充**(残・要判断)。`_ISO1_TO_MMS`(現 14)/ `ISO_TO_NLLB` に
+      低資源言語を追加して実カバーを広げる。**各 MMS チェックポイント ID は実 DL で検証要**
+      (推測追加は 404 リスク)。639-3 のみの言語は `LANGUAGE_NAMES` に 639-3 キーで直接足す。
+      追加する言語セットの範囲はユーザと相談。
 - [ ] **Phase 3: 言語選択フィルタリング**(着手時に方式決定)。
 - [ ] **Phase 4: ドキュメント/コマンド回りの最終確認**。
 
