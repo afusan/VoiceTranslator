@@ -20,6 +20,7 @@ from voice_translator.common.types import (
 )
 
 from .auth_display import AUTH_MISSING_TEXT, AUTH_UNVERIFIED_TEXT
+from .messages import tr
 
 
 def format_status_summary(
@@ -39,7 +40,7 @@ def format_status_summary(
     out = [_format_layer_line(line) for line in lines]
     if errors:
         out.append("")
-        out.append("最近のエラー:")
+        out.append(tr("status.recent_errors"))
         for layer, rec in list(errors)[:max_errors]:
             ctx = f" ({rec.context})" if rec.context else ""
             out.append(f"  [{layer.value}] {rec.exc_type}: {rec.message}{ctx}")
@@ -59,10 +60,14 @@ def _format_layer_line(line: LayerStatusLine) -> str:
     if line.disposition == "absorbed":
         return (
             f"[{line.layer.value}] "
-            f"({line.absorbed_into} の {line.absorbed_backend} で実行)"
+            + tr(
+                "status.layer_absorbed",
+                into=line.absorbed_into,
+                backend=line.absorbed_backend,
+            )
         )
     if line.disposition == "skipped":
-        return f"[{line.layer.value}] (なし)"
+        return f"[{line.layer.value}] {tr('status.layer_skipped')}"
     status_text = f"{line.status.value}{line.dl_size_hint}"
     if line.auth == AuthState.MISSING:
         status_text = AUTH_MISSING_TEXT
@@ -81,7 +86,7 @@ def append_gui_events(
     """
     if not gui_events:
         return summary
-    parts = [summary, "", "操作イベント:"]
+    parts = [summary, "", tr("status.gui_events")]
     for ev in list(gui_events)[-max_events:][::-1]:
         parts.append(f"  {ev}")
     return "\n".join(parts)

@@ -17,6 +17,8 @@ from typing import Sequence
 
 from voice_translator.common.languages import format_language
 
+from .messages import tr
+
 
 @dataclass(frozen=True)
 class LanguageSelection:
@@ -129,24 +131,30 @@ def tts_warning_needed(
 # ============================================================
 def format_src_fallback_message(old_code: str, new_code: str, backend_name: str) -> str:
     """入力言語の自動 fallback を伝えるバナー文言。"""
-    return (
-        f"入力言語を {format_language(old_code)} から {format_language(new_code)} に変更しました"
-        f"({backend_name} が {old_code} に対応していないため)"
+    return tr(
+        "language.src_fallback",
+        old=format_language(old_code),
+        new=format_language(new_code),
+        backend=backend_name,
+        code=old_code,
     )
 
 
 def format_tgt_fallback_message(old_code: str, new_code: str, backend_name: str) -> str:
     """出力言語の自動 fallback を伝えるバナー文言。"""
-    return (
-        f"出力言語を {format_language(old_code)} から {format_language(new_code)} に変更しました"
-        f"({backend_name} が {old_code} に対応していないため)"
+    return tr(
+        "language.tgt_fallback",
+        old=format_language(old_code),
+        new=format_language(new_code),
+        backend=backend_name,
+        code=old_code,
     )
 
 
 def format_tts_warning_message(tgt_code: str, backend_name: str) -> str:
     """TTS 非対応言語の警告バナー文言。"""
-    return (
-        f"TTS バックエンド {backend_name} は読み上げ言語 "
-        f"{format_language(tgt_code)} に対応していません"
-        "(Translator 出力言語を変えるか、別の TTS バックエンドに切り替えてください)"
+    return tr(
+        "language.tts_warning",
+        backend=backend_name,
+        lang=format_language(tgt_code),
     )

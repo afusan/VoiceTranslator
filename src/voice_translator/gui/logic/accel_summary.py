@@ -12,6 +12,7 @@ from typing import Mapping
 
 from voice_translator.common.types import LayerKind
 
+from .messages import tr
 from .palette import ACCEL_AMBER, ACCEL_GREEN, ACCEL_SLATE
 
 
@@ -40,7 +41,7 @@ def summarize_accel(
             has_cpu = True
 
     if gpu_devices:
-        return f"演算: GPU ({', '.join(sorted(gpu_devices))})", ACCEL_GREEN
+        return tr("accel.gpu", devices=", ".join(sorted(gpu_devices))), ACCEL_GREEN
     if has_cpu:
-        return "演算: CPU のみ", ACCEL_AMBER
-    return "演算: -(モデル準備中)", ACCEL_SLATE
+        return tr("accel.cpu"), ACCEL_AMBER
+    return tr("accel.preparing"), ACCEL_SLATE

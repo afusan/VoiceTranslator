@@ -76,3 +76,15 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
 - `status_summary` のセクション見出しは golden テストで固定 → キー化に合わせてテストも更新。
 - 既存の英語混在文言("Cancel" / "OK" / "Missing Credentials" / "Not Verified")も
   ja 辞書のキーとして登録する(値は現状の英語のまま。多言語化時に整理)。
+
+## マージ前チェック(作業完了後・マージ前に必ず実施)
+本ブランチをマージする前に、恒常ドキュメントへの反映漏れが無いか確認する:
+- **`docs/design/Class.md`**: 新規 `messages` モジュール(`tr` / `current_locale`)の
+  役割をクラス/モジュール一覧に追記したか。
+- **`docs/design/Architecture.html` §9**(GUI 内部構成と UI 実装規約): 文言は messages.py に
+  集約し `tr()` 経由で引く、という規約を追記したか(「判断は logic、widget は塗るだけ」の
+  延長として「文言は messages、logic/widget は tr() で引く」)。
+- **`CLAUDE.md` の UI 実装規約**: 文言の置き場が messages.py + tr() に変わったことを
+  反映すべきか判断(土台のみなので最小限。後続フェーズで widget 置換が済んでから本格反映でも可)。
+- **`docs/manual.md`**: 本ブランチでは言語切替 UI を作らないため更新不要(Phase 4 で追記)。
+- 反映が済んだら、この節のチェック結果を一言コミットに残す。

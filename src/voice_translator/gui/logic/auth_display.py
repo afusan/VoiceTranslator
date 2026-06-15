@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from voice_translator.common.types import AuthState
 
+from .messages import tr
 from .palette import AUTH_MISSING_COLOR, AUTH_UNVERIFIED_COLOR
 
 # ModelStatus.MISSING_CREDENTIALS.value と同一表記(インスタンス由来の表示と揃える)
-AUTH_MISSING_TEXT = "Missing Credentials"
-AUTH_UNVERIFIED_TEXT = "Not Verified"
+AUTH_MISSING_TEXT = tr("auth.missing")
+AUTH_UNVERIFIED_TEXT = tr("auth.unverified")
 
 
 def auth_status_override(auth: AuthState) -> tuple[str, str] | None:

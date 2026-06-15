@@ -14,22 +14,24 @@ from __future__ import annotations
 
 from voice_translator.common.types import CaptureKind, LayerKind
 
+from .messages import tr
+
 # TTS プルダウンの「(なし)」表示と内部値。
 # 内部値 TTS_NONE_INTERNAL は AppController.TTS_NONE と一致させること。
 # BackendRegistry にこの名前の backend は登録しない前提。
-TTS_NONE_DISPLAY = "(なし)"
+TTS_NONE_DISPLAY = tr("backend.tts_none")
 TTS_NONE_INTERNAL = "none"
 
 # 音声取得 backend の kind 表示ラベル。「<kind label> (<backend name>)」形式で表示する。
 CAPTURE_KIND_LABELS: dict[CaptureKind, str] = {
-    CaptureKind.DEVICE: "デバイス",
-    CaptureKind.PROCESS: "プロセス",
+    CaptureKind.DEVICE: tr("capture_kind.device"),
+    CaptureKind.PROCESS: tr("capture_kind.process"),
 }
 
 # 編成に載らないレイヤ(text_only の TTS/Output 等)のステータス欄に出す文言。
 # 吸収されたレイヤのステータス欄は空表示(プルダウン無効化で伝わるため文言を出さない。
 # 代行 backend の明示は動作タブのステータス集約 `status_summary.py` の役割)。
-SKIPPED_STATUS_TEXT = "(なし)"
+SKIPPED_STATUS_TEXT = tr("backend.skipped_status")
 
 
 def tts_display_to_internal(display: str) -> str:
