@@ -147,7 +147,7 @@ ISO_TO_NLLB: dict[str, str] = {
 # を機械的に確定したもの(HF レジストリと NLLB tokenizer の積。推測ゼロ)。多くは 639-1 を
 # 持たないため 639-3 キーで持つ。`common/languages.py` の名前表・`tts/mms_backend.py` の
 # `_MMS_LANGS` と同じ集合で揃える(更新は
-# docs/design/feature-mms-multilingual/gen_lang_table.py で再生成)。
+# docs/design/done/feature-mms-multilingual/gen_lang_table.py で再生成)。
 CANONICAL_TO_NLLB: dict[str, str] = {
     "ace": "ace_Arab", "aka": "aka_Latn", "amh": "amh_Ethi", "asm": "asm_Beng",
     "awa": "awa_Deva", "ayr": "ayr_Latn", "azb": "azb_Arab", "bak": "bak_Cyrl",

@@ -24,7 +24,7 @@
     表追加で正しく翻訳可能になる。残りは NLLB 自体が非対応寄り。
 - **対応案(2 系統。組合せ可)**:
   - (a) **申告表の拡充**: NLLB が実対応する言語(まず上記 4 件)を `CANONICAL_TO_NLLB` に
-    FLORES コードで追加。`docs/design/feature-mms-multilingual/gen_lang_table.py` と同様に
+    FLORES コードで追加。`docs/design/done/feature-mms-multilingual/gen_lang_table.py` と同様に
     NLLB tokenizer の `_extra_special_tokens` から FLORES コードを確認して足す(推測しない)。
   - (b) **入力側の警告/絞り込み**: 出力側の TTS 非対応警告(`gui/logic/language_choices.py:
     tts_warning_needed` / `format_tts_warning_message`)と対称に、「現 Translator が src を

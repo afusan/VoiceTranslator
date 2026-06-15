@@ -5,7 +5,7 @@ CANONICAL_TO_NLLB` / `common/languages.py: LANGUAGE_NAMES` の拡張分)の**再
 HF レジストリの `facebook/mms-tts-*` 実在チェックポイントと NLLB tokenizer の FLORES
 基底コードの積を取り、推測ゼロで対応言語を確定する。
 
-実行: `py -m uv run python docs/design/feature-mms-multilingual/gen_lang_table.py`
+実行: `py -m uv run python docs/design/done/feature-mms-multilingual/gen_lang_table.py`
 新言語を増やすときは NAMES に英語名を足し、出力を各ソースへ反映する。
 """
 from huggingface_hub import HfApi

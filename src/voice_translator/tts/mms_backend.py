@@ -44,7 +44,7 @@ from .backend import TtsBackend
 # 機械的に突き合わせて確定したもの(推測ゼロ。HF レジストリで存在検証済み)。
 # 「翻訳でき、かつ読み上げできる」言語に限るので、出力言語候補として実用になる。
 # 更新手順: `facebook/mms-tts-*` の一覧と NLLB FLORES の基底コードの積を取り直す
-# (`docs/design/feature-mms-multilingual/gen_lang_table.py` が生成スクリプト。
+# (`docs/design/done/feature-mms-multilingual/gen_lang_table.py` が生成スクリプト。
 #  `common/languages.py` の名前表も追従)。
 _MMS_LANGS: frozenset[str] = frozenset({
     "ace", "aka", "amh", "asm", "awa", "ayr", "azb", "bak", "bam", "ban", "bem",
