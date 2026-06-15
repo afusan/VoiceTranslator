@@ -31,6 +31,7 @@ import customtkinter as ctk
 
 from voice_translator.capture import process_enumerator as pe
 from voice_translator.common.types import CaptureSource
+from voice_translator.gui.i18n import tr
 
 if TYPE_CHECKING:
     pass
@@ -214,7 +215,7 @@ class ProcessSelectDialog(ctk.CTkToplevel):
         # ラジオ選択用の StringVar(値は str(pid))
         self._selection_var = ctk.StringVar(value=str(initial_pid) if initial_pid else "")
 
-        self.title("プロセス選択 — ProcTap")
+        self.title(tr("dialog.process_select.title"))
         self.geometry("520x520")
         self.transient(parent)
         try:
@@ -236,21 +237,18 @@ class ProcessSelectDialog(ctk.CTkToplevel):
     # ----------------------------------------------------------
     def _build_widgets(self) -> None:
         ctk.CTkLabel(
-            self, text="音声出力中のプロセス", font=("", 16, "bold"),
+            self, text=tr("dialog.process_select.heading"), font=("", 16, "bold"),
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(12, 4))
 
         ctk.CTkLabel(
             self,
-            text=(
-                "現在音を出している(または出す準備のできた)プロセスを表示しています。\n"
-                "選択して「試聴開始」で当該プロセスの音量が右のメータで確認できます。"
-            ),
+            text=tr("dialog.process_select.description"),
             text_color="#94a3b8", wraplength=480, justify="left", anchor="w",
         ).grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
 
         # 更新ボタン(列挙し直し)
         self._refresh_btn = ctk.CTkButton(
-            self, text="↻ 更新", width=90, command=self._do_refresh,
+            self, text=tr("dialog.process_select.refresh"), width=90, command=self._do_refresh,
         )
         self._refresh_btn.grid(row=2, column=2, sticky="e", padx=12, pady=(0, 4))
 
@@ -264,7 +262,8 @@ class ProcessSelectDialog(ctk.CTkToplevel):
 
         # 試聴トグル + メータ
         self._audition_btn = ctk.CTkButton(
-            self, text="▶ 試聴開始", width=120, command=self._on_audition_toggle,
+            self, text=tr("dialog.process_select.audition_start"), width=120,
+            command=self._on_audition_toggle,
         )
         self._audition_btn.grid(row=4, column=0, sticky="w", padx=12, pady=4)
 
@@ -275,10 +274,10 @@ class ProcessSelectDialog(ctk.CTkToplevel):
         # OK / Cancel
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(row=5, column=0, columnspan=3, sticky="e", padx=12, pady=(8, 12))
-        ctk.CTkButton(btn_frame, text="Cancel", width=90, command=self._on_cancel).pack(
+        ctk.CTkButton(btn_frame, text=tr("common.cancel"), width=90, command=self._on_cancel).pack(
             side="right", padx=(8, 0)
         )
-        ctk.CTkButton(btn_frame, text="OK", width=90, command=self._on_ok).pack(
+        ctk.CTkButton(btn_frame, text=tr("common.ok"), width=90, command=self._on_ok).pack(
             side="right"
         )
 
@@ -298,7 +297,7 @@ class ProcessSelectDialog(ctk.CTkToplevel):
 
         if not self._ctrl.sources:
             empty_label = ctk.CTkLabel(
-                self._list_frame, text="(該当プロセスなし — 音を鳴らしてから ↻ 更新)",
+                self._list_frame, text=tr("dialog.process_select.no_process"),
                 text_color="#94a3b8",
             )
             empty_label.pack(anchor="w", padx=4, pady=8)
@@ -337,9 +336,9 @@ class ProcessSelectDialog(ctk.CTkToplevel):
 
     def _sync_audition_button(self) -> None:
         if self._ctrl.is_auditioning:
-            self._audition_btn.configure(text="■ 停止")
+            self._audition_btn.configure(text=tr("dialog.process_select.audition_stop"))
         else:
-            self._audition_btn.configure(text="▶ 試聴開始")
+            self._audition_btn.configure(text=tr("dialog.process_select.audition_start"))
 
     # ----------------------------------------------------------
     def _schedule_poll(self) -> None:

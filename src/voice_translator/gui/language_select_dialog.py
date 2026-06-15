@@ -21,6 +21,7 @@ from typing import Sequence
 import customtkinter as ctk
 
 from voice_translator.common.languages import format_language
+from voice_translator.gui.i18n import tr
 from voice_translator.gui.logic.language_filter import filter_languages
 
 
@@ -37,14 +38,14 @@ class LanguageSelectDialog(ctk.CTkToplevel):
         *,
         codes: Sequence[str],
         initial: str | None = None,
-        title: str = "言語を選択",
+        title: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._codes: list[str] = list(codes)
         self.result_code: str | None = None
         self._row_widgets: list[ctk.CTkButton] = []
 
-        self.title(title)
+        self.title(title if title is not None else tr("dialog.language_select.title"))
         self.geometry("360x460")
         self.transient(parent)
         try:
@@ -59,11 +60,12 @@ class LanguageSelectDialog(ctk.CTkToplevel):
 
     # ----------------------------------------------------------
     def _build_widgets(self, initial: str | None) -> None:
-        ctk.CTkLabel(self, text="言語を検索(コード / 英語名):", anchor="w").grid(
+        ctk.CTkLabel(self, text=tr("dialog.language_select.search_label"), anchor="w").grid(
             row=0, column=0, sticky="ew", padx=12, pady=(12, 2)
         )
         self._search = ctk.CTkEntry(
-            self, textvariable=self._query_var, placeholder_text="例: swahili / swh",
+            self, textvariable=self._query_var,
+            placeholder_text=tr("dialog.language_select.search_placeholder"),
         )
         self._search.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
         self._query_var.trace_add("write", lambda *_: self._refresh_list())
@@ -71,7 +73,7 @@ class LanguageSelectDialog(ctk.CTkToplevel):
         self._list_frame = ctk.CTkScrollableFrame(self)
         self._list_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 8))
 
-        ctk.CTkButton(self, text="Cancel", width=90, command=self._on_cancel).grid(
+        ctk.CTkButton(self, text=tr("common.cancel"), width=90, command=self._on_cancel).grid(
             row=3, column=0, sticky="e", padx=12, pady=(0, 12)
         )
 
@@ -96,7 +98,7 @@ class LanguageSelectDialog(ctk.CTkToplevel):
         matches = filter_languages(self._codes, self._query_var.get())
         if not matches:
             empty = ctk.CTkButton(
-                self._list_frame, text="(一致なし)", state="disabled",
+                self._list_frame, text=tr("dialog.language_select.no_match"), state="disabled",
                 fg_color="transparent",
             )
             empty.pack(anchor="w", fill="x", padx=2, pady=1)

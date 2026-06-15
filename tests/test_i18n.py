@@ -25,9 +25,15 @@ from voice_translator.gui.i18n import _CATALOGS, _DEFAULT_LOCALE, all_keys, curr
 _SRC_ROOT = Path(voice_translator.__file__).resolve().parent
 _I18N_FILE = _SRC_ROOT / "gui" / "i18n.py"
 _LOGIC_DIR = _SRC_ROOT / "gui" / "logic"
-# CJK 残存検査の対象(キー化済みであるべきモジュール)。Phase 3 で gui/ 直下へ拡大予定。
+# CJK 残存検査の対象(キー化済みモジュール)。Phase 3 で widget を変換するたびに追加し、
+# 完了時に gui/ 配下すべて(カタログ本体 i18n.py を除く)を覆う。
+_GUI_DIR = _SRC_ROOT / "gui"
 _KEYED_FILES: tuple[Path, ...] = tuple(_LOGIC_DIR.glob("*.py")) + (
-    _SRC_ROOT / "gui" / "layer_settings_schema.py",
+    _GUI_DIR / "layer_settings_schema.py",
+    _GUI_DIR / "language_select_dialog.py",
+    _GUI_DIR / "process_select_dialog.py",
+    _GUI_DIR / "consent_dialog.py",
+    _GUI_DIR / "credential_dialog.py",
 )
 # schema が SettingField に持たせる i18n キー登録源(`tr()` ではなくこの keyword で登録)。
 _KEY_REGISTERING_KWARGS = {"label_key", "help_key"}
@@ -207,26 +213,54 @@ def test_tr_kwargs_cover_placeholders() -> None:
     assert not bad, f"tr() 呼び出しのテンプレ引数不足: {bad}"
 
 
+# ログ/例外メッセージは UI 表示ではなく dev 向け(日本語のままでよい)。CJK 検査から除外する。
+_LOG_METHODS = {
+    "debug", "info", "warning", "warn", "error", "exception", "critical", "log",
+}
+
+
+def _cjk_skip_ids(tree: ast.AST) -> set[int]:
+    """CJK 検査でスキップすべき文字列 Constant の id 集合。
+
+    除外対象: docstring / 式文の文字列 / logging 呼び出しの引数 / raise の引数。
+    """
+    skip: set[int] = set()
+
+    def _mark_subtree(node: ast.AST) -> None:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                skip.add(id(sub))
+
+    for node in ast.walk(tree):
+        if isinstance(
+            node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            body = getattr(node, "body", [])
+            if body and isinstance(body[0], ast.Expr) and isinstance(
+                body[0].value, ast.Constant
+            ):
+                skip.add(id(body[0].value))
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            skip.add(id(node.value))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _LOG_METHODS
+        ):
+            _mark_subtree(node)
+        if isinstance(node, ast.Raise):
+            _mark_subtree(node)
+    return skip
+
+
 def test_no_cjk_literals_in_keyed_modules() -> None:
-    # キー化済みであるべきモジュール(gui/logic + layer_settings_schema)に表示文言の
-    # 直書き(CJK 文字列リテラル)が残っていないこと。docstring / 式文は除外、
-    # 内部 sentinel は許可リストで除外。Phase 3 で gui/ 直下へ対象拡大予定。
+    # キー化済みであるべきモジュール(gui/ 配下、カタログ本体除く)に UI 表示文言の
+    # 直書き(CJK 文字列リテラル)が残っていないこと。docstring / 式文 / ログ・例外
+    # メッセージは除外。内部 sentinel 等は許可リストで除外。
     bad: list[str] = []
     for path in _KEYED_FILES:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        # docstring / 式文としての文字列(コメント代わり)の id を集めて除外する。
-        skip_ids: set[int] = set()
-        for node in ast.walk(tree):
-            if isinstance(
-                node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-            ):
-                body = getattr(node, "body", [])
-                if body and isinstance(body[0], ast.Expr) and isinstance(
-                    body[0].value, ast.Constant
-                ):
-                    skip_ids.add(id(body[0].value))
-            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-                skip_ids.add(id(node.value))
+        skip_ids = _cjk_skip_ids(tree)
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Constant)
@@ -236,4 +270,4 @@ def test_no_cjk_literals_in_keyed_modules() -> None:
                 and _CJK_RE.search(node.value)
             ):
                 bad.append(f"{path.name}:{node.lineno} {node.value!r}")
-    assert not bad, f"gui/logic に未 tr() の CJK 直書きが残存: {bad}"
+    assert not bad, f"gui に未 tr() の CJK 表示文言が残存: {bad}"

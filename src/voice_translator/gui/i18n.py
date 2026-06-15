@@ -214,6 +214,61 @@ _JA: dict[str, str] = {
         "16kHz×float32 で 5MB ≒ 約 78 秒分。"
         "「▶ 開始」を押した時に反映される。"
     ),
+    # --- common(複数 widget で共有する真に同一概念の文言) ---
+    "common.cancel": "Cancel",
+    "common.ok": "OK",
+    # --- dialog: ProcessSelectDialog ---
+    "dialog.process_select.title": "プロセス選択 — ProcTap",
+    "dialog.process_select.heading": "音声出力中のプロセス",
+    "dialog.process_select.description": (
+        "現在音を出している(または出す準備のできた)プロセスを表示しています。\n"
+        "選択して「試聴開始」で当該プロセスの音量が右のメータで確認できます。"
+    ),
+    "dialog.process_select.refresh": "↻ 更新",
+    "dialog.process_select.audition_start": "▶ 試聴開始",
+    "dialog.process_select.audition_stop": "■ 停止",
+    "dialog.process_select.no_process": "(該当プロセスなし — 音を鳴らしてから ↻ 更新)",
+    # --- dialog: ConsentDialog ---
+    "dialog.consent.title": "クラウド送信の同意確認",
+    "dialog.consent.heading": "クラウドサービスの利用同意",
+    "dialog.consent.default_data_summary": "音声データ(発話単位の PCM)とテキスト",
+    "dialog.consent.body": (
+        "backend: {backend}\n"
+        "送信先サービス: {service}\n"
+        "送信内容: {summary}\n\n"
+        "このサービスを使うと、上記のデータが外部サーバに送信されます。"
+        "サービス側のプライバシーポリシー/利用規約を確認のうえ、同意してください。"
+    ),
+    "dialog.consent.terms": "利用規約: {url}",
+    "dialog.consent.suppress": "今後このダイアログを表示しない(suppress_dialogs)",
+    "dialog.consent.cancel": "キャンセル",
+    "dialog.consent.accept": "同意して使用",
+    # --- dialog: CredentialDialog ---
+    "dialog.credential.title": "認証情報の入力 — {service}",
+    "dialog.credential.description": (
+        "下のフィールドに API キー等を入力し、「テスト」を押してください。"
+        "成功すると保存され、「動作開始」ボタンが押せるようになります。"
+    ),
+    "dialog.credential.no_spec": "このバックエンドは認証情報を要求していません。",
+    "dialog.credential.cancel": "キャンセル",
+    "dialog.credential.test": "テスト",
+    "dialog.credential.testing": "テスト中…",
+    "dialog.credential.browse": "参照…",
+    "dialog.credential.placeholder_file": "(参照ボタンで選択)",
+    "dialog.credential.placeholder_set": "●●●●●●●● (設定済み、変更時のみ入力)",
+    "dialog.credential.placeholder_unset": "(未設定)",
+    "dialog.credential.file_picker_title": "{label} のファイルを選択",
+    "dialog.credential.missing_fields": "未入力のフィールドがあります: {fields}",
+    "dialog.credential.internal_error": "検証中に内部エラー: {error}",
+    "dialog.credential.ok": "✓ 認証 OK — {message}",
+    "dialog.credential.saved": "保存しました",
+    "dialog.credential.failed": "✗ 認証失敗 — {message}",
+    "dialog.credential.unknown_cause": "原因不明",
+    # --- dialog: LanguageSelectDialog ---
+    "dialog.language_select.title": "言語を選択",
+    "dialog.language_select.search_label": "言語を検索(コード / 英語名):",
+    "dialog.language_select.search_placeholder": "例: swahili / swh",
+    "dialog.language_select.no_match": "(一致なし)",
 }
 
 _CATALOGS: dict[str, dict[str, str]] = {
