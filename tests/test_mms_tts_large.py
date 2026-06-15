@@ -33,18 +33,27 @@ class TestMmsRealVoice:
         from voice_translator.tts.mms_backend import MmsTtsBackend
 
         backend = MmsTtsBackend(device="cpu")
-        pcm, sr = backend.synthesize("Hello world.", "en")
+        pcm, sr = backend.synthesize("Hello world.", "eng")  # 正準 639-3
         assert isinstance(pcm, np.ndarray)
         assert pcm.dtype == np.float32
         assert pcm.size > 0
         assert sr == 16000  # MMS は 16kHz
+
+    def test_low_resource_language_loads(self) -> None:
+        """低資源言語(スワヒリ swh)も実 DL→合成できる(拡張集合の検証)。"""
+        from voice_translator.tts.mms_backend import MmsTtsBackend
+
+        backend = MmsTtsBackend(device="cpu")
+        pcm, sr = backend.synthesize("Habari za asubuhi.", "swh")
+        assert pcm.size > 0
+        assert sr == 16000
 
     def test_prefetch_then_cached(self) -> None:
         """prefetch 済み言語は再ロードなしで synthesize できる。"""
         from voice_translator.tts.mms_backend import MmsTtsBackend
 
         backend = MmsTtsBackend(device="cpu")
-        backend.prefetch_language("en")
-        assert "en" in backend._cache
-        pcm, sr = backend.synthesize("Test.", "en")
+        backend.prefetch_language("eng")
+        assert "eng" in backend._cache
+        pcm, sr = backend.synthesize("Test.", "eng")
         assert pcm.size > 0

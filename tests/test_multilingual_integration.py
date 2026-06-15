@@ -25,7 +25,7 @@ class TestMmsNllbIntersection:
         tts = MmsTtsBackend.supported_output_languages()
         tr = Nllb200TranslatorBackend.supported_target_languages()
         inter = restrict_to_tts(tr, tts)
-        for code in ("swa", "yor", "hau", "amh"):
+        for code in ("swh", "yor", "hau", "amh"):
             assert code in inter, f"{code} が翻訳∩TTS の積から抜けている"
         # 積は TTS 対応言語の部分集合(TTS が読めない言語は残さない)
         assert set(inter) <= set(tts)

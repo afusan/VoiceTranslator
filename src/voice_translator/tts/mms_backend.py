@@ -6,7 +6,7 @@
 
 設計:
 - **言語ごとにモデルが異なる**ため「言語単位の遅延ロード」を行う。内部に
-  `{iso639_1: _LoadedVoice}` の LRU キャッシュを持ち、上限を超えたら古い言語を破棄する
+  `{canonical639_3: _LoadedVoice}` の LRU キャッシュを持ち、上限を超えたら古い言語を破棄する
   (1 言語 ~0.5〜1GB の RAM を食うため既定上限は小さい)。
 - **DL を発話スレッドで起こすと会話が固まる**ため、出力言語が確定した時点で
   `prefetch_language()` を裏で呼び事前確保する配線を想定(GUI 側の責務)。`synthesize()`
@@ -16,10 +16,10 @@
 - モデルは **CC-BY-NC 4.0(非商用)**。NLLB と同じ扱いで README/LICENSE/同意表示に明示する。
 
 言語コードについて:
-- backend の I/F は ISO 639-1(本アプリ内部標準)。MMS のチェックポイントは ISO 639-3 の
-  ため、`_ISO1_TO_MMS` で対応付ける。低資源言語の多くは 639-1 を持たない(639-3 のみ)ため、
-  現状の対応表は **639-1 で表現できる高信頼の初期集合**に限る。639-3 までの開放は
-  言語コード体系の拡張(横断課題)で行う(`docs/design/feature-mms-multilingual/Plan.md`)。
+- backend の I/F は本アプリ内部標準の **ISO 639-3**。MMS チェックポイント名(`mms-tts-<code>`)も
+  639-3 なので、正準コードがそのままチェックポイント名になる(変換不要)。対応集合 `_MMS_LANGS`
+  は **MMS 実在チェックポイント ∩ NLLB-200** を機械的に確定したもので、「翻訳でき、かつ
+  読み上げできる」言語に限る(推測ゼロ。404 を出さない)。表示名は `common/languages.py`。
 """
 
 from __future__ import annotations
@@ -32,32 +32,30 @@ from typing import Any
 import numpy as np
 
 from voice_translator.common.errors import FatalError, SkipError
-from voice_translator.common.languages import LANGUAGE_NAMES, iso1_to_iso3, iso3_to_iso1
+from voice_translator.common.languages import LANGUAGE_NAMES
 from voice_translator.common.types import BackendCapabilities, ModelStatus
 
 from .backend import TtsBackend
 
-# ISO 639-1 → MMS チェックポイントの言語コード(ISO 639-3)。
-# 注意: これは「639-1 で表現できる」かつ「MMS にチェックポイントが存在する確度が高い」
-# 初期集合。MMS は個別言語/マクロ言語の区別(例: ペルシャ語 fas→pes、ネパール語 ne→npi)が
-# あり、思い込みで増やすと load 時に 404(NOT_DOWNLOADED)になる。拡張は MMS の言語一覧と
-# 突き合わせて行うこと(横断課題: 言語コード体系の 639-3 拡張)。
-_ISO1_TO_MMS: dict[str, str] = {
-    "en": "eng",
-    "es": "spa",
-    "fr": "fra",
-    "de": "deu",
-    "it": "ita",
-    "pt": "por",
-    "ru": "rus",
-    "ko": "kor",
-    "vi": "vie",
-    "tr": "tur",
-    "sw": "swh",  # スワヒリ語
-    "yo": "yor",  # ヨルバ語
-    "ha": "hau",  # ハウサ語
-    "am": "amh",  # アムハラ語
-}
+# MMS が読み上げ可能な言語(正準 ISO 639-3)。MMS チェックポイント名は
+# `facebook/mms-tts-<canonical>` で、コードは正準とそのまま一致する。
+# この集合は **MMS-TTS(HF 上に実在するチェックポイント)∩ NLLB-200(翻訳可能)** を
+# 機械的に突き合わせて確定したもの(推測ゼロ。HF レジストリで存在検証済み)。
+# 「翻訳でき、かつ読み上げできる」言語に限るので、出力言語候補として実用になる。
+# 更新手順: `facebook/mms-tts-*` の一覧と NLLB FLORES の基底コードの積を取り直す
+# (`docs/design/feature-mms-multilingual/gen_lang_table.py` が生成スクリプト。
+#  `common/languages.py` の名前表も追従)。
+_MMS_LANGS: frozenset[str] = frozenset({
+    "ace", "aka", "amh", "asm", "awa", "ayr", "azb", "bak", "bam", "ban", "bem",
+    "ben", "bod", "bul", "cat", "ceb", "crh", "cym", "deu", "dik", "dyu", "dzo",
+    "ell", "eng", "eus", "ewe", "fao", "fij", "fin", "fon", "fra", "grn", "guj",
+    "hat", "hau", "heb", "hin", "hne", "hun", "ilo", "ind", "isl", "jav", "kab",
+    "kac", "kan", "kaz", "kbp", "khm", "kik", "kin", "kir", "kor", "lao", "lug",
+    "mag", "mai", "mal", "mar", "min", "mos", "mya", "nld", "nus", "nya", "ory",
+    "pag", "pan", "pap", "pol", "por", "quy", "ron", "run", "rus", "sag", "shn",
+    "smo", "sna", "som", "spa", "sun", "swe", "swh", "tam", "taq", "tat", "tel",
+    "tgk", "tgl", "tha", "tir", "tpi", "tso", "tur", "ukr", "vie", "war", "yor",
+})
 
 _REPO_TEMPLATE = "facebook/mms-tts-{code}"
 
@@ -84,14 +82,11 @@ class MmsTtsBackend(TtsBackend):
     def supported_output_languages(cls) -> list[str]:
         """対応する読み上げ言語を正準(ISO 639-3)で返す。
 
-        内部表 `_ISO1_TO_MMS` は 639-1 キーなので 639-3 へ持ち上げ、言語テーブル
-        (`LANGUAGE_NAMES`)で表示可能なものに限る。未ロードでも答える必要があるため、
+        `_MMS_LANGS` のうち言語テーブル(`LANGUAGE_NAMES`)で表示可能なものに限る
+        (全コードに名前を用意しているので通常は全件)。未ロードでも答える必要があるため、
         ここでは transformers を import しない。
         """
-        return sorted(
-            c3 for c in _ISO1_TO_MMS
-            if (c3 := iso1_to_iso3(c)) in LANGUAGE_NAMES
-        )
+        return sorted(c for c in _MMS_LANGS if c in LANGUAGE_NAMES)
 
     def __init__(
         self,
@@ -141,12 +136,12 @@ class MmsTtsBackend(TtsBackend):
         出力言語の選択を契機にバックグラウンドでこれを呼ぶ。未対応言語は黙って no-op
         (`supported_output_languages` 外は事前確保しても使われない)。失敗は呼び出し側で握る。
 
-        `tgt_lang` は正準(639-3)。内部表は 639-1 キーなので落として引く。
+        `tgt_lang` は正準(639-3)= MMS チェックポイント名。
         """
-        iso1 = iso3_to_iso1((tgt_lang or "").strip())
-        if iso1 not in _ISO1_TO_MMS:
+        lang = (tgt_lang or "").strip()
+        if lang not in _MMS_LANGS:
             return
-        self._ensure_language(iso1)
+        self._ensure_language(lang)
 
     # ----------------------------------------------------------
     def _ensure_language(self, lang: str) -> _LoadedVoice:
@@ -174,11 +169,13 @@ class MmsTtsBackend(TtsBackend):
 
     # ----------------------------------------------------------
     def _load_voice(self, lang: str) -> _LoadedVoice:
-        """`facebook/mms-tts-<code>` を DL → VitsModel/Tokenizer をロードする。"""
-        mms_code = _ISO1_TO_MMS.get(lang)
-        if mms_code is None:
+        """`facebook/mms-tts-<code>` を DL → VitsModel/Tokenizer をロードする。
+
+        `lang` は正準 639-3 = MMS チェックポイント名(両者は一致する集合に限定済み)。
+        """
+        if lang not in _MMS_LANGS:
             raise SkipError(f"MMS は出力言語 {lang} に対応していません")
-        repo = _REPO_TEMPLATE.format(code=mms_code)
+        repo = _REPO_TEMPLATE.format(code=lang)
 
         import torch  # type: ignore
         from transformers import AutoTokenizer, VitsModel  # type: ignore
@@ -235,9 +232,9 @@ class MmsTtsBackend(TtsBackend):
         if not text:
             raise SkipError("TTS入力テキストが空です")
 
-        # tgt_lang は正準(639-3)。内部表は 639-1 キーなので落として引く。
-        lang = iso3_to_iso1((tgt_lang or "").strip())
-        if lang not in _ISO1_TO_MMS:
+        # tgt_lang は正準(639-3)= MMS チェックポイント名。
+        lang = (tgt_lang or "").strip()
+        if lang not in _MMS_LANGS:
             raise SkipError(f"MMS は出力言語 {tgt_lang} に対応していません")
 
         voice = self._ensure_language(lang)

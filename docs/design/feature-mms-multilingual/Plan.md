@@ -26,10 +26,14 @@
 - [x] **Phase 2-a: 翻訳との AND 連携(仕組み)**(2026-06-16)。639-3 正準化により MMS と NLLB が
       同一の内部コードで申告 → 既存 `restrict_to_tts` の積がそのまま広がる。`tests/test_multilingual_integration.py`
       でスワヒリ/ヨルバ/ハウサ/アムハラが翻訳∩TTS に残ることを固定。新しい仕組みは不要だった。
-- [ ] **Phase 2-b: 言語カバレッジ拡充**(残・要判断)。`_ISO1_TO_MMS`(現 14)/ `ISO_TO_NLLB` に
-      低資源言語を追加して実カバーを広げる。**各 MMS チェックポイント ID は実 DL で検証要**
-      (推測追加は 404 リスク)。639-3 のみの言語は `LANGUAGE_NAMES` に 639-3 キーで直接足す。
-      追加する言語セットの範囲はユーザと相談。
+- [x] **Phase 2-b: 言語カバレッジ拡充**(2026-06-16、ユーザ選択=大きく拡充)。HF レジストリの
+      `facebook/mms-tts-*` 実在チェックポイント(1140)と NLLB tokenizer の FLORES 基底コードの
+      **積=99 言語**を機械的に確定(推測ゼロ・404 なし)。これを `_MMS_LANGS` / `CANONICAL_TO_NLLB` /
+      `LANGUAGE_NAMES` に反映(スワヒリ/ヨルバ/ハウサ/アムハラ/エウェ/チェワ/ガンダ/キクユ/
+      ティグリニャ等の低資源・アフリカ系を多数追加)。MMS チェックポイント名=正準 639-3 に一致する
+      ため MMS backend を canonical キーへ簡素化(`_ISO1_TO_MMS` 廃止)。Swahili の正準を swh に統一
+      (NLLB/MMS と整合)。検証(Italian は MMS 非対応=元の推測が誤りと判明、除外)。再生成元は
+      `gen_lang_table.py`。large テストで eng + swh の実 DL→合成を通過確認。
 - [ ] **Phase 3: 言語選択フィルタリング**(着手時に方式決定)。
 - [ ] **Phase 4: ドキュメント/コマンド回りの最終確認**。
 

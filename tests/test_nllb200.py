@@ -246,13 +246,18 @@ class TestSupportedTargetLanguages:
         )
 
         from voice_translator.common.languages import iso1_to_iso3
+        from voice_translator.translator.nllb200_backend import CANONICAL_TO_NLLB
 
         langs = Nllb200TranslatorBackend.supported_target_languages()
         # 主要言語が含まれる(申告は正準 639-3)
         for code in ["eng", "jpn", "zho", "kor", "spa", "fra", "deu"]:
             assert code in langs, f"{code} が抜けている"
-        # ISO_TO_NLLB(639-1 キー)を 639-3 へ持ち上げた集合と一致する
-        assert set(langs) == {iso1_to_iso3(k) for k in ISO_TO_NLLB}
+        # 低資源拡張(MMS∩NLLB)の代表も含まれる
+        for code in ["swh", "yor", "hau", "ewe", "nya"]:
+            assert code in langs, f"{code} が抜けている"
+        # legacy 639-1 表 + 正準拡張表の和(いずれも 639-3 に揃えた集合)と一致する
+        expected = {iso1_to_iso3(k) for k in ISO_TO_NLLB} | set(CANONICAL_TO_NLLB)
+        assert set(langs) == expected
         # ソート済み
         assert langs == sorted(langs)
 
