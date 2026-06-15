@@ -92,6 +92,22 @@ def test_en_renders_without_placeholder_leftover() -> None:
         set_locale(original)
 
 
+def test_all_locales_render_templated_keys() -> None:
+    # 全ロケールで、引数付きテンプレートが例外なく解決できる(zh/es の漏れ・誤記検出)。
+    original = current_locale()
+    try:
+        for loc in available_locales():
+            set_locale(loc)
+            # 代表的な引数付きキーを全て描画してみる(失敗すれば KeyError/IndexError)。
+            tr("control_panel.latency", avg="1.0", count=2)
+            tr("language.src_fallback", old="a", new="b", backend="x", code="c")
+            tr("dialog.consent.body", backend="b", service="s", summary="d")
+            tr("restart.failed", device="入力", message="m")
+            tr("dialog.layer_settings.input_error", label="L", error="e")
+    finally:
+        set_locale(original)
+
+
 def test_locale_display_name() -> None:
     assert locale_display_name("ja") == "日本語"
     assert locale_display_name("xx") == "xx"  # 未知はコードをそのまま
