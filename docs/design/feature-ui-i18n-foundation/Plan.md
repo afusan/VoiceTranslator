@@ -136,7 +136,11 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
 - **`docs/design/Architecture.html` §9**(GUI 内部構成と UI 実装規約): 文言は `gui/i18n.py` に
   集約し `tr()` 経由で引く、という規約を追記したか(「判断は logic、widget は塗るだけ」の
   延長として「文言は i18n、logic/widget は tr() で引く」)。
-- **`CLAUDE.md` の UI 実装規約**: 文言の置き場が messages.py + tr() に変わったことを
-  反映すべきか判断(土台のみなので最小限。後続フェーズで widget 置換が済んでから本格反映でも可)。
-- **`docs/manual.md`**: 本ブランチでは言語切替 UI を作らないため更新不要(Phase 4 で追記)。
+- **`CLAUDE.md` の UI 実装規約**: 反映済 — 「表示文言は `gui/i18n.py` に集約し `tr()` で引く」+
+  「購読 widget は destroy で解除」に更新(Phase 3/4 完了を受けて本格反映)。
+- **`docs/manual.md`**: 反映済 — §5-2c「アプリの表示言語(UI)」を追加(🌐・ja/en/zh/es・停止中のみ・
+  翻訳言語とは独立)。翻訳言語(§5-2)との混同を避ける注記も入れた。
 - 反映が済んだら、この節のチェック結果を一言コミットに残す。
+
+**マージ前チェック結果(全フェーズ完了時点)**: Class.md / Architecture.html §9 / CLAUDE.md /
+manual.md すべて反映済み。恒常ドキュメントへの漏れなし。
