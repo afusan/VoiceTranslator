@@ -147,18 +147,19 @@ class TestTranscribe:
 
         from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
         backend = GoogleSttAsrBackend(credentials_path=json_path)
-        text, lang = backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="ja")
+        text, lang = backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="jpn")
         assert text == "hello world"
-        assert lang == "ja"  # hint がそのまま返る
+        assert lang == "jpn"  # hint(正準 639-3)がそのまま返る
 
     def test_auto_hint_uses_default_language(self, fake_google) -> None:
         fake_client, fake_speech, json_path = fake_google
         fake_client.recognize = MagicMock(return_value=_make_response_with_text("text"))
 
         from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
+        # default_language に legacy 639-1 を渡しても正準化して受ける。
         backend = GoogleSttAsrBackend(credentials_path=json_path, default_language="ja")
         text, lang = backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="auto")
-        assert lang == "ja"
+        assert lang == "jpn"  # 内部コードは正準 639-3 で返る
         # config に渡る language_code が BCP-47 (ja-JP) になっているか
         config_kwargs = fake_speech.RecognitionConfig.call_args.kwargs
         assert config_kwargs["language_code"] == "ja-JP"
@@ -174,7 +175,7 @@ class TestTranscribe:
         from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
         backend = GoogleSttAsrBackend(credentials_path=json_path)
         with pytest.raises(FatalError):
-            backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="en")
+            backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="eng")
 
     def test_other_error_raises_recoverable(self, fake_google) -> None:
         fake_client, _, json_path = fake_google
@@ -187,7 +188,7 @@ class TestTranscribe:
         from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
         backend = GoogleSttAsrBackend(credentials_path=json_path)
         with pytest.raises(RecoverableError):
-            backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="en")
+            backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="eng")
 
 
 # ============================================================
@@ -206,9 +207,9 @@ class TestSupportedInputLanguages:
     def test_includes_major_languages(self) -> None:
         from voice_translator.asr.google_stt_backend import GoogleSttAsrBackend
         langs = GoogleSttAsrBackend.supported_input_languages()
-        assert "en" in langs
-        assert "ja" in langs
-        assert "zh" in langs
+        assert "eng" in langs  # 正準 639-3 で申告
+        assert "jpn" in langs
+        assert "zho" in langs
 
     def test_does_not_support_auto_detect(self) -> None:
         """Google STT は本ブランチでは detect_language を扱わないので False。"""

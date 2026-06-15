@@ -66,8 +66,8 @@ def compute_tgt_selection(
 
     - supported が空なら fallback_pool を候補にする
     - "auto" は除外(出力言語に「自動」は意味を持たない)+ 重複除去 + ソート
-    - current が候補に無ければ ja > en > 先頭 の順で fallback
-      (本アプリは日本語主用途のため ja 優先)
+    - current が候補に無ければ jpn > eng > 先頭 の順で fallback
+      (本アプリは日本語主用途のため jpn 優先。コードは内部標準の ISO 639-3)
     """
     codes = list(supported) if supported else list(fallback_pool)
     codes = sorted(set(c for c in codes if c != "auto"))
@@ -75,10 +75,10 @@ def compute_tgt_selection(
     if current in codes:
         return LanguageSelection(codes=codes, selected=current, fallback_from=None)
 
-    if "ja" in codes:
-        new_code = "ja"
-    elif "en" in codes:
-        new_code = "en"
+    if "jpn" in codes:
+        new_code = "jpn"
+    elif "eng" in codes:
+        new_code = "eng"
     else:
         new_code = codes[0]
     return LanguageSelection(codes=codes, selected=new_code, fallback_from=current)

@@ -121,8 +121,8 @@ class TestTranslate:
     def test_empty_text_returns_empty(self, fake_httpx) -> None:
         from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
         b = DeepLTranslatorBackend(api_key="test:fx")
-        assert b.translate("", "en", "ja") == ""
-        assert b.translate("   ", "en", "ja") == ""
+        assert b.translate("", "eng", "jpn") == ""
+        assert b.translate("   ", "eng", "jpn") == ""
 
     def test_success(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -131,7 +131,8 @@ class TestTranslate:
         ))
         from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
         b = DeepLTranslatorBackend(api_key="test:fx")
-        result = b.translate("hello", "en", "ja")
+        # translate は今後正準 639-3 を受け取る(境界で 639-1 に落として DeepL コードへ)
+        result = b.translate("hello", "eng", "jpn")
         assert result == "こんにちは"
         # ペイロード確認
         data = client.post.call_args.kwargs["data"]
@@ -146,7 +147,7 @@ class TestTranslate:
         ))
         from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
         b = DeepLTranslatorBackend(api_key="test:fx")
-        b.translate("hi", "auto", "ja")
+        b.translate("hi", "auto", "jpn")
         data = client.post.call_args.kwargs["data"]
         assert "source_lang" not in data
 
@@ -156,7 +157,7 @@ class TestTranslate:
         from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
         b = DeepLTranslatorBackend(api_key="bad:fx")
         with pytest.raises(FatalError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_456_fatal_quota(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -164,7 +165,7 @@ class TestTranslate:
         from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
         b = DeepLTranslatorBackend(api_key="test:fx")
         with pytest.raises(FatalError, match="クォータ"):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_429_recoverable(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -172,7 +173,7 @@ class TestTranslate:
         from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
         b = DeepLTranslatorBackend(api_key="test:fx")
         with pytest.raises(RecoverableError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_network_error_recoverable(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -180,7 +181,7 @@ class TestTranslate:
         from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
         b = DeepLTranslatorBackend(api_key="test:fx")
         with pytest.raises(RecoverableError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
     def test_empty_response_raises_skip(self, fake_httpx) -> None:
         _, client = fake_httpx
@@ -188,7 +189,7 @@ class TestTranslate:
         from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
         b = DeepLTranslatorBackend(api_key="test:fx")
         with pytest.raises(SkipError):
-            b.translate("hi", "en", "ja")
+            b.translate("hi", "eng", "jpn")
 
 
 # ============================================================
@@ -206,7 +207,7 @@ class TestSupportedTargetLanguages:
     def test_includes_majors(self) -> None:
         from voice_translator.translator.deepl_backend import DeepLTranslatorBackend
         langs = DeepLTranslatorBackend.supported_target_languages()
-        for code in ["en", "ja", "zh", "de", "fr"]:
+        for code in ["eng", "jpn", "zho", "deu", "fra"]:
             assert code in langs
 
     def test_all_codes_in_common_language_table(self) -> None:

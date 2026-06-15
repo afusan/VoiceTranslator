@@ -28,6 +28,7 @@ from voice_translator.common.errors import (
     RecoverableError,
     SkipError,
 )
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import (
     INTERNAL_SAMPLE_RATE,
     BackendCapabilities,
@@ -53,7 +54,8 @@ _ISO_TO_BCP47: dict[str, str] = {
     "bg": "bg-BG", "ca": "ca-ES",
 }
 
-# 上の辞書から自動生成する「対応言語コード(ISO 639-1)」一覧
+# 上の辞書から自動生成する「対応言語コード(ISO 639-1)」一覧。
+# 申告は正準(639-3)に持ち上げる(下の supported_input_languages 参照)。
 _SUPPORTED_INPUT_LANGUAGES: tuple[str, ...] = tuple(sorted(_ISO_TO_BCP47.keys()))
 
 
@@ -84,12 +86,13 @@ class GoogleSttAsrBackend(AsrBackend):
         self,
         *,
         credentials_path: str | None = None,
-        default_language: str = "en",
+        default_language: str = "eng",
     ) -> None:
         super().__init__()  # status=INIT
         # default_language は src_lang_hint="auto" のとき API に渡すデフォルト言語
         # (Google STT は言語必須なので、auto を本 backend では「default 言語で投げる」と読み替える)。
-        self._default_language = default_language
+        # 内部コードは正準(639-3)。legacy 639-1 を渡されても受けられるよう正準化する。
+        self._default_language = iso1_to_iso3(default_language)
         self._credentials_path = (credentials_path or "").strip()
 
         if not self._credentials_path:
@@ -183,8 +186,13 @@ class GoogleSttAsrBackend(AsrBackend):
 
         wav_bytes = _pcm_to_wav_bytes(pcm)
         # auto なら default_language を使う(Google STT は language_code 必須)。
-        iso = src_lang_hint if src_lang_hint not in ("auto", "", None) else self._default_language
-        bcp47 = _iso_to_bcp47(iso)
+        # iso は正準(639-3)で扱い、BCP-47 変換表(639-1 キー)に渡す直前で 639-1 に落とす。
+        iso = (
+            src_lang_hint
+            if src_lang_hint not in ("auto", "", None)
+            else self._default_language
+        )
+        bcp47 = _iso_to_bcp47(iso3_to_iso1(iso))
 
         speech = self._speech_module
         try:
@@ -235,7 +243,8 @@ class GoogleSttAsrBackend(AsrBackend):
     # ----------------------------------------------------------
     @classmethod
     def supported_input_languages(cls) -> list[str]:
-        return list(_SUPPORTED_INPUT_LANGUAGES)
+        # 元リストは 639-1。正準(639-3)へ持ち上げて申告する。
+        return sorted(iso1_to_iso3(c) for c in _SUPPORTED_INPUT_LANGUAGES)
 
     @classmethod
     def supports_auto_detect(cls) -> bool:

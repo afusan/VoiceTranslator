@@ -19,7 +19,7 @@ from .errors import FatalError
 DEFAULT_CONFIG: dict[str, Any] = {
     "languages": {
         "src": "auto",
-        "tgt": "ja",
+        "tgt": "jpn",   # 内部標準 = ISO 639-3(Japanese)。legacy "ja" は load 時に正規化。
     },
     "devices": {
         "input": None,   # 未設定。起動時に GUI で選択させる。
@@ -229,6 +229,25 @@ class ConfigStore:
         if not isinstance(loaded, dict):
             raise FatalError(f"設定ファイルの構造が不正(dictではない): {self._path}")
         self._data = _merge_defaults(DEFAULT_CONFIG, loaded)
+        _normalize_language_codes(self._data)
+
+
+def _normalize_language_codes(data: dict[str, Any]) -> None:
+    """`languages.src` / `languages.tgt` を正準(ISO 639-3)へ正規化する(in-place)。
+
+    内部標準を 639-3 に移行したため、legacy 639-1(`"ja"`)で保存された既存 config を
+    読込時に `"jpn"` へ揃える後方互換処理。未知コードは passthrough(将来 639-3 で
+    足す低資源言語を壊さない)。
+    """
+    from .languages import to_canonical
+
+    langs = data.get("languages")
+    if not isinstance(langs, dict):
+        return
+    for key in ("src", "tgt"):
+        val = langs.get(key)
+        if isinstance(val, str) and val:
+            langs[key] = to_canonical(val)
 
 
 def _deepcopy(d: dict[str, Any]) -> dict[str, Any]:

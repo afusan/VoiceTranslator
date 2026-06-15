@@ -15,6 +15,7 @@ from voice_translator.common.device import (
     resolve_ctranslate2_device,
 )
 from voice_translator.common.errors import FatalError, SkipError
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import BackendCapabilities, ModelInfo, ModelStatus
 
 from .backend import AsrBackend
@@ -149,7 +150,11 @@ class FasterWhisperAsrBackend(AsrBackend):
         if pcm is None or (hasattr(pcm, "size") and pcm.size == 0):
             raise SkipError("ASR入力PCMが空です")
 
-        language = None if src_lang_hint in ("auto", "", None) else src_lang_hint
+        # 入力ヒントは正準(639-3)。Whisper は 639-1 を要求するので落としてから渡す。
+        language = (
+            None if src_lang_hint in ("auto", "", None)
+            else iso3_to_iso1(src_lang_hint)
+        )
         try:
             segments_iter, info = self._model.transcribe(
                 pcm,
@@ -164,8 +169,9 @@ class FasterWhisperAsrBackend(AsrBackend):
 
         text = text.strip()
         if src_lang_hint in ("auto", "", None):
+            # Whisper の検出言語は 639-1。正準(639-3)へ持ち上げて返す。
             detected = getattr(info, "language", None) or ""
-            lang_out = detected or "auto"
+            lang_out = iso1_to_iso3(detected) if detected else "auto"
         else:
             lang_out = src_lang_hint
         return text, lang_out
@@ -196,8 +202,9 @@ class FasterWhisperAsrBackend(AsrBackend):
     # faster-whisper / openai-whisper / OpenAI Whisper API の 3 backend で共有する。
     @classmethod
     def supported_input_languages(cls) -> list[str]:
+        # Whisper 語彙は 639-1。正準(639-3)へ持ち上げて申告する。
         from voice_translator.common.whisper_languages import WHISPER_INPUT_LANGUAGES
-        return list(WHISPER_INPUT_LANGUAGES)
+        return sorted(iso1_to_iso3(c) for c in WHISPER_INPUT_LANGUAGES)
 
     @classmethod
     def supports_auto_detect(cls) -> bool:

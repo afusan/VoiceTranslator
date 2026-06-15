@@ -11,6 +11,7 @@ from __future__ import annotations
 from voice_translator.common.cache_check import check_nllb200
 from voice_translator.common.device import resolve_torch_device
 from voice_translator.common.errors import FatalError, SkipError
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import BackendCapabilities, ModelInfo, ModelStatus
 
 from .backend import TranslatorBackend
@@ -50,10 +51,13 @@ _RECOMMENDED_MODELS: tuple[ModelInfo, ...] = (
 )
 
 
-# ISO 639-1 → NLLB-200 言語コード。
+# ISO 639-1 → NLLB-200 言語コード(FLORES 形式 "<lang>_<script>")。
 # 詳しい一覧は https://github.com/facebookresearch/flores/blob/main/flores200/README.md
-# NLLB-200 本体は 200 言語対応だが、UI に並べて意味があるメジャー言語(ISO 639-1
-# 表現可能 + 共通言語テーブルに英語名がある言語)に絞っている。上流追加時はここを追従。
+# NLLB-200 本体は 200 言語対応だが、UI に並べて意味があるメジャー言語に絞っている。
+# 内部標準は 639-3 だが、この表は「内部コード → ベンダ形式」のネイティブ変換表なので
+# 639-1 キーのまま据え置き、境界(`_to_nllb_code` / 申告)で 639-3↔639-1 を一段挟む。
+# 上流追加時はここを追従(639-1 を持たない低資源言語を足すときは 639-3 キーで足し、
+# `_to_nllb_code` の passthrough に乗せる)。
 ISO_TO_NLLB: dict[str, str] = {
     # MVP の 17 言語
     "en": "eng_Latn",
@@ -139,11 +143,16 @@ ISO_TO_NLLB: dict[str, str] = {
 }
 
 
-def _to_nllb_code(iso: str, *, fallback: str) -> str:
-    """ISO 639-1 を NLLB-200 のコードに変換。未知/auto は fallback。"""
-    if not iso or iso == "auto":
+def _to_nllb_code(canonical: str, *, fallback: str) -> str:
+    """正準(ISO 639-3)を NLLB-200 のコードに変換。未知/auto は fallback。
+
+    変換表は 639-1 キーなので、正準を 639-1 に落としてから引く。639-1 を持たない
+    言語向けに、639-3 キー直引き(passthrough されたコード)も試す。
+    """
+    if not canonical or canonical == "auto":
         return fallback
-    return ISO_TO_NLLB.get(iso.lower(), fallback)
+    iso1 = iso3_to_iso1(canonical)
+    return ISO_TO_NLLB.get(iso1) or ISO_TO_NLLB.get(canonical, fallback)
 
 
 class Nllb200TranslatorBackend(TranslatorBackend):
@@ -252,7 +261,7 @@ class Nllb200TranslatorBackend(TranslatorBackend):
     # ----------------------------------------------------------
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
-            supported_languages=tuple(ISO_TO_NLLB.keys()),
+            supported_languages=tuple(sorted(iso1_to_iso3(k) for k in ISO_TO_NLLB)),
             requires_gpu=False,  # GPU があれば高速だが必須ではない
             is_cloud=False,
             requires_credentials=False,
@@ -271,10 +280,11 @@ class Nllb200TranslatorBackend(TranslatorBackend):
     # ----------------------------------------------------------
     @classmethod
     def supported_target_languages(cls) -> list[str]:
-        """ISO_TO_NLLB に登録した ISO 639-1 コードを返す(ソート済み)。
+        """対応言語を正準(ISO 639-3)で返す(ソート済み)。
 
+        変換表は 639-1 キーなので 639-3 へ持ち上げて申告する。
         クラスメソッド: UI が backend をロードせずに問い合わせる。
         本 backend は対称(同じセットで src/tgt 双方向 OK)なので
         supported_source_languages はオーバーライドせず default を使う。
         """
-        return sorted(ISO_TO_NLLB.keys())
+        return sorted(iso1_to_iso3(k) for k in ISO_TO_NLLB)

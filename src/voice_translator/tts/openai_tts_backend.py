@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 
 from voice_translator.common.errors import FatalError, RecoverableError, SkipError
+from voice_translator.common.languages import iso1_to_iso3
 from voice_translator.common.types import (
     BackendCapabilities,
     CredentialField,
@@ -41,8 +42,17 @@ class OpenAiTtsBackend(TtsBackend):
 
     @classmethod
     def supported_output_languages(cls) -> list[str]:
-        """OpenAI TTS は Whisper と同等の言語カバレッジ(50+ 言語)。"""
-        return [code for code in WHISPER_INPUT_LANGUAGES if code != "auto"]
+        """OpenAI TTS は Whisper と同等の言語カバレッジ(50+ 言語)。
+
+        共有リスト `WHISPER_INPUT_LANGUAGES` は 639-1 なので、申告は正準(639-3)へ
+        持ち上げる。synthesize は入力テキストから言語を推定し tgt_lang を使わないため、
+        ここでの申告変換のみで足りる。
+        """
+        return sorted(
+            iso1_to_iso3(code)
+            for code in WHISPER_INPUT_LANGUAGES
+            if code != "auto"
+        )
 
     @classmethod
     def credential_spec(cls) -> list[CredentialField]:

@@ -67,11 +67,11 @@ _LAYER_LABELS: list[tuple[LayerKind, str]] = [
     (LayerKind.OUTPUT, "音声出力"),
 ]
 
-# 翻訳先(tgt)言語の候補: 当面は固定リスト(Translator backend ごとの連動は別ブランチ)。
-# auto は出力言語としては意味が無いので含めない。
+# 翻訳先(tgt)言語の候補: backend 未登録/対応言語不明のときの fallback 固定リスト。
+# auto は出力言語としては意味が無いので含めない。コードは内部標準の ISO 639-3。
 _TGT_LANG_CHOICES: list[str] = [
-    "en", "ja", "zh", "ko", "es", "fr", "de", "it", "pt", "ru", "ar",
-    "hi", "th", "vi", "id", "tr",
+    "eng", "jpn", "zho", "kor", "spa", "fra", "deu", "ita", "por", "rus", "ara",
+    "hin", "tha", "vie", "ind", "tur",
 ]
 
 # ASR backend が未登録 / 対応言語不明 のときの fallback 候補(最低限の MVP セット)。
@@ -100,9 +100,9 @@ class SettingsPanel(ctk.CTkFrame):
         self._status_overridden: set[LayerKind] = set()
         self._capture_var = ctk.StringVar(value="(未選択)")
         self._output_var = ctk.StringVar(value="(未選択)")
-        # 言語プルダウンは表示形式 "en (English)" を保持。内部値(コード)と区別する。
+        # 言語プルダウンは表示形式 "eng (English)" を保持。内部値(コード)と区別する。
         initial_src = str(controller.get_setting("languages", "src", default="auto"))
-        initial_tgt = str(controller.get_setting("languages", "tgt", default="ja"))
+        initial_tgt = str(controller.get_setting("languages", "tgt", default="jpn"))
         self._src_var = ctk.StringVar(value=format_language(initial_src))
         self._tgt_var = ctk.StringVar(value=format_language(initial_tgt))
         self._src_dropdown: ctk.CTkOptionMenu | None = None  # 後で再構築するので保持
@@ -814,7 +814,7 @@ class SettingsPanel(ctk.CTkFrame):
         sel = compute_tgt_selection(
             restrict_to_tts(self._effective_target_languages(), tts_langs),
             current=str(
-                self._controller.get_setting("languages", "tgt", default="ja")
+                self._controller.get_setting("languages", "tgt", default="jpn")
             ),
             fallback_pool=restrict_to_tts(_TGT_LANG_CHOICES, tts_langs),
         )

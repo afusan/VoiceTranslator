@@ -132,14 +132,14 @@ class TestSettings:
 
     def test_save_and_load(self, populated_registry, config, tmp_path) -> None:
         ctrl = AppController(registry=populated_registry, config=config)
-        ctrl.set_setting("languages", "tgt", "fr")
+        ctrl.set_setting("languages", "tgt", "fra")  # 内部標準 = 639-3
         ctrl.save_settings()
         assert config.path.exists()
         # 再ロードで反映
         new_config = ConfigStore(config.path)
         ctrl2 = AppController(registry=populated_registry, config=new_config)
         ctrl2.load_settings()
-        assert ctrl2.get_setting("languages", "tgt") == "fr"
+        assert ctrl2.get_setting("languages", "tgt") == "fra"
 
 
 class TestStartPipeline:

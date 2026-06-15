@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from voice_translator.common.errors import FatalError, SkipError
+from voice_translator.common.languages import iso1_to_iso3
 from voice_translator.common.types import BackendCapabilities, ModelStatus
 
 from .backend import TtsBackend
@@ -47,19 +48,26 @@ class PiperTtsBackend(TtsBackend):
 
     @classmethod
     def supported_output_languages(cls) -> list[str]:
-        """`rhasspy/piper-voices` で配布される主要言語(ISO 639-1)。
+        """`rhasspy/piper-voices` で配布される主要言語を正準(ISO 639-3)で返す。
 
-        注意: 日本語(ja)は piper-voices に標準配布されていない
+        注意: 日本語(jpn)は piper-voices に標準配布されていない
         (2026-05 時点)。日本語 TTS は SAPI / OpenAI / Google / ElevenLabs を使う。
         他言語 voice を独自にダウンロード/学習している環境でも
         宣言ベースのため一律 false 表示になるリスクは受容。
+
+        内部の対応言語リテラルは 639-1 のまま据え置き、申告境界で 639-3 へ持ち上げる。
+        voice 選択は `voice_name`(`<lang_country>-...`)主体で tgt_lang を使わないため、
+        ここでの申告変換のみで足りる。
         """
-        return [
-            "ar", "ca", "cs", "cy", "da", "de", "el", "en", "es", "fa", "fi",
-            "fr", "hu", "is", "it", "ka", "kk", "lb", "ne", "nl", "no", "pl",
-            "pt", "ro", "ru", "sk", "sl", "sr", "sv", "sw", "tr", "uk", "vi",
-            "zh",
-        ]
+        return sorted(
+            iso1_to_iso3(c)
+            for c in (
+                "ar", "ca", "cs", "cy", "da", "de", "el", "en", "es", "fa", "fi",
+                "fr", "hu", "is", "it", "ka", "kk", "lb", "ne", "nl", "no", "pl",
+                "pt", "ro", "ru", "sk", "sl", "sr", "sv", "sw", "tr", "uk", "vi",
+                "zh",
+            )
+        )
 
     def __init__(
         self,

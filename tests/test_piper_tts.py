@@ -39,11 +39,12 @@ class TestSupportedOutputLanguages:
     def test_returns_major_piper_languages(self) -> None:
         from voice_translator.tts.piper_backend import PiperTtsBackend
         langs = PiperTtsBackend.supported_output_languages()
-        assert "en" in langs
-        assert "de" in langs
-        assert "fr" in langs
+        # 申告は正準(ISO 639-3)
+        assert "eng" in langs
+        assert "deu" in langs
+        assert "fra" in langs
         # 日本語は piper-voices 標準配布なし → 含まれない
-        assert "ja" not in langs
+        assert "jpn" not in langs
 
 
 class TestInitialization:

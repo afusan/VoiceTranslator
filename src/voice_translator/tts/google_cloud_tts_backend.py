@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 
 from voice_translator.common.errors import FatalError, RecoverableError, SkipError
+from voice_translator.common.languages import iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import (
     BackendCapabilities,
     CredentialField,
@@ -23,8 +24,9 @@ from .backend import TtsBackend
 
 _SAMPLERATE = 16000
 
-# tgt_lang(ISO 639-1) → Google TTS BCP-47 言語コードの代表マッピング。
-# voice_name を空にする場合のデフォルト言語選択に使う。
+# 内部コード(ISO 639-1) → Google TTS BCP-47 言語コードの代表マッピング。
+# voice_name を空にする場合のデフォルト言語選択に使う。表は 639-1 キーのまま据え置き、
+# synthesize 側で正準(639-3)の tgt_lang を 639-1 へ落としてから引く。
 _ISO_TO_BCP47 = {
     "en": "en-US", "ja": "ja-JP", "zh": "cmn-CN", "ko": "ko-KR",
     "fr": "fr-FR", "de": "de-DE", "es": "es-ES", "it": "it-IT",
@@ -42,8 +44,11 @@ class GoogleCloudTtsBackend(TtsBackend):
 
     @classmethod
     def supported_output_languages(cls) -> list[str]:
-        """Google Cloud TTS が voice を提供する主要言語(ISO 639-1)。"""
-        return sorted(_ISO_TO_BCP47.keys())
+        """Google Cloud TTS が voice を提供する主要言語を正準(ISO 639-3)で返す。
+
+        内部表 `_ISO_TO_BCP47` は 639-1 キーのまま据え置き、申告境界で 639-3 へ持ち上げる。
+        """
+        return sorted(iso1_to_iso3(c) for c in _ISO_TO_BCP47)
 
     @classmethod
     def credential_spec(cls) -> list[CredentialField]:
@@ -98,7 +103,8 @@ class GoogleCloudTtsBackend(TtsBackend):
         super().__init__()
         self._credentials_path = (credentials_path or "").strip() or None
         self._voice_name = voice_name.strip()
-        self._default_language = default_language
+        # default_language は内部コード扱い。legacy 639-1 設定値も受け付けるため正準(639-3)へ。
+        self._default_language = iso1_to_iso3(default_language)
 
         # 遅延 import
         try:
@@ -140,7 +146,9 @@ class GoogleCloudTtsBackend(TtsBackend):
 
         from google.cloud import texttospeech  # type: ignore
 
-        lang_iso = (tgt_lang or self._default_language).lower()
+        # tgt_lang / default_language は正準(639-3)。BCP-47 表は 639-1 キーなので落として引く。
+        canonical = (tgt_lang or self._default_language)
+        lang_iso = iso3_to_iso1(canonical).lower()
         bcp47 = _ISO_TO_BCP47.get(lang_iso, "en-US")
 
         synthesis_input = texttospeech.SynthesisInput(text=text)

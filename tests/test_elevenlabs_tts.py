@@ -33,9 +33,11 @@ class TestSupportedOutputLanguages:
     def test_includes_multilingual_v2_set(self) -> None:
         from voice_translator.tts.elevenlabs_backend import ElevenLabsTtsBackend
         langs = ElevenLabsTtsBackend.supported_output_languages()
-        # eleven_multilingual_v2 の代表
-        for code in ("en", "ja", "zh", "fr", "de", "ko", "hi"):
+        # eleven_multilingual_v2 の代表(申告は正準 ISO 639-3)
+        for code in ("eng", "jpn", "zho", "fra", "deu", "kor", "hin"):
             assert code in langs, f"{code} がリストに無い"
+        # 639-1 を持たない "fil" は passthrough で残る
+        assert "fil" in langs
 
 
 class TestInitialization:

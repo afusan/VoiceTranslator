@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 from voice_translator.common.errors import FatalError, RecoverableError, SkipError
+from voice_translator.common.languages import iso1_to_iso3
 from voice_translator.common.types import (
     BackendCapabilities,
     CredentialField,
@@ -44,17 +45,24 @@ class ElevenLabsTtsBackend(TtsBackend):
 
     @classmethod
     def supported_output_languages(cls) -> list[str]:
-        """`eleven_multilingual_v2` が公式に対応する 29 言語。
+        """`eleven_multilingual_v2` が公式に対応する 29 言語を正準(ISO 639-3)で返す。
 
         他モデル(`eleven_turbo_v2_5` = 32 言語、`eleven_monolingual_v1` = 英語のみ)
         の差は宣言できないので、多言語モデル基準で広めに宣言する
         (英語専用モデルを選んでも UI 側で対応 list は変えない単純化)。
+
+        内部の対応言語リテラルは 639-1 のまま据え置き、申告境界で 639-3 へ持ち上げる。
+        `"fil"`(タガログ)のような 639-1 を持たないコードは未知として passthrough される。
+        synthesize は voice_id 主体で tgt_lang を使わないため、ここでの申告変換のみで足りる。
         """
-        return [
-            "ar", "bg", "cs", "da", "de", "el", "en", "es", "fi", "fil",
-            "fr", "hi", "hr", "hu", "id", "it", "ja", "ko", "ms", "nl",
-            "pl", "pt", "ro", "ru", "sk", "sv", "ta", "tr", "uk", "vi", "zh",
-        ]
+        return sorted(
+            iso1_to_iso3(c)
+            for c in (
+                "ar", "bg", "cs", "da", "de", "el", "en", "es", "fi", "fil",
+                "fr", "hi", "hr", "hu", "id", "it", "ja", "ko", "ms", "nl",
+                "pl", "pt", "ro", "ru", "sk", "sv", "ta", "tr", "uk", "vi", "zh",
+            )
+        )
 
     @classmethod
     def credential_spec(cls) -> list[CredentialField]:

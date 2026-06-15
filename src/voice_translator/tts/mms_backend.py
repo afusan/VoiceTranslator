@@ -32,7 +32,7 @@ from typing import Any
 import numpy as np
 
 from voice_translator.common.errors import FatalError, SkipError
-from voice_translator.common.languages import LANGUAGE_NAMES
+from voice_translator.common.languages import LANGUAGE_NAMES, iso1_to_iso3, iso3_to_iso1
 from voice_translator.common.types import BackendCapabilities, ModelStatus
 
 from .backend import TtsBackend
@@ -82,12 +82,16 @@ class MmsTtsBackend(TtsBackend):
 
     @classmethod
     def supported_output_languages(cls) -> list[str]:
-        """対応する読み上げ言語(ISO 639-1)。
+        """対応する読み上げ言語を正準(ISO 639-3)で返す。
 
-        `_ISO1_TO_MMS` のうち言語テーブル(`LANGUAGE_NAMES`)で表示可能なものに限る。
-        未ロードでも答える必要があるため、ここでは transformers を import しない。
+        内部表 `_ISO1_TO_MMS` は 639-1 キーなので 639-3 へ持ち上げ、言語テーブル
+        (`LANGUAGE_NAMES`)で表示可能なものに限る。未ロードでも答える必要があるため、
+        ここでは transformers を import しない。
         """
-        return sorted(c for c in _ISO1_TO_MMS if c in LANGUAGE_NAMES)
+        return sorted(
+            c3 for c in _ISO1_TO_MMS
+            if (c3 := iso1_to_iso3(c)) in LANGUAGE_NAMES
+        )
 
     def __init__(
         self,
@@ -136,11 +140,13 @@ class MmsTtsBackend(TtsBackend):
         会話中の初回発話で 100〜150MB の DL が走るとパイプラインが固まるため、GUI は
         出力言語の選択を契機にバックグラウンドでこれを呼ぶ。未対応言語は黙って no-op
         (`supported_output_languages` 外は事前確保しても使われない)。失敗は呼び出し側で握る。
+
+        `tgt_lang` は正準(639-3)。内部表は 639-1 キーなので落として引く。
         """
-        code = (tgt_lang or "").strip()
-        if code not in _ISO1_TO_MMS:
+        iso1 = iso3_to_iso1((tgt_lang or "").strip())
+        if iso1 not in _ISO1_TO_MMS:
             return
-        self._ensure_language(code)
+        self._ensure_language(iso1)
 
     # ----------------------------------------------------------
     def _ensure_language(self, lang: str) -> _LoadedVoice:
@@ -229,9 +235,10 @@ class MmsTtsBackend(TtsBackend):
         if not text:
             raise SkipError("TTS入力テキストが空です")
 
-        lang = (tgt_lang or "").strip()
+        # tgt_lang は正準(639-3)。内部表は 639-1 キーなので落として引く。
+        lang = iso3_to_iso1((tgt_lang or "").strip())
         if lang not in _ISO1_TO_MMS:
-            raise SkipError(f"MMS は出力言語 {lang} に対応していません")
+            raise SkipError(f"MMS は出力言語 {tgt_lang} に対応していません")
 
         voice = self._ensure_language(lang)
 

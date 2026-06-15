@@ -15,9 +15,14 @@
       2 契機で、`prefetch_language` を持つ TTS backend に対しバックグラウンドで出力言語を事前確保。
       未ロード/能力なし backend は no-op、失敗は握る(synthesize 時の同期ロードへ縮退)。
       `tests/test_app_controller.py::TestTtsLanguagePrefetch`。
-- [ ] **横断課題: 言語コード 639-3 拡張**(本丸、未着手)。低資源言語(639-1 を持たない)を
-      開放するため `common/languages.py` を 639-3 まで拡張し、NLLB/MMS のコードを正規化。
-      これが終わると `_ISO1_TO_MMS` の縛り(14 言語)が外れアフリカ系言語が載る。
+- [x] **横断課題: 言語コード 639-3 正準化**(2026-06-16)。**内部標準を ISO 639-1 → ISO 639-3 に
+      全面移行**(ユーザ選択=正準化方式)。`common/languages.py` を 639-3 キーに再構成し、
+      `to_canonical`(legacy 639-1 config の後方互換)/ `iso1_to_iso3` / `iso3_to_iso1` を追加。
+      各 backend のベンダ変換表(NLLB→FLORES, Whisper 639-1, DeepL, BCP-47 等)は **639-1 キーの
+      まま据え置き**、申告と API 呼び出しの 2 境界で 639-3↔639-1 を変換(churn 最小)。config は
+      load 時に正準化、GUI 表示・fallback 定数も 639-3。全 ASR/Translator/TTS backend 移行済み、
+      small 全緑。これで 639-3 しか持たない低資源言語を `LANGUAGE_NAMES` に直接足せる土台が完成
+      (実際の言語追加=`_ISO1_TO_MMS`/`ISO_TO_NLLB` の拡充は Phase 2 で継続)。
 - [ ] **Phase 2: 翻訳との AND 連携**(横断課題に依存)。
 - [ ] **Phase 3: 言語選択フィルタリング**(着手時に方式決定)。
 - [ ] **Phase 4: ドキュメント/コマンド回りの最終確認**。

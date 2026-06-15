@@ -929,7 +929,7 @@ class AppController:
             return
         lang = (
             tgt if tgt is not None
-            else str(self._config.get("languages", "tgt", default="ja") or "ja")
+            else str(self._config.get("languages", "tgt", default="jpn") or "jpn")
         )
         if not lang:
             return
@@ -1246,7 +1246,7 @@ class AppController:
             )
 
             src_lang = self._config.get("languages", "src", default="auto")
-            tgt_lang = self._config.get("languages", "tgt", default="ja")
+            tgt_lang = self._config.get("languages", "tgt", default="jpn")
 
             self._ledger = UtteranceLedger()
             self._sequence = SequenceGenerator()
@@ -1376,7 +1376,7 @@ class AppController:
         tts = self._backends[LayerKind.TTS]
         output = self._backends[LayerKind.OUTPUT]
 
-        tgt_lang = str(self._config.get("languages", "tgt", default="ja") or "ja")
+        tgt_lang = str(self._config.get("languages", "tgt", default="jpn") or "jpn")
         # 1) 合成
         pcm, samplerate = tts.synthesize(text, tgt_lang)
         if pcm is None or getattr(pcm, "size", 0) == 0:

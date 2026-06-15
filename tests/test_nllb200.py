@@ -245,12 +245,14 @@ class TestSupportedTargetLanguages:
             Nllb200TranslatorBackend,
         )
 
+        from voice_translator.common.languages import iso1_to_iso3
+
         langs = Nllb200TranslatorBackend.supported_target_languages()
-        # 主要言語が含まれる
-        for code in ["en", "ja", "zh", "ko", "es", "fr", "de"]:
+        # 主要言語が含まれる(申告は正準 639-3)
+        for code in ["eng", "jpn", "zho", "kor", "spa", "fra", "deu"]:
             assert code in langs, f"{code} が抜けている"
-        # ISO_TO_NLLB に登録されたコードがすべて含まれる
-        assert set(langs) == set(ISO_TO_NLLB.keys())
+        # ISO_TO_NLLB(639-1 キー)を 639-3 へ持ち上げた集合と一致する
+        assert set(langs) == {iso1_to_iso3(k) for k in ISO_TO_NLLB}
         # ソート済み
         assert langs == sorted(langs)
 

@@ -54,7 +54,7 @@ class TestSupportedLanguages:
         monkeypatch.setitem(sys.modules, "transformers", None)
         from voice_translator.tts.mms_backend import MmsTtsBackend
 
-        assert "en" in MmsTtsBackend.supported_output_languages()
+        assert "eng" in MmsTtsBackend.supported_output_languages()
 
 
 class TestLazyCacheLru:

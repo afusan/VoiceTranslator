@@ -140,7 +140,7 @@ class TestTranscribe:
         backend = OpenAiWhisperApiAsrBackend(api_key="sk-test")
         text, lang = backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="auto")
         assert text == "hello"
-        assert lang == "en"  # english → en に正規化
+        assert lang == "eng"  # english → en → 正準 639-3 (eng)
 
     def test_language_hint_omits_language_parameter(self, fake_httpx) -> None:
         _, fake_client = fake_httpx
@@ -167,10 +167,10 @@ class TestTranscribe:
             OpenAiWhisperApiAsrBackend,
         )
         backend = OpenAiWhisperApiAsrBackend(api_key="sk-test")
-        text, lang = backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="ja")
+        text, lang = backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="jpn")
         data = fake_client.post.call_args.kwargs["data"]
-        assert data["language"] == "ja"
-        assert lang == "ja"  # hint を尊重
+        assert data["language"] == "ja"  # API には 639-1 で渡す
+        assert lang == "jpn"  # hint(正準 639-3)を尊重
 
     def test_huge_pcm_raises_fatal(self, fake_httpx) -> None:
         from voice_translator.asr.openai_whisper_api_backend import (
@@ -247,8 +247,8 @@ class TestSupportedInputLanguages:
             OpenAiWhisperApiAsrBackend,
         )
         langs = OpenAiWhisperApiAsrBackend.supported_input_languages()
-        assert "en" in langs
-        assert "ja" in langs
+        assert "eng" in langs  # 正準 639-3 で申告
+        assert "jpn" in langs
         assert len(langs) >= 90
 
     def test_supports_auto_detect(self) -> None:

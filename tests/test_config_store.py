@@ -75,15 +75,26 @@ class TestSaveTransform:
 
 class TestConfigStorePersistence:
     def test_save_and_load_roundtrip(self, tmp_config_path: Path) -> None:
+        # 内部標準は ISO 639-3。正準コードはそのまま往復する。
         store = ConfigStore(tmp_config_path)
-        store.set("languages", "src", "en")
-        store.set("languages", "tgt", "ja")
+        store.set("languages", "src", "eng")
+        store.set("languages", "tgt", "jpn")
         store.save()
 
         store2 = ConfigStore(tmp_config_path)
         store2.load()
-        assert store2.get("languages", "src") == "en"
-        assert store2.get("languages", "tgt") == "ja"
+        assert store2.get("languages", "src") == "eng"
+        assert store2.get("languages", "tgt") == "jpn"
+
+    def test_load_normalizes_legacy_639_1(self, tmp_config_path: Path) -> None:
+        """旧版が 639-1 で保存した config は load 時に正準(639-3)へ正規化される。"""
+        tmp_config_path.write_text(
+            "languages:\n  src: en\n  tgt: ja\n", encoding="utf-8"
+        )
+        store = ConfigStore(tmp_config_path)
+        store.load()
+        assert store.get("languages", "src") == "eng"
+        assert store.get("languages", "tgt") == "jpn"
 
     def test_load_nonexistent_file_keeps_defaults(self, tmp_config_path: Path) -> None:
         # ファイル未作成
@@ -93,12 +104,12 @@ class TestConfigStorePersistence:
 
     def test_load_merges_with_defaults(self, tmp_config_path: Path) -> None:
         """ファイル内のキーは優先、未指定キーは既定値で補完される。"""
-        tmp_config_path.write_text("languages:\n  src: en\n", encoding="utf-8")
+        tmp_config_path.write_text("languages:\n  src: eng\n", encoding="utf-8")
         store = ConfigStore(tmp_config_path)
         store.load()
-        assert store.get("languages", "src") == "en"
-        # 未指定キーは既定値が残る
-        assert store.get("languages", "tgt") == "ja"
+        assert store.get("languages", "src") == "eng"
+        # 未指定キーは既定値が残る(既定 tgt は正準 639-3)
+        assert store.get("languages", "tgt") == "jpn"
         assert store.get("backends", "asr") == "faster_whisper"
 
     def test_load_broken_yaml_raises_fatal(self, tmp_config_path: Path) -> None:

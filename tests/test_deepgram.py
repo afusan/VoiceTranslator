@@ -109,7 +109,7 @@ class TestTranscribe:
         backend = DeepgramAsrBackend(api_key="dg-test")
         text, lang = backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="auto")
         assert text == "hello"
-        assert lang == "en"
+        assert lang == "eng"  # 検出言語(639-1)を正準 639-3 へ持ち上げて返す
 
     def test_auto_passes_detect_language(self, fake_deepgram) -> None:
         fake_module, fake_client = fake_deepgram
@@ -132,11 +132,11 @@ class TestTranscribe:
 
         from voice_translator.asr.deepgram_backend import DeepgramAsrBackend
         backend = DeepgramAsrBackend(api_key="dg-test")
-        text, lang = backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="ja")
+        text, lang = backend.transcribe(np.zeros(16000, dtype=np.float32), src_lang_hint="jpn")
         opts_kwargs = fake_module.PrerecordedOptions.call_args.kwargs
-        assert opts_kwargs.get("language") == "ja"
+        assert opts_kwargs.get("language") == "ja"  # Deepgram には 639-1 で渡す
         assert "detect_language" not in opts_kwargs
-        assert lang == "ja"
+        assert lang == "jpn"  # hint(正準 639-3)を尊重
 
     def test_auth_error_raises_fatal(self, fake_deepgram) -> None:
         _, fake_client = fake_deepgram
@@ -180,8 +180,8 @@ class TestSupportedInputLanguages:
     def test_includes_major_languages(self) -> None:
         from voice_translator.asr.deepgram_backend import DeepgramAsrBackend
         langs = DeepgramAsrBackend.supported_input_languages()
-        assert "en" in langs
-        assert "ja" in langs
+        assert "eng" in langs  # 正準 639-3 で申告
+        assert "jpn" in langs
 
     def test_supports_auto_detect(self) -> None:
         from voice_translator.asr.deepgram_backend import DeepgramAsrBackend

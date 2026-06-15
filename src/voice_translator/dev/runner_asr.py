@@ -61,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--lang-hint", "-l", default="auto",
-        help='言語ヒント(ISO 639-1)。"auto" / "" で自動検出',
+        help='言語ヒント(ISO 639-3)。"auto" / "" で自動検出',
     )
     p.add_argument(
         "--seq-id", type=int, default=1,

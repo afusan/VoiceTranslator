@@ -233,8 +233,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="--text 指定時に使う TTS backend 名(BackendRegistry に登録された名前)。",
     )
     p.add_argument(
-        "--tgt-lang", default="ja",
-        help="--text 指定時に TTS へ渡す言語ヒント(SAPI のボイス選択用)。",
+        "--tgt-lang", default="jpn",
+        help="--text 指定時に TTS へ渡す言語ヒント(ISO 639-3。voice 選択用)。",
     )
 
     add_common_args(p)
