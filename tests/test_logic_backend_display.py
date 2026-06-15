@@ -60,8 +60,14 @@ class TestCaptureConversion:
         """kind 解決失敗(None)は backend 名そのまま(防衛挙動)。"""
         assert capture_internal_to_display("soundcard", None) == "soundcard"
 
-    def test_internal_to_display_unregistered_passes_through(self) -> None:
-        assert capture_internal_to_display("(未登録)", CaptureKind.DEVICE) == "(未登録)"
+    def test_internal_to_display_unregistered_uses_tr(self) -> None:
+        from voice_translator.gui.logic.backend_display import (
+            UNREGISTERED_INTERNAL,
+            unregistered_display,
+        )
+
+        # 未登録 sentinel は CJK を含まない内部値で、表示は tr() で解決する(en でも漏れない)。
+        assert capture_internal_to_display(UNREGISTERED_INTERNAL, CaptureKind.DEVICE) == unregistered_display()
         assert capture_internal_to_display("", CaptureKind.DEVICE) == ""
 
 

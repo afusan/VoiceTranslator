@@ -22,10 +22,20 @@ from ..i18n import tr
 # 表示文字列は `tts_none_display()` 経由で取得する(言語切替に追従させるため定数化しない)。
 TTS_NONE_INTERNAL = "none"
 
+# あるレイヤに導入済み backend が 1 つも無いときに使う内部 sentinel。
+# CJK を含まない内部値にして、表示文言(翻訳対象)とは分離する(en でも漏れないように)。
+# 表示は `unregistered_display()`(= tr("backend.unregistered"))で解決する。
+UNREGISTERED_INTERNAL = "__unregistered__"
+
 
 def tts_none_display() -> str:
     """TTS プルダウンの「(なし)」表示文字列。"""
     return tr("backend.tts_none")
+
+
+def unregistered_display() -> str:
+    """backend 未登録レイヤの表示文字列。"""
+    return tr("backend.unregistered")
 
 
 def skipped_status_text() -> str:
@@ -65,8 +75,8 @@ def capture_internal_to_display(internal: str, kind: CaptureKind | None) -> str:
     kind が None(未登録 / 解決失敗)や、internal が空 / "(未登録)" のときは
     backend 名そのままを返す(防衛挙動も移行元から維持)。
     """
-    if not internal or internal == "(未登録)":
-        return internal
+    if not internal or internal == UNREGISTERED_INTERNAL:
+        return unregistered_display() if internal == UNREGISTERED_INTERNAL else internal
     # CaptureKind を増やしたらここに分岐(と capture_kind.* キー)を追加する。
     # 未対応 kind はラベル無しで backend 名のみ返す縮退(旧 dict 実装の get フォールバックと同等)。
     if kind == CaptureKind.DEVICE:
@@ -82,6 +92,8 @@ def backend_internal_to_display(
     layer: LayerKind, internal: str, *, capture_kind: CaptureKind | None = None,
 ) -> str:
     """指定レイヤの内部 backend 名を表示文字列に変換する(レイヤ別 dispatch)。"""
+    if internal == UNREGISTERED_INTERNAL:
+        return unregistered_display()
     if layer == LayerKind.TTS:
         return tts_internal_to_display(internal)
     if layer == LayerKind.CAPTURE:

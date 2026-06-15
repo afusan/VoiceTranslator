@@ -26,6 +26,18 @@
   `tr(field.label_key)` 形の動的解決のみ許可(他の動的キーは引き続き禁止)。
 - **カタログ間整合**(Phase 4b): 全ロケールのキー集合が ja と一致(翻訳漏れ/余剰の検出)+
   各キーの placeholder 名が全ロケールで一致(en の引数欠落で tr() が壊れるのを防ぐ)。
+- **購読リーク防止**(第2次レビュー 4a-1): `_subscriptions` を持つ widget は `destroy()` で
+  `unsubscribe` する、を AST 検査で機械化(`tests/test_subscription_cleanup.py`)。実機回帰は
+  `SettingsPanel(root, ctrl)` → destroy で全 Subscription が解除されることを確認
+  (`tests/test_capture_kind.py`)。
+- **ロケール切替判断**(4a-3): `locale_switch` の純関数(起動縮退 / 動作中拒否 / display↔code /
+  no-op)を small で検証(`tests/test_logic_locale_switch.py`)。
+
+## 6'. 検査の射程(申し送り)
+- **CJK 残存検査は CJK のみ**を対象とし、**英数字だけの UI 直書き**(例: `"🔍"` ボタン)は
+  検出しない。現状は翻訳不要なものばかりで実害は無いが、英語圏でも訳し分けたい英数字文言が
+  将来混じると見逃す。`tr()` を通す規約の徹底(レビュー)で補い、必要なら検査を拡張する。
+- カタログ間整合は placeholder の**名**を見るが**出現個数差**は見ない(実害小)。
 - ja 辞書に重複キーが無い(dict リテラルの後勝ちを AST で読み直して検出)。
 
 ## 3. logic 層の置換後リグレッション(既存テストの温存 + 更新)

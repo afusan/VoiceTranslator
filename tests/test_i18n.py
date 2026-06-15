@@ -46,9 +46,9 @@ _KEY_REGISTERING_KWARGS = {"label_key", "help_key"}
 _CJK_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿ｦ-ﾟ]")
 
 # 検査対象モジュールで許容する「表示文言ではない CJK 文字列リテラル」。
-# - "(未登録)": capture_internal_to_display が config 由来の未登録表現を判定する内部 sentinel。
 # - "未対応の field_type: ": parse_field_value の programmer 向け例外メッセージ(UI 表示ではない)。
-_CJK_ALLOWLIST = {"(未登録)", "未対応の field_type: "}
+# ※「(未登録)」は内部 sentinel を CJK 無しの値に分離したため(4a-5)、もう許可不要。
+_CJK_ALLOWLIST = {"未対応の field_type: "}
 
 
 # ============================================================

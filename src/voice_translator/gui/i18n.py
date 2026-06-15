@@ -67,6 +67,7 @@ _JA: dict[str, str] = {
     # --- backend_display: プルダウン表示・skipped ステータス・kind ラベル ---
     "backend.tts_none": "(なし)",
     "backend.skipped_status": "(なし)",
+    "backend.unregistered": "(未登録)",
     "capture_kind.device": "デバイス",
     "capture_kind.process": "プロセス",
     # --- restart_messages: 自動 restart バナー ---
@@ -413,6 +414,7 @@ _EN: dict[str, str] = {
     # backend_display
     "backend.tts_none": "(none)",
     "backend.skipped_status": "(none)",
+    "backend.unregistered": "(not registered)",
     "capture_kind.device": "Device",
     "capture_kind.process": "Process",
     # restart_messages

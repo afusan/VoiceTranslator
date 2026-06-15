@@ -32,6 +32,11 @@ from .i18n import (
     set_locale,
     tr,
 )
+from .logic.locale_switch import (
+    can_switch_locale,
+    resolve_initial_locale,
+    resolve_target_locale,
+)
 from .notification_banner import NotificationBanner
 from .settings_panel import SettingsPanel
 
@@ -43,12 +48,9 @@ class MainWindow(ctk.CTk):
         super().__init__()
         self._controller = controller
 
-        # 起動時に保存済みロケールを反映(未対応値は ja に縮退)。
+        # 起動時に保存済みロケールを反映(未対応値は ja に縮退。判断は logic)。
         saved = str(self._controller.get_setting("ui", "locale", default="ja"))
-        try:
-            set_locale(saved)
-        except KeyError:
-            set_locale("ja")
+        set_locale(resolve_initial_locale(saved, available_locales()))
 
         self.title("Voice Translator (MVP)")
         self.geometry("820x720")
@@ -91,18 +93,29 @@ class MainWindow(ctk.CTk):
         self._settings = SettingsPanel(self, self._controller, banner=self._banner)
         self._settings.pack(fill="both", expand=False, padx=10, pady=(10, 5))
         # banner の `before` を SettingsPanel に向けておく(バナー表示時に上に出る)
-        self._banner._before_widget = self._settings  # noqa: SLF001 - 内部値の遅延注入
+        self._banner.set_before_widget(self._settings)
 
         self._control = ControlPanel(self, self._controller, banner=self._banner)
         self._control.pack(fill="both", expand=True, padx=10, pady=(5, 10))
 
+    def _is_running(self) -> bool:
+        """controller の動作状態を取得する(取得失敗は False に縮退 = View の入力収集)。"""
+        try:
+            return bool(self._controller.is_running)
+        except Exception:  # noqa: BLE001
+            return False
+
     def _on_locale_changed(self, display: str) -> None:
-        """言語スイッチャ変更: 停止中のみ切替を許可し、Panel を作り直す。"""
-        locale = self._locale_display_to_code.get(display, current_locale())
-        if locale == current_locale():
-            return
+        """言語スイッチャ変更: 停止中のみ切替を許可し、Panel を作り直す。
+
+        判断(no-op / display→code / 動作中拒否)は `gui/logic/locale_switch` に委譲し、
+        ここは入力収集 → logic → 反映(永続化 + set_locale + 再構築)の配線に徹する。
+        """
+        locale = resolve_target_locale(display, self._locale_display_to_code, current_locale())
+        if locale is None:
+            return  # 同一ロケール or 未知の表示名 = no-op
         # 動作中は再構築で表示と実行状態が食い違うため拒否(設定の再読込と同じ方針)。
-        if getattr(self._controller, "is_running", False):
+        if not can_switch_locale(self._is_running()):
             self._banner.show_error(tr("main_window.locale_running_blocked"))
             self._locale_var.set(locale_display_name(current_locale()))
             return

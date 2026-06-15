@@ -531,13 +531,37 @@ class ControlPanel(ctk.CTkFrame):
     def _schedule_status_refresh(self) -> None:
         """周期的にステータスを再描画する(イベント化されていないエラー履歴の遅延表示)。"""
         try:
-            self.after(self._STATUS_REFRESH_INTERVAL_MS, self._tick_status_refresh)
+            self._status_after_id = self.after(
+                self._STATUS_REFRESH_INTERVAL_MS, self._tick_status_refresh
+            )
         except Exception:  # noqa: BLE001
-            pass
+            self._status_after_id = None
 
     def _tick_status_refresh(self) -> None:
         self._refresh_status_text()
         self._schedule_status_refresh()
+
+    # ============================================================
+    def destroy(self) -> None:
+        """破棄時に購読解除 + 周期 after のキャンセルを行う(再構築でリークさせない)。
+
+        言語切替で MainWindow がこの Panel を destroy → 再生成するため、ここで
+        AppController 購読(`_subscriptions`)を解除し、周期ステータス更新の `after` も
+        止める。怠ると死んだ widget が emit/after で叩かれログを汚す(`Subscription` R2-6)。
+        """
+        after_id = getattr(self, "_status_after_id", None)
+        if after_id is not None:
+            try:
+                self.after_cancel(after_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._status_after_id = None
+        for sub in getattr(self, "_subscriptions", []):
+            try:
+                sub.unsubscribe()
+            except Exception:  # noqa: BLE001
+                pass
+        super().destroy()
 
     def _sync_ready_state(self) -> None:
         """各レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。

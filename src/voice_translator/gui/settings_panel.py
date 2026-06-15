@@ -38,6 +38,7 @@ from .i18n import tr
 from .layer_settings_dialog import LayerSettingsDialog
 from .logic.backend_display import (
     TTS_NONE_INTERNAL,
+    UNREGISTERED_INTERNAL,
     backend_display_to_internal,
     backend_internal_to_display,
     capture_internal_to_display,
@@ -156,6 +157,20 @@ class SettingsPanel(ctk.CTkFrame):
         ]
 
     # ============================================================
+    def destroy(self) -> None:
+        """破棄時に AppController 購読を解除する(言語切替で再構築されるため必須)。
+
+        解除しないと死んだ Panel の listener が残留し、emit のたびに破棄済み widget を
+        叩く(リーク + ログ汚染)。`Subscription` の R2-6 規約に従う。
+        """
+        for sub in getattr(self, "_subscriptions", []):
+            try:
+                sub.unsubscribe()
+            except Exception:  # noqa: BLE001 - 解除失敗でも破棄は続行
+                pass
+        super().destroy()
+
+    # ============================================================
     def _build_widgets(self) -> None:
         # 3 セクションを縦に並べる(pack で並べ、各 section の body 内は grid)。
         # ヘッダ「設定」は CollapsibleSection 自身が出すので不要。
@@ -197,7 +212,7 @@ class SettingsPanel(ctk.CTkFrame):
             if self._default_row_text_color is None:
                 self._default_row_text_color = label_widget.cget("text_color")
             label_widget.grid(row=row, column=0, sticky="w", padx=4, pady=2)
-            internal_names = self._available_backend_names(layer) or ["(未登録)"]
+            internal_names = self._available_backend_names(layer) or [UNREGISTERED_INTERNAL]
             # 表示用候補(layer ごとに display フォーマットを変換)
             names = self._render_backend_choices(layer, internal_names)
             current_internal = str(
@@ -300,9 +315,9 @@ class SettingsPanel(ctk.CTkFrame):
     def _capture_kind_of(self, backend_name: str) -> CaptureKind | None:
         """backend 名から CaptureKind を解決する。取れないときは None(表示は素通し)。
 
-        防衛: 古い AppController モックや未登録 backend、空 / "(未登録)" 表示に対する縮退。
+        防衛: 古い AppController モックや未登録 backend、空 / 未登録 sentinel に対する縮退。
         """
-        if not backend_name or backend_name == "(未登録)":
+        if not backend_name or backend_name == UNREGISTERED_INTERNAL:
             return None
         try:
             kind = self._controller.get_capture_kind(backend_name)
