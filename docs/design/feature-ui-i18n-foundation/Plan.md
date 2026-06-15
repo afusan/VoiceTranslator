@@ -93,8 +93,11 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
   内部 sentinel + programmer 向け例外のみ)。モジュールレベル定数(_LAYER_DISPLAY 等)は
   if/elif の literal tr() ヘルパに、デフォルト引数の文言は None + 本体解決に変更
   (トップレベル tr() 禁止と両立)。
-- Phase 4: en / zh / es 辞書追加 + ロケール切替 UI + 再描画イベント
-  (`add_<event>_listener` に乗せる)。カタログ間整合検査を追加。
+- **Phase 4a(完了)**: ロケール切替機構(言語は ja のまま)。`gui/i18n.py` に
+  `set_locale` / `available_locales` / `locale_display_name` を追加し `current_locale()` を
+  可変化。MainWindow に言語スイッチャ(🌐)を置き、**停止中のみ**切替を許可して
+  SettingsPanel / ControlPanel を destroy → 再生成(全 Panel 再構築方式)。`ui.locale` を永続化。
+- Phase 4b: en / zh / es 辞書追加(翻訳語彙)+ カタログ間整合検査(全ロケールのキー集合一致)。
 
 ## 移行性メモ
 - `tr()` を単一窓口に保つことで、将来 gettext(案2)へ移るときの変更点が 1 か所に収まる。

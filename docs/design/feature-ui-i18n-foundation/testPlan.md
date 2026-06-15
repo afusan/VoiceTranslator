@@ -8,7 +8,9 @@
 - `tr(key, **kwargs)` がテンプレートに引数を差し込む(`str.format`)。
 - **未知キー**を渡すと例外になる — 黙って空文字を返さない。
 - **引数不足**(テンプレートに必要な kwarg 欠落)で例外になる。
-- `current_locale()` が `"ja"` を返す(土台段階の固定値)。
+- `current_locale()` が `"ja"` を返す(既定値)。
+- `set_locale()` の往復(`set_locale("ja")` 反映)/ 未対応ロケールで `KeyError`。
+- `available_locales()` が ja を含む / `locale_display_name("ja")=="日本語"`・未知はコード素通し。
 
 ## 2. キー健全性検査(AST ベース、計 6 種)
 ソースを AST 解析して `tr("...")` を全抽出し、ja 辞書と突合する。

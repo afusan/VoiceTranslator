@@ -363,6 +363,10 @@ _JA: dict[str, str] = {
     "settings_panel.reload_blocked": "動作中は設定を再読込できません(停止してから実行してください)",
     "settings_panel.reload_failed": "読込失敗: {error}",
     "settings_panel.reloaded": "設定を再読込しました",
+    # --- MainWindow ---
+    "main_window.locale_running_blocked": (
+        "動作中は表示言語を切り替えられません(停止してから実行してください)"
+    ),
 }
 
 _CATALOGS: dict[str, dict[str, str]] = {
@@ -371,15 +375,43 @@ _CATALOGS: dict[str, dict[str, str]] = {
 
 _DEFAULT_LOCALE = "ja"
 
+# 各ロケールの表示名は「その言語自身」で表記する(切替しても変わらないため tr 対象外)。
+_LOCALE_DISPLAY_NAMES: dict[str, str] = {
+    "ja": "日本語",
+}
+
+# 現在の UI ロケール(可変)。`set_locale` で切り替え、`current_locale` で参照する。
+_current_locale = _DEFAULT_LOCALE
+
 
 def current_locale() -> str:
     """現在の UI ロケールを返す(ロケール解決の単一窓口)。
 
-    土台フェーズでは ja 固定で、起動後も不変(その場切替 UI は作らない)。即時切替が
-    要件化したら、この関数の戻り値を可変化し再描画イベントを足すだけで拡張できる
-    (文言は表示時に `tr()` で引く規約のため焼き付きが無い)。
+    文言は表示時に `tr()` で引く規約(モジュールレベルで焼かない)なので、`set_locale` で
+    切り替えた直後に各 widget を再構築すれば新ロケールで表示される。
     """
-    return _DEFAULT_LOCALE
+    return _current_locale
+
+
+def set_locale(locale: str) -> None:
+    """UI ロケールを切り替える。未対応ロケールは `KeyError`。
+
+    切替の画面反映(widget 再構築)は呼び出し側(MainWindow)の責務。
+    """
+    global _current_locale
+    if locale not in _CATALOGS:
+        raise KeyError(f"未対応のロケール: {locale!r}")
+    _current_locale = locale
+
+
+def available_locales() -> list[str]:
+    """カタログを持つロケールのコード一覧(切替 UI の選択肢)。"""
+    return list(_CATALOGS.keys())
+
+
+def locale_display_name(locale: str) -> str:
+    """ロケールコードの表示名(その言語自身の表記)。未知はコードをそのまま返す。"""
+    return _LOCALE_DISPLAY_NAMES.get(locale, locale)
 
 
 def tr(key: str, **kwargs: object) -> str:

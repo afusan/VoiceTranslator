@@ -20,7 +20,16 @@ from pathlib import Path
 import pytest
 
 import voice_translator
-from voice_translator.gui.i18n import _CATALOGS, _DEFAULT_LOCALE, all_keys, current_locale, tr
+from voice_translator.gui.i18n import (
+    _CATALOGS,
+    _DEFAULT_LOCALE,
+    all_keys,
+    available_locales,
+    current_locale,
+    locale_display_name,
+    set_locale,
+    tr,
+)
 
 _SRC_ROOT = Path(voice_translator.__file__).resolve().parent
 _I18N_FILE = _SRC_ROOT / "gui" / "i18n.py"
@@ -49,6 +58,26 @@ def test_current_locale_is_ja() -> None:
     assert current_locale() == "ja"
 
 
+def test_available_locales_includes_ja() -> None:
+    assert "ja" in available_locales()
+
+
+def test_locale_display_name() -> None:
+    assert locale_display_name("ja") == "日本語"
+    assert locale_display_name("xx") == "xx"  # 未知はコードをそのまま
+
+
+def test_set_locale_roundtrip_and_unknown() -> None:
+    original = current_locale()
+    try:
+        set_locale("ja")
+        assert current_locale() == "ja"
+        with pytest.raises(KeyError):
+            set_locale("zz")  # 未対応ロケール
+    finally:
+        set_locale(original)
+
+
 def test_tr_returns_registered_message() -> None:
     assert tr("ready.toggle.start") == "▶ 開始"
 
@@ -69,13 +98,25 @@ def test_tr_missing_kwarg_raises() -> None:
 
 def test_no_duplicate_keys_in_catalog() -> None:
     # dict リテラルは重複キーを黙って後勝ちにするため、ソースを AST で読み直して検査する。
+    # 対象は ja カタログ本体(`_JA`)の dict のみ(_CATALOGS / _LOCALE_DISPLAY_NAMES は別)。
     tree = ast.parse(_I18N_FILE.read_text(encoding="utf-8"))
     seen: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Dict):
-            for k in node.keys:
-                if isinstance(k, ast.Constant) and isinstance(k.value, str):
-                    seen.append(k.value)
+        # _JA は型注釈付き代入(AnnAssign)。通常の Assign も一応見る。
+        if isinstance(node, ast.AnnAssign):
+            target_ok = isinstance(node.target, ast.Name) and node.target.id == "_JA"
+        elif isinstance(node, ast.Assign):
+            target_ok = any(
+                isinstance(t, ast.Name) and t.id == "_JA" for t in node.targets
+            )
+        else:
+            continue
+        if not (target_ok and isinstance(node.value, ast.Dict)):
+            continue
+        for k in node.value.keys:
+            if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                seen.append(k.value)
+    assert seen, "_JA カタログが見つからない"
     assert len(seen) == len(set(seen)), "i18n カタログにキー重複がある"
 
 
