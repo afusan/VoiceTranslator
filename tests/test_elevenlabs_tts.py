@@ -36,8 +36,10 @@ class TestSupportedOutputLanguages:
         # eleven_multilingual_v2 の代表(申告は正準 ISO 639-3)
         for code in ("eng", "jpn", "zho", "fra", "deu", "kor", "hin"):
             assert code in langs, f"{code} がリストに無い"
-        # 639-1 を持たない "fil" は passthrough で残る
-        assert "fil" in langs
+        # ElevenLabs の Filipino は正準 Tagalog(tgl)へ寄せて申告する
+        # (NLLB/MMS/Whisper と同じコードに揃え、出力言語の AND に乗せるため)。
+        assert "tgl" in langs
+        assert "fil" not in langs  # 共有テーブルを汚す fil 別名は使わない
 
 
 class TestInitialization:
