@@ -74,6 +74,146 @@ _JA: dict[str, str] = {
     "restart.device.output": "出力",
     "restart.started": "{device}デバイスを切り替えました(再開中…)",
     "restart.failed": "{device}デバイス変更後の再開に失敗しました: {message}",
+    # --- layer_settings_schema: レイヤ別設定ダイアログのラベル/ヘルプ ---
+    # キーは layer_settings.<config パス>.{label,help}。共通ヘルパは概念単位で 1 キー。
+    # schema は label_key / help_key にこのキーを持ち、LayerSettingsDialog が tr() で解決する。
+    "layer_settings.auto_load.label": "起動時に自動ロード",
+    "layer_settings.auto_load.help": (
+        "ON にすると、アプリ起動時にこの backend を自動でロードする(既定 OFF)。"
+        "OFF のままなら「▶ 開始」を押したときにロードする。"
+    ),
+    "layer_settings.load_model.label": "モデルを(再)ロード",
+    "layer_settings.load_model.help": (
+        "今すぐこのレイヤの backend をバックグラウンドで(再)ロードする。"
+        "既にロード済みでも一度 evict して新しい設定値で作り直す。"
+    ),
+    "layer_settings.recent_durations.label": "直近処理時間",
+    "layer_settings.recent_durations.help": "完了した発話の直近 5 件の平均処理時間。",
+    "layer_settings.recent_durations.none": "直近データなし",
+    "layer_settings.recent_durations.average": "直近 {count} 件平均: {avg} ms",
+    # CAPTURE
+    "layer_settings.pipeline.captured_queue_max_bytes.label": "入力バッファ容量 (bytes)",
+    "layer_settings.pipeline.captured_queue_max_bytes.help": (
+        "VAD出力PCMを次段(ASR)に渡すバッファのバイト上限。"
+        "16kHz×float32 で 10MB ≒ 約 156 秒分。"
+        "「▶ 開始」を押した時に反映される。"
+    ),
+    "layer_settings.backends_config.proctap.input_gain.label": "ProcTap: 入力ゲイン (倍率)",
+    "layer_settings.backends_config.proctap.input_gain.help": (
+        "取得した音声に掛ける増幅倍率(1.0=等倍、2〜8 程度が目安)。"
+        "対象アプリの音量が小さく認識されないときに上げる(±1.0 でクリップ)。"
+        "音量 0 は増幅できない。変更後は「モデルを(再)ロード」で反映。"
+    ),
+    # VAD
+    "layer_settings.backends_config.webrtcvad.aggressiveness.label": "WebRTC: 感度 (0=低 〜 3=高)",
+    "layer_settings.backends_config.webrtcvad.aggressiveness.help": (
+        "3 にすると speech 判定が厳しくなり、ノイズで誤検知しにくい代わりに発話の取りこぼし増。"
+    ),
+    "layer_settings.backends_config.webrtcvad.frame_ms.label": "WebRTC: フレーム長 (ms)",
+    "layer_settings.backends_config.webrtcvad.frame_ms.help": (
+        "10 / 20 / 30 のいずれか。短いほど反応速いが CPU 負荷↑。"
+    ),
+    "layer_settings.backends_config.pyannote.model_id.label": "pyannote: モデル ID",
+    "layer_settings.backends_config.pyannote.model_id.help": (
+        "HuggingFace のモデル ID。標準は voice-activity-detection。"
+    ),
+    "layer_settings.backends_config.pyannote.device.label": "pyannote: device",
+    "layer_settings.backends_config.pyannote.device.help": "cpu / cuda / mps / auto。CPU でも動くが激重。",
+    "layer_settings.backends_config.pvcobra.threshold.label": "Cobra: 閾値 (0〜1)",
+    "layer_settings.backends_config.pvcobra.threshold.help": (
+        "voice probability の閾値。下げると speech が拾いやすくなる。"
+    ),
+    # ASR
+    "layer_settings.pipeline.recognized_queue_size.label": "認識結果バッファ件数",
+    "layer_settings.pipeline.recognized_queue_size.help": (
+        "ASR が出力した認識テキストを翻訳段に渡すキューの上限件数。"
+        "テキストは1発話で数百バイトと小さいため件数で管理する。"
+    ),
+    "layer_settings.backends_config.faster_whisper.model_size.label": "Whisper モデル",
+    "layer_settings.backends_config.faster_whisper.model_size.help": (
+        "Whisper のモデルサイズ。大きいほど精度が上がるが、RAM/VRAM と処理時間が増える。"
+        "✓ 推奨 / ⚠ 重い / ✗ 不可 アイコンは現環境(RAM/VRAM)との適合度の目安。"
+        "変更後は「モデルを(再)ロード」ボタンで反映する。"
+    ),
+    "layer_settings.backends_config.openai_whisper.model_size.label": "Whisper モデル(公式)",
+    "layer_settings.backends_config.openai_whisper.model_size.help": (
+        "openai-whisper(公式)のモデルサイズ。faster-whisper より重い傾向。"
+        "tiny/base/small/medium/large-v3 から選択。"
+    ),
+    "layer_settings.backends_config.openai_whisper_api.model.label": "OpenAI API: モデル",
+    "layer_settings.backends_config.openai_whisper_api.model.help": (
+        "OpenAI Whisper API のモデル名。現状は `whisper-1` のみ。"
+    ),
+    "layer_settings.backends_config.google_stt.default_language.label": "Google STT: default 言語(auto 時)",
+    "layer_settings.backends_config.google_stt.default_language.help": (
+        "Google STT は自動言語検出に未対応のため、入力言語が `auto` のときは"
+        "ここで指定した言語(ISO 639-3)で API を呼ぶ。"
+    ),
+    "layer_settings.backends_config.deepgram.model.label": "Deepgram: モデル",
+    "layer_settings.backends_config.deepgram.model.help": (
+        "Deepgram のモデル名(例: nova-3 / nova-2)。既定は nova-3。"
+    ),
+    # TRANSLATOR
+    "layer_settings.pipeline.translated_queue_size.label": "翻訳結果バッファ件数",
+    "layer_settings.pipeline.translated_queue_size.help": "翻訳済みテキストを TTS に渡すキューの上限件数。",
+    "layer_settings.backends_config.nllb200.model_name.label": "NLLB-200 モデル",
+    "layer_settings.backends_config.nllb200.model_name.help": (
+        "NLLB-200 のモデル名(HF id)。distilled-600M / distilled-1.3B / "
+        "1.3B / 3.3B から選択。大型は GPU 推奨。"
+    ),
+    "layer_settings.backends_config.openai_gpt.model.label": "OpenAI GPT: モデル",
+    "layer_settings.backends_config.openai_gpt.model.help": (
+        "OpenAI Chat Completions のモデル名(例: gpt-4o-mini / gpt-4o)。"
+    ),
+    "layer_settings.backends_config.anthropic_claude.model.label": "Anthropic Claude: モデル",
+    "layer_settings.backends_config.anthropic_claude.model.help": (
+        "Anthropic Messages のモデル名(例: claude-haiku-4-5-20251001)。"
+    ),
+    # TTS
+    "layer_settings.backends_config.sapi.rate.label": "読み上げ速度 (rate)",
+    "layer_settings.backends_config.sapi.rate.help": (
+        "SAPI(pyttsx3)の rate。既定 180(普通)。早口にすると再生時間が短くなる。"
+        "GUI 反映には「設定を再読込」または再起動が必要。"
+    ),
+    "layer_settings.backends_config.piper.voice_name.label": "Piper: voice",
+    "layer_settings.backends_config.piper.voice_name.help": (
+        "Piper の voice モデル名(`<lang_country>-<speaker>-<quality>` 形式)。"
+        "初回利用時に Hugging Face `rhasspy/piper-voices` から DL される。"
+        "日本語(ja)voice は標準配布なし。"
+    ),
+    "layer_settings.backends_config.elevenlabs.voice_id.label": "ElevenLabs: voice_id",
+    "layer_settings.backends_config.elevenlabs.voice_id.help": (
+        "ElevenLabs のプリメイド voice ID。デフォルトは Rachel(英語女性)。"
+        "他の voice は ElevenLabs ダッシュボードの Voices ページから ID を取得。"
+    ),
+    "layer_settings.backends_config.elevenlabs.model_id.label": "ElevenLabs: モデル",
+    "layer_settings.backends_config.elevenlabs.model_id.help": (
+        "多言語: `eleven_multilingual_v2`(29 言語、品質寄り)。"
+        "低レイテンシ: `eleven_turbo_v2_5`。"
+        "英語専用: `eleven_monolingual_v1`。"
+    ),
+    "layer_settings.backends_config.openai_tts.voice.label": "OpenAI TTS: voice",
+    "layer_settings.backends_config.openai_tts.voice.help": (
+        "プリメイド 6 voice(alloy / echo / fable / onyx / nova / shimmer)。"
+    ),
+    "layer_settings.backends_config.openai_tts.model.label": "OpenAI TTS: モデル",
+    "layer_settings.backends_config.openai_tts.model.help": "tts-1(低レイテンシ)/ tts-1-hd(高品質)。",
+    "layer_settings.backends_config.google_tts.voice_name.label": "Google TTS: voice 名",
+    "layer_settings.backends_config.google_tts.voice_name.help": (
+        "Google TTS の voice 名(例: `en-US-Wavenet-A`、`ja-JP-Neural2-B`)。"
+        "空欄なら言語コードから既定 voice が自動選択される。"
+    ),
+    "layer_settings.backends_config.google_tts.default_language.label": "Google TTS: default 言語",
+    "layer_settings.backends_config.google_tts.default_language.help": (
+        "`tgt_lang` が空のときに使う既定言語(ISO 639-3)。"
+    ),
+    # OUTPUT
+    "layer_settings.pipeline.synthesized_queue_max_bytes.label": "出力バッファ容量 (bytes)",
+    "layer_settings.pipeline.synthesized_queue_max_bytes.help": (
+        "TTS 合成済み PCM を再生段に渡すバッファのバイト上限。"
+        "16kHz×float32 で 5MB ≒ 約 78 秒分。"
+        "「▶ 開始」を押した時に反映される。"
+    ),
 }
 
 _CATALOGS: dict[str, dict[str, str]] = {

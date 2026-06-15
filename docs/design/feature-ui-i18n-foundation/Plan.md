@@ -79,12 +79,17 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
   → 後続 Phase 3。
 - gettext / JSON / observable binding への移行(案2〜4)。
 
-## 段階導入の全体像(参考・本ブランチは Phase 1 のみ)
-- **Phase 1(本ブランチ)**: 土台 + logic 層置換。
-- Phase 2: `layer_settings_schema` のラベル/help をキー化。
+## 段階導入の全体像(全フェーズ同一ブランチで積み上げ、マージは全完了後)
+- **Phase 1(完了)**: 土台 + logic 層置換。
+- **Phase 2(完了)**: `layer_settings_schema` のラベル/help をキー化。`SettingField` は
+  `label_key` / `help_key` を持ち、`LayerSettingsDialog` が表示時に `tr()` で解決
+  (トップレベル `tr()` 禁止と両立)。健全性検査を拡張(`label_key=`/`help_key=` リテラルを
+  キー登録源として扱い、`tr(field.label_key)` の動的解決のみ許可。CJK 残存検査を
+  `layer_settings_schema.py` にも拡大)。
 - Phase 3: 各 widget の直書き文言をキー化(f-string はテンプレート+引数へ)。
+  CJK 残存検査を gui/ 直下へ拡大。`common.*` 共通キーを追加。
 - Phase 4: en / zh / es 辞書追加 + ロケール切替 UI + 再描画イベント
-  (`add_<event>_listener` に乗せる)。
+  (`add_<event>_listener` に乗せる)。カタログ間整合検査を追加。
 
 ## 移行性メモ
 - `tr()` を単一窓口に保つことで、将来 gettext(案2)へ移るときの変更点が 1 か所に収まる。

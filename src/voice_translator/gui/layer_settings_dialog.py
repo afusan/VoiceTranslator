@@ -30,6 +30,7 @@ from voice_translator.common.types import LayerKind, ModelStatus
 from voice_translator.common.types import ModelInfo
 
 from .credential_dialog import CredentialDialog
+from .i18n import tr
 from .layer_settings_schema import (
     CREDENTIAL_KEYS_MARKER,
     SettingField,
@@ -187,7 +188,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
             self._add_password_row(field, row=row)
         else:
             # 想定外型: ラベルだけ出して値は触らない(将来の追加に保険)
-            ctk.CTkLabel(self, text=f"{field.label}(未対応型: {ft})").grid(
+            ctk.CTkLabel(self, text=f"{tr(field.label_key)}(未対応型: {ft})").grid(
                 row=row, column=0, columnspan=2, sticky="w", padx=12, pady=2
             )
 
@@ -195,7 +196,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
     def _add_text_row(self, field: SettingField, *, row: int) -> None:
         current_value = self._controller.get_setting(*field.keys, default=field.default)
         var = ctk.StringVar(value="" if current_value is None else str(current_value))
-        ctk.CTkLabel(self, text=field.label).grid(
+        ctk.CTkLabel(self, text=tr(field.label_key)).grid(
             row=row, column=0, sticky="w", padx=12, pady=(8, 0)
         )
         entry = ctk.CTkEntry(self, textvariable=var)
@@ -208,7 +209,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         current_value = self._controller.get_setting(*field.keys, default=field.default)
         is_on = bool(current_value)
         var = ctk.StringVar(value="1" if is_on else "0")
-        ctk.CTkLabel(self, text=field.label).grid(
+        ctk.CTkLabel(self, text=tr(field.label_key)).grid(
             row=row, column=0, sticky="w", padx=12, pady=(8, 0)
         )
         switch = ctk.CTkSwitch(
@@ -256,7 +257,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         initial_display = value_to_display.get(current_value_str, options[0])
 
         var = ctk.StringVar(value=initial_display)
-        ctk.CTkLabel(self, text=field.label).grid(
+        ctk.CTkLabel(self, text=tr(field.label_key)).grid(
             row=row, column=0, sticky="w", padx=12, pady=(8, 0)
         )
         ctk.CTkOptionMenu(self, values=options, variable=var).grid(
@@ -268,24 +269,24 @@ class LayerSettingsDialog(ctk.CTkToplevel):
 
     # ---- button(アクションボタン)----
     def _add_button_row(self, field: SettingField, *, row: int) -> None:
-        ctk.CTkLabel(self, text=field.label).grid(
+        ctk.CTkLabel(self, text=tr(field.label_key)).grid(
             row=row, column=0, sticky="w", padx=12, pady=(8, 0)
         )
         action = field.action_fn
         if action is None:
-            ctk.CTkButton(self, text=field.label, state="disabled").grid(
+            ctk.CTkButton(self, text=tr(field.label_key), state="disabled").grid(
                 row=row, column=1, sticky="w", padx=12, pady=(8, 0)
             )
         else:
             ctk.CTkButton(
-                self, text=field.label,
+                self, text=tr(field.label_key),
                 command=lambda: action(self._controller, self._layer),
             ).grid(row=row, column=1, sticky="w", padx=12, pady=(8, 0))
         self._add_help_row(field, row=row + 1)
 
     # ---- label_readonly(値表示のみ、reactive_to で更新)----
     def _add_label_readonly_row(self, field: SettingField, *, row: int) -> None:
-        ctk.CTkLabel(self, text=field.label).grid(
+        ctk.CTkLabel(self, text=tr(field.label_key)).grid(
             row=row, column=0, sticky="w", padx=12, pady=(8, 0)
         )
         value_text = self._compute_label_value(field)
@@ -322,7 +323,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         placeholder = "●●●●●●●● (設定済み、変更時のみ入力)" if current else "(未設定)"
 
         var = ctk.StringVar(value="")
-        ctk.CTkLabel(self, text=field.label).grid(
+        ctk.CTkLabel(self, text=tr(field.label_key)).grid(
             row=row, column=0, sticky="w", padx=12, pady=(8, 0)
         )
         entry = ctk.CTkEntry(
@@ -411,10 +412,10 @@ class LayerSettingsDialog(ctk.CTkToplevel):
         return None, None
 
     def _add_help_row(self, field: SettingField, *, row: int) -> None:
-        if not field.help_text:
+        if not field.help_key:
             return
         ctk.CTkLabel(
-            self, text=field.help_text, text_color="#94a3b8", wraplength=460,
+            self, text=tr(field.help_key), text_color="#94a3b8", wraplength=460,
             justify="left",
         ).grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 4))
 
@@ -492,7 +493,7 @@ class LayerSettingsDialog(ctk.CTkToplevel):
                 value = parse_field_value(field.field_type, raw)
             except ValueError as e:
                 self._message_label.configure(
-                    text=f"入力エラー({field.label}): {e}",
+                    text=f"入力エラー({tr(field.label_key)}): {e}",
                     text_color="#dc2626",
                 )
                 return

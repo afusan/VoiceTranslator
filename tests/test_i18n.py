@@ -25,13 +25,20 @@ from voice_translator.gui.i18n import _CATALOGS, _DEFAULT_LOCALE, all_keys, curr
 _SRC_ROOT = Path(voice_translator.__file__).resolve().parent
 _I18N_FILE = _SRC_ROOT / "gui" / "i18n.py"
 _LOGIC_DIR = _SRC_ROOT / "gui" / "logic"
+# CJK 残存検査の対象(キー化済みであるべきモジュール)。Phase 3 で gui/ 直下へ拡大予定。
+_KEYED_FILES: tuple[Path, ...] = tuple(_LOGIC_DIR.glob("*.py")) + (
+    _SRC_ROOT / "gui" / "layer_settings_schema.py",
+)
+# schema が SettingField に持たせる i18n キー登録源(`tr()` ではなくこの keyword で登録)。
+_KEY_REGISTERING_KWARGS = {"label_key", "help_key"}
 
 # CJK(ひらがな/カタカナ/漢字/半角カナ)を含むか判定。
 _CJK_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿ｦ-ﾟ]")
 
-# gui/logic 配下で許容する「表示文言ではない CJK 文字列リテラル」(内部 sentinel)。
-# capture_internal_to_display が config 由来の未登録表現を判定するための内部値。
-_LOGIC_CJK_ALLOWLIST = {"(未登録)"}
+# 検査対象モジュールで許容する「表示文言ではない CJK 文字列リテラル」。
+# - "(未登録)": capture_internal_to_display が config 由来の未登録表現を判定する内部 sentinel。
+# - "未対応の field_type: ": parse_field_value の programmer 向け例外メッセージ(UI 表示ではない)。
+_CJK_ALLOWLIST = {"(未登録)", "未対応の field_type: "}
 
 
 # ============================================================
@@ -97,26 +104,59 @@ class _TrCallVisitor(ast.NodeVisitor):
         )
         if name == "tr":
             key = None
-            if node.args and isinstance(node.args[0], ast.Constant) and isinstance(
-                node.args[0].value, str
-            ):
-                key = node.args[0].value
+            first = node.args[0] if node.args else None
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                key = first.value
+            # schema 解決呼び出し `tr(field.label_key)` / `tr(field.help_key)` は
+            # キーが label_key= 側のリテラルで登録されるため、動的でも許可する。
+            allowed_dynamic = (
+                isinstance(first, ast.Attribute)
+                and first.attr in _KEY_REGISTERING_KWARGS
+            )
             kwargs = [kw.arg for kw in node.keywords if kw.arg is not None]
-            self.calls.append((key, kwargs, node.lineno, self.func_depth == 0))
+            self.calls.append(
+                (key, kwargs, node.lineno, self.func_depth == 0, allowed_dynamic)
+            )
         self.generic_visit(node)
 
 
 @lru_cache(maxsize=1)
-def _all_tr_calls() -> tuple[tuple[str, str | None, list[str], int, bool], ...]:
-    """src 配下の全 tr() 呼び出し: (相対パス, key, kwargs, lineno, トップレベルか)。"""
-    out: list[tuple[str, str | None, list[str], int, bool]] = []
+def _all_tr_calls() -> tuple[tuple[str, str | None, tuple[str, ...], int, bool, bool], ...]:
+    """src 配下の全 tr() 呼び出し: (相対パス, key, kwargs, lineno, トップレベルか, 許可動的か)。"""
+    out: list[tuple[str, str | None, tuple[str, ...], int, bool, bool]] = []
     for path in _SRC_ROOT.rglob("*.py"):
         visitor = _TrCallVisitor()
         visitor.visit(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
         rel = str(path.relative_to(_SRC_ROOT))
-        for key, kwargs, lineno, toplevel in visitor.calls:
-            out.append((rel, key, tuple(kwargs), lineno, toplevel))  # type: ignore[arg-type]
+        for key, kwargs, lineno, toplevel, allowed in visitor.calls:
+            out.append((rel, key, tuple(kwargs), lineno, toplevel, allowed))
     return tuple(out)
+
+
+@lru_cache(maxsize=1)
+def _registered_field_keys() -> frozenset[str]:
+    """schema が `label_key=` / `help_key=` のリテラルで登録する i18n キー(空文字は除外)。"""
+    keys: set[str] = set()
+    for path in _SRC_ROOT.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if (
+                    kw.arg in _KEY_REGISTERING_KWARGS
+                    and isinstance(kw.value, ast.Constant)
+                    and isinstance(kw.value.value, str)
+                    and kw.value.value
+                ):
+                    keys.add(kw.value.value)
+    return frozenset(keys)
+
+
+def _used_keys() -> set[str]:
+    """コードが使う全キー(リテラル tr() + schema の label_key/help_key 登録)。"""
+    literal = {key for _, key, _, _, _, _ in _all_tr_calls() if key}
+    return literal | set(_registered_field_keys())
 
 
 def _placeholders(template: str) -> set[str]:
@@ -127,35 +167,38 @@ def _placeholders(template: str) -> set[str]:
 # キー健全性検査
 # ============================================================
 def test_no_dynamic_keys() -> None:
-    bad = [f"{p}:{ln}" for p, key, _, ln, _ in _all_tr_calls() if key is None]
+    # リテラルでない第一引数は禁止。ただし schema 解決 `tr(field.label_key)` は許可。
+    bad = [
+        f"{p}:{ln}"
+        for p, key, _, ln, _, allowed in _all_tr_calls()
+        if key is None and not allowed
+    ]
     assert not bad, f"動的 tr() キーは禁止(リテラルで渡す): {bad}"
 
 
 def test_no_missing_keys() -> None:
-    used = {key for _, key, _, _, _ in _all_tr_calls() if key}
-    missing = used - set(all_keys())
+    missing = _used_keys() - set(all_keys())
     assert not missing, f"辞書に無いキー: {sorted(missing)}"
 
 
 def test_no_dead_keys() -> None:
-    used = {key for _, key, _, _, _ in _all_tr_calls() if key}
-    dead = set(all_keys()) - used
+    dead = set(all_keys()) - _used_keys()
     assert not dead, f"未使用の死にキー: {sorted(dead)}"
 
 
 def test_no_toplevel_tr_calls() -> None:
     # 言語切替に追従させるため、tr() は表示する瞬間(関数内)で呼ぶ。モジュール
     # トップレベル(代入右辺・クラス body 含む)での評価は値を焼き付けるため禁止。
-    bad = [f"{p}:{ln}" for p, _, _, ln, toplevel in _all_tr_calls() if toplevel]
+    bad = [f"{p}:{ln}" for p, _, _, ln, toplevel, _ in _all_tr_calls() if toplevel]
     assert not bad, f"トップレベルでの tr() 評価は禁止(関数内で呼ぶ): {bad}"
 
 
 def test_tr_kwargs_cover_placeholders() -> None:
     # 各 tr("key", ...) の kwargs が、テンプレートが要求する placeholder を満たすこと
-    # (引数不足を実行前に検出する)。
+    # (引数不足を実行前に検出する)。動的解決(key=None)は対象外。
     catalog = _CATALOGS[_DEFAULT_LOCALE]
     bad: list[str] = []
-    for path, key, kwargs, lineno, _ in _all_tr_calls():
+    for path, key, kwargs, lineno, _, _ in _all_tr_calls():
         if not key or key not in catalog:
             continue
         missing = _placeholders(catalog[key]) - set(kwargs)
@@ -164,11 +207,12 @@ def test_tr_kwargs_cover_placeholders() -> None:
     assert not bad, f"tr() 呼び出しのテンプレ引数不足: {bad}"
 
 
-def test_no_cjk_literals_in_logic() -> None:
-    # gui/logic 配下に表示文言の直書き(CJK 文字列リテラル)が残っていないこと。
-    # docstring / 式文の文字列は除外。内部 sentinel は許可リストで除外。
+def test_no_cjk_literals_in_keyed_modules() -> None:
+    # キー化済みであるべきモジュール(gui/logic + layer_settings_schema)に表示文言の
+    # 直書き(CJK 文字列リテラル)が残っていないこと。docstring / 式文は除外、
+    # 内部 sentinel は許可リストで除外。Phase 3 で gui/ 直下へ対象拡大予定。
     bad: list[str] = []
-    for path in _LOGIC_DIR.glob("*.py"):
+    for path in _KEYED_FILES:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         # docstring / 式文としての文字列(コメント代わり)の id を集めて除外する。
         skip_ids: set[int] = set()
@@ -188,7 +232,7 @@ def test_no_cjk_literals_in_logic() -> None:
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
                 and id(node) not in skip_ids
-                and node.value not in _LOGIC_CJK_ALLOWLIST
+                and node.value not in _CJK_ALLOWLIST
                 and _CJK_RE.search(node.value)
             ):
                 bad.append(f"{path.name}:{node.lineno} {node.value!r}")

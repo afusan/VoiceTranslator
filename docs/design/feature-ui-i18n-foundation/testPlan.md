@@ -17,9 +17,11 @@
 - (c) **動的キー** = 0(`tr(f"...")` や変数キー。混入時は検査が成立しないため弾く)。
 - (d) **トップレベル `tr()` 評価の禁止**(モジュール直下・代入右辺・クラス body での `tr()` を弾く。
   言語切替に追従させるため定数に焼かない)。
-- (e) **gui/logic の CJK 直書き残存検出**(置換漏れ検出。docstring/式文は除外、内部 sentinel
-  `"(未登録)"` のみ許可リスト)。
+- (e) **CJK 直書き残存検出**(置換漏れ検出。対象 = gui/logic + `layer_settings_schema.py`。
+  docstring/式文は除外、内部 sentinel / programmer 向け例外メッセージのみ許可リスト)。
 - (f) **テンプレ引数の充足**(各 `tr("key", ...)` の kwargs が当該テンプレートの placeholder を満たす)。
+- schema 駆動対応: `label_key=` / `help_key=` のリテラルをキー登録源として扱い、
+  `tr(field.label_key)` 形の動的解決のみ許可(他の動的キーは引き続き禁止)。
 - ja 辞書に重複キーが無い(dict リテラルの後勝ちを AST で読み直して検出)。
 
 ## 3. logic 層の置換後リグレッション(既存テストの温存 + 更新)
@@ -40,8 +42,8 @@ py -m uv run pytest          # small 全件 green
 - 既存の固定文字列テストが落ちないこと(文言が一字一句変わっていないこと)が合格条件。
 
 ## 5. 後続フェーズへの申し送り(検査の死角)
-- **CJK 残存検査は現状 `gui/logic/` のみが対象**。widget(`gui/` 直下: control_panel /
-  settings_panel / 各 dialog)は対象外。Phase 3(widget の置換)では検査範囲を `gui/` 直下へ
-  拡大し、未置換ファイルは許可リストで段階的に 0 へ近づける運用にする(レビュー提案 B)。
+- **CJK 残存検査の対象は `gui/logic/` + `layer_settings_schema.py`**(Phase 2 で schema を追加)。
+  widget(`gui/` 直下: control_panel / settings_panel / 各 dialog)はまだ対象外。Phase 3(widget の
+  置換)で検査範囲を `gui/` 直下へ拡大し、未置換ファイルは許可リストで段階的に 0 へ近づける(提案 B)。
 - **カタログ間整合検査(全ロケールのキー集合一致)は未実装**。ja 単一の現状では検出力ゼロのため、
   Phase 4(en/zh/es 辞書追加)で同時に導入する。
