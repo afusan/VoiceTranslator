@@ -454,6 +454,11 @@ class SettingsPanel(ctk.CTkFrame):
             command=self._on_src_lang_changed,
         )
         self._src_dropdown.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
+        # 🔍 検索ダイアログ(候補が多数=100 超のとき OptionMenu では選びにくい)
+        ctk.CTkButton(
+            body, text="🔍", width=36,
+            command=lambda: self._open_language_search("src"),
+        ).grid(row=0, column=2, sticky="e", padx=(0, 4), pady=2)
 
         ctk.CTkLabel(body, text="出力言語 (tgt):").grid(
             row=1, column=0, sticky="w", padx=4, pady=2
@@ -465,6 +470,10 @@ class SettingsPanel(ctk.CTkFrame):
             command=self._on_tgt_lang_changed,
         )
         self._tgt_dropdown.grid(row=1, column=1, sticky="ew", padx=4, pady=2)
+        ctk.CTkButton(
+            body, text="🔍", width=36,
+            command=lambda: self._open_language_search("tgt"),
+        ).grid(row=1, column=2, sticky="e", padx=(0, 4), pady=2)
 
         body.columnconfigure(1, weight=1)
         return section
@@ -736,6 +745,46 @@ class SettingsPanel(ctk.CTkFrame):
         self._controller.set_setting("languages", "tgt", code)
         # tgt を変えた結果、現在の TTS が読めない言語になっていないか警告
         self._check_tts_output_lang_compatibility(notify_fallback=True)
+
+    # ---- 検索ダイアログ(候補多数時の選択補助)----
+    def _dropdown_codes(self, dropdown) -> list[str]:
+        """OptionMenu の現在の候補(表示ラベル)を内部コードに戻して返す。"""
+        try:
+            values = dropdown.cget("values") or []
+        except Exception:  # noqa: BLE001
+            return []
+        return [parse_language(v) for v in values]
+
+    def _open_language_search(self, which: str) -> None:
+        """🔍 ボタン: 現在の候補で検索ダイアログを開き、選択結果を適用する。
+
+        候補・現在値はプルダウンと同じものを使う(ダイアログは選びやすさだけを足す。
+        fallback / 保存 / TTS 互換チェックは既存ハンドラに委ねる)。
+        """
+        from voice_translator.gui.language_select_dialog import LanguageSelectDialog
+
+        dropdown = self._src_dropdown if which == "src" else self._tgt_dropdown
+        if dropdown is None:
+            return
+        codes = self._dropdown_codes(dropdown)
+        if not codes:
+            return
+        var = self._src_var if which == "src" else self._tgt_var
+        current = parse_language(var.get())
+        dlg = LanguageSelectDialog(self, codes=codes, initial=current)
+        dlg.wait_window()
+        if dlg.result_code is not None:
+            self._apply_language_choice(which, dlg.result_code)
+
+    def _apply_language_choice(self, which: str, code: str) -> None:
+        """検索ダイアログで選ばれた言語コードを、プルダウン選択と同じ経路で適用する。"""
+        label = format_language(code)
+        if which == "src":
+            self._src_var.set(label)
+            self._on_src_lang_changed(label)
+        else:
+            self._tgt_var.set(label)
+            self._on_tgt_lang_changed(label)
 
     def _refresh_input_language_choices(
         self, backend_name: str, *, notify_fallback: bool,

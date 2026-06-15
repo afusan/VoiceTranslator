@@ -264,6 +264,47 @@ def _make_setting_fn(table: dict):
     return fn
 
 
+class TestLanguageSearchWiring:
+    """🔍 検索ダイアログ結果の適用配線(候補多数時の選択補助)。"""
+
+    def _panel(self):
+        from voice_translator.gui.settings_panel import SettingsPanel
+
+        shim = MagicMock(spec=SettingsPanel)
+        _bind(
+            shim,
+            "_apply_language_choice",
+            "_on_src_lang_changed",
+            "_on_tgt_lang_changed",
+            "_dropdown_codes",
+        )
+        shim._src_var = MagicMock(name="src_var")
+        shim._tgt_var = MagicMock(name="tgt_var")
+        shim._controller = MagicMock(name="controller")
+        return shim
+
+    def test_apply_tgt_sets_var_and_saves_via_handler(self) -> None:
+        panel = self._panel()
+        panel._apply_language_choice("tgt", "yor")
+        # プルダウン選択と同じ経路: var に表示ラベル、controller に内部コード
+        panel._tgt_var.set.assert_called_with("yor (Yoruba)")
+        panel._controller.set_setting.assert_called_with("languages", "tgt", "yor")
+        # tgt は TTS 互換チェックに連鎖する(auto-mock)
+        panel._check_tts_output_lang_compatibility.assert_called_once()
+
+    def test_apply_src_sets_var_and_saves(self) -> None:
+        panel = self._panel()
+        panel._apply_language_choice("src", "swh")
+        panel._src_var.set.assert_called_with("swh (Swahili)")
+        panel._controller.set_setting.assert_called_with("languages", "src", "swh")
+
+    def test_dropdown_codes_parses_labels_back_to_codes(self) -> None:
+        panel = self._panel()
+        dropdown = MagicMock()
+        dropdown.cget.return_value = ["eng (English)", "jpn (Japanese)", "swh (Swahili)"]
+        assert panel._dropdown_codes(dropdown) == ["eng", "jpn", "swh"]
+
+
 class TestTtsCompatibilityWiring:
     def test_warns_when_tts_does_not_support_current_tgt(self, stub_tts_panel) -> None:
         stub_tts_panel._controller.get_setting.side_effect = _make_setting_fn({

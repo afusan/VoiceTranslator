@@ -34,7 +34,12 @@
       ため MMS backend を canonical キーへ簡素化(`_ISO1_TO_MMS` 廃止)。Swahili の正準を swh に統一
       (NLLB/MMS と整合)。検証(Italian は MMS 非対応=元の推測が誤りと判明、除外)。再生成元は
       `gen_lang_table.py`。large テストで eng + swh の実 DL→合成を通過確認。
-- [ ] **Phase 3: 言語選択フィルタリング**(着手時に方式決定)。
+- [x] **Phase 3: 言語選択フィルタリング**(2026-06-16、ユーザ選択=検索可能リスト/専用ダイアログ)。
+      `gui/logic/language_filter.py`(コード/英語名の部分一致 + 前方一致優先の純関数)+
+      `gui/language_select_dialog.py`(検索ボックス + 絞り込みリスト、クリックで即確定。
+      `ProcessSelectDialog` の流儀)。SettingsPanel の src/tgt 各行に「🔍」ボタンを追加し、
+      現在候補で検索ダイアログを開く。結果は既存ハンドラ経由で保存/ fallback/ TTS 互換チェックを
+      共有(配線のみ追加、OptionMenu は据え置き)。判断は logic 直テスト、適用は配線 smoke で検証。
 - [ ] **Phase 4: ドキュメント/コマンド回りの最終確認**。
 
 > 再開手順: この Plan と `相談記録_低資源言語対応と音声出力.md` を読む → 上の未チェック項目の
