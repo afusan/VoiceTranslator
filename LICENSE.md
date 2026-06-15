@@ -32,6 +32,7 @@ Links
 - [pvcobra](https://picovoice.ai/) (Apache-2.0、サービスは個人非商用 / 商用別ライセンス) — VAD
 - [openai-whisper](https://github.com/openai/whisper) (MIT) — ASR(公式実装)
 - [Piper](https://github.com/OHF-Voice/piper1-gpl) (**GPL-3.0**) / [onnxruntime](https://onnxruntime.ai/) (MIT) — TTS。本リポジトリには同梱せず、利用者が extras で導入する。[voice モデル](https://huggingface.co/rhasspy/piper-voices)のライセンスは voice ごとに異なる
+- [MMS-TTS](https://huggingface.co/facebook/mms-tts) — 多言語 TTS(Meta 製、[transformers](https://github.com/huggingface/transformers) (Apache-2.0) の VITS 実装で動作)。**モデル重みは CC-BY-NC 4.0(非商用限定)**(NLLB-200 と同じ制約)。言語ごとのモデルを初回利用時に取得。一部言語の前処理に [uroman](https://github.com/isi-nlp/uroman) (Apache-2.0) を使う
 - [httpx](https://github.com/encode/httpx) (BSD-3) — クラウド系 backend の HTTP クライアント
 - [google-cloud-speech / texttospeech](https://github.com/googleapis/google-cloud-python) (Apache-2.0) / [deepgram-sdk](https://github.com/deepgram/deepgram-python-sdk) (MIT) — クラウド SDK
 - [huggingface_hub](https://github.com/huggingface/huggingface_hub) (Apache-2.0) — モデル / voice の取得

@@ -40,10 +40,17 @@
       `ProcessSelectDialog` の流儀)。SettingsPanel の src/tgt 各行に「🔍」ボタンを追加し、
       現在候補で検索ダイアログを開く。結果は既存ハンドラ経由で保存/ fallback/ TTS 互換チェックを
       共有(配線のみ追加、OptionMenu は据え置き)。判断は logic 直テスト、適用は配線 smoke で検証。
-- [ ] **Phase 4: ドキュメント/コマンド回りの最終確認**。
+- [x] **Phase 4: ドキュメント/コマンド回りの最終確認**(2026-06-16)。README に多言語(99 言語)の
+      バレット追加。manual に「言語コードは 639-3」「🔍 検索」「§5-4b 多言語読み上げ(MMS-TTS)」
+      「OS 表に MMS 追記」。LICENSE.md に MMS-TTS(CC-BY-NC)+ transformers/uroman を追記。
+      extras(`tts-mms`)・`requires_modules`・宣言固定テストは各 Phase で追従済み(確認済み)。
 
-> 再開手順: この Plan と `相談記録_低資源言語対応と音声出力.md` を読む → 上の未チェック項目の
-> 先頭から着手。実装の現物は `tts/mms_backend.py`(テンプレは `tts/piper_backend.py`)。
+> **全 Phase 完了(2026-06-16)。master へのマージ待ち**(ユーザ指示で「一通り終わるまで保留」)。
+> 全 small テスト緑。MMS の実ロード(eng / swh)large テスト通過。
+> 再開・レビュー時の現物: `tts/mms_backend.py`(テンプレ `tts/piper_backend.py`)/
+> `common/languages.py`(639-3 正準 + 変換)/ `translator/nllb200_backend.py`(`CANONICAL_TO_NLLB`)/
+> `gui/language_select_dialog.py` + `gui/logic/language_filter.py`(検索)/ 言語表の再生成は
+> `gen_lang_table.py`。
 
 ## 背景・狙い
 
