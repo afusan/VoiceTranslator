@@ -10,9 +10,11 @@
       small テスト(`tests/test_mms_backend.py`)+ large 実ロードテスト(`tests/test_mms_tts_large.py`、
       `facebook/mms-tts-eng` で DL→合成を通過確認済み)。対応言語は 639-1 で表現できる高信頼の
       初期集合 14 言語(`_ISO1_TO_MMS`)に限定。
-- [ ] **Phase 1-b: prefetch 配線**(次の作業)。出力言語の確定を契機に GUI が
-      `MmsTtsBackend.prefetch_language()` をバックグラウンドで呼ぶ配線。現状は synthesize 時の
-      同期ロードで縮退(初回発話が DL で固まる)。AppController のイベント/設定反応系に乗せる。
+- [x] **Phase 1-b: prefetch 配線**(2026-06-15)。`AppController._maybe_prefetch_tts_language()` を
+      追加。`set_setting("languages","tgt",…)` の反応系(出力言語変更)と TTS レイヤのロード完了の
+      2 契機で、`prefetch_language` を持つ TTS backend に対しバックグラウンドで出力言語を事前確保。
+      未ロード/能力なし backend は no-op、失敗は握る(synthesize 時の同期ロードへ縮退)。
+      `tests/test_app_controller.py::TestTtsLanguagePrefetch`。
 - [ ] **横断課題: 言語コード 639-3 拡張**(本丸、未着手)。低資源言語(639-1 を持たない)を
       開放するため `common/languages.py` を 639-3 まで拡張し、NLLB/MMS のコードを正規化。
       これが終わると `_ISO1_TO_MMS` の縛り(14 言語)が外れアフリカ系言語が載る。
