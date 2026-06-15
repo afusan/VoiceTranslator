@@ -4,7 +4,7 @@
 「fallback が起きたか」を計算して返す。通知バナーの文言整形もここで行う。
 ConfigStore への書き込み・banner 表示・dropdown 操作は View 側の責務。
 
-移行元(P1 / refactor-ui-3move): settings_panel.py の
+移行元: settings_panel.py の
 `_refresh_input_language_choices` / `_refresh_target_language_choices` /
 `_check_tts_output_lang_compatibility` の判断部と `_notify_*` の文言部。
 候補の順序・fallback 規則・メッセージ文言は移行元と一字一句同一に保つこと。
@@ -17,7 +17,7 @@ from typing import Sequence
 
 from voice_translator.common.languages import format_language
 
-from .messages import tr
+from ..i18n import tr
 
 
 @dataclass(frozen=True)

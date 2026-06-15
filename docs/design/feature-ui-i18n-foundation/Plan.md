@@ -34,7 +34,7 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
 1 点で済むため、多言語本格化時の選択肢も残る。
 
 ## スコープ(このブランチでやること)
-1. **メッセージ辞書とアクセス API**(`gui/logic/messages.py` 新規)
+1. **メッセージ辞書とアクセス API**(`gui/i18n.py` 新規)
    - ja 文言を Python dict で集約。
    - `tr(key, **kwargs) -> str`: キーで文言を引き、`str.format` で引数を差す
      (動的文言は `tr("control_panel.latency", value=..., n=...)` の形)。
@@ -53,16 +53,23 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
    - **キーはリテラルで渡す**(`tr("control_panel.start_button")`)。`tr(f"...{x}")` の
      ような動的キー生成は禁止。理由は下記「キー健全性検査」を静的解析で成立させるため。
      どうしても動的に選ぶ場合は候補キーを定数で明示列挙する。
-4. **キー健全性検査**(`tests/test_messages_i18n.py` の small テストとして実装)
-   - ソースを AST 解析して `tr("...")` のリテラルキーを全抽出し、ja 辞書と突合する。
-   - 検出する不整合: **(a) コードで使うが辞書に無いキー(欠落 → ランタイム例外予備軍)** /
-     **(b) 辞書にあるがコードで未使用のキー(死にキー)**。
-   - 文言が増えるほど目視突合は破綻するため、自動検査を最初から土台に含める。
 3. **logic 層の文言を `tr()` 経由に置換**(本ブランチの適用範囲はここまで)
-   - 対象: `ready_state` / `restart_messages` / `language_choices` / `auth_display` /
+   - 対象: `ready_state` / `restart_messages` / `language_choices` /
      `accel_summary` / `status_summary` / `backend_display`。
    - これらは既に「純関数が文言を返す」形なので、返す文字列を `tr()` 経由にするだけ。
-     呼び出し側(widget)の改修は不要。
+     呼び出し側(widget)の改修は不要。**表示する瞬間(関数内)で `tr()` を呼ぶ**
+     (モジュールレベルで定数に焼かない。言語切替方針 参照)。
+   - 例外 `auth_display`: 認証ステータス("Missing Credentials" / "Not Verified")は
+     ModelStatus 表示(英語 enum value)と揃えるミラーで**翻訳対象ではない**ため、カタログに
+     入れず源(`ModelStatus.*.value` / 表記を揃える独立文言)を直接参照する(中4 の線引き)。
+4. **キー健全性検査**(`tests/test_i18n.py` の small テストとして実装)
+   - ソースを AST 解析して `tr("...")` を全抽出し、ja 辞書と突合する。検出する不整合:
+     (a) 欠落キー(使うが辞書に無い)/ (b) 死にキー(辞書にあるが未使用)/
+     (c) 動的キー(リテラルでない第一引数)。
+   - さらに: (d) **トップレベル `tr()` 評価の禁止**(言語切替に追従させるため定数化させない)/
+     (e) **gui/logic の CJK 直書き残存検出**(置換漏れ検出。許可リストは内部 sentinel のみ)/
+     (f) **テンプレ引数の充足**(各 `tr` 呼び出しの kwargs が placeholder を満たす)。
+   - 文言が増えるほど目視突合は破綻するため、自動検査を最初から土台に含める。
 
 ## やらないこと(後続ブランチへ)
 - **en / zh / es 辞書の追加**(土台のみ。語彙は ja。辞書を足すだけで増やせる構造にはする)。
@@ -81,21 +88,26 @@ UI 表示文言の **国際化(i18n)の土台**を作る。実態調査(`tmp/i18
 
 ## 移行性メモ
 - `tr()` を単一窓口に保つことで、将来 gettext(案2)へ移るときの変更点が 1 か所に収まる。
-- 文言ソースは **messages.py の 1 か所**に寄せる(logic 関数が直書きしない)。二重管理を防ぐ。
+- 文言ソースは **`gui/i18n.py` の 1 か所**に寄せる(logic 関数が直書きしない)。二重管理を防ぐ。
+  ※ 配置/名前は中1 を受け、`common/messages.py`(PipelineMessage)との同名衝突を避けるため
+  `gui/i18n.py` とした(文言カタログは「データ」で logic の純関数とは責務が異なるため gui 直下)。
 
 ## 設計上の留意点(調査 A 由来)
 - 動的組み立て(f-string)文言は `tr(key, **kwargs)` のテンプレート方式に統一する。
 - `status_summary` のセクション見出しは golden テストで固定 → キー化に合わせてテストも更新。
-- 既存の英語混在文言("Cancel" / "OK" / "Missing Credentials" / "Not Verified")も
-  ja 辞書のキーとして登録する(値は現状の英語のまま。多言語化時に整理)。
+- **カタログに入れるのは「翻訳対象の文言」のみ**(中4 の線引き)。enum value のミラー
+  ("Missing Credentials" = `ModelStatus.MISSING_CREDENTIALS.value`、"Not Verified" は
+  それと表記を揃える独立文言)はカタログに入れず源を直接参照する(`auth_display`)。
+  これにより「ja だけ訳して enum value とズレる」二重管理を避ける。一方 widget 共通の
+  "Cancel" / "OK" は翻訳対象なので Phase 3 で `common.*` として登録する。
 
 ## マージ前チェック(作業完了後・マージ前に必ず実施)
 本ブランチをマージする前に、恒常ドキュメントへの反映漏れが無いか確認する:
-- **`docs/design/Class.md`**: 新規 `messages` モジュール(`tr` / `current_locale`)の
+- **`docs/design/Class.md`**: 新規 `i18n` モジュール(`tr` / `current_locale`)の
   役割をクラス/モジュール一覧に追記したか。
-- **`docs/design/Architecture.html` §9**(GUI 内部構成と UI 実装規約): 文言は messages.py に
+- **`docs/design/Architecture.html` §9**(GUI 内部構成と UI 実装規約): 文言は `gui/i18n.py` に
   集約し `tr()` 経由で引く、という規約を追記したか(「判断は logic、widget は塗るだけ」の
-  延長として「文言は messages、logic/widget は tr() で引く」)。
+  延長として「文言は i18n、logic/widget は tr() で引く」)。
 - **`CLAUDE.md` の UI 実装規約**: 文言の置き場が messages.py + tr() に変わったことを
   反映すべきか判断(土台のみなので最小限。後続フェーズで widget 置換が済んでから本格反映でも可)。
 - **`docs/manual.md`**: 本ブランチでは言語切替 UI を作らないため更新不要(Phase 4 で追記)。

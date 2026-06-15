@@ -15,7 +15,7 @@ import customtkinter as ctk
 import pytest
 
 from voice_translator.common.types import LayerKind, ModelStatus
-from voice_translator.gui.logic.backend_display import SKIPPED_STATUS_TEXT
+from voice_translator.gui.logic.backend_display import skipped_status_text
 from voice_translator.gui.logic.palette import DISABLED_TEXT
 
 
@@ -103,10 +103,10 @@ class TestSkippedVisual:
         shim._apply_absorbed_visuals()
 
         tts_label.configure.assert_called_with(
-            text=SKIPPED_STATUS_TEXT, text_color=DISABLED_TEXT
+            text=skipped_status_text(), text_color=DISABLED_TEXT
         )
         out_label.configure.assert_called_with(
-            text=SKIPPED_STATUS_TEXT, text_color=DISABLED_TEXT
+            text=skipped_status_text(), text_color=DISABLED_TEXT
         )
         assert shim._status_overridden == {LayerKind.TTS, LayerKind.OUTPUT}
 

@@ -3,7 +3,7 @@
 役割: AppController.get_status_snapshot() のデータと GUI 操作イベント履歴から、
 ステータステキストボックスに貼る 1 ブロックの文字列を組み立てる。
 
-移行元(P1 / refactor-ui-3move): app_controller.py の `get_status_summary`(整形部)と
+移行元: app_controller.py の `get_status_summary`(整形部)と
 control_panel.py の `_refresh_status_text`(操作イベント合成部)。
 出力文字列は移行元と byte 単位で同一に保つこと(golden テスト対象)。
 """
@@ -19,8 +19,8 @@ from voice_translator.common.types import (
     LayerStatusLine,
 )
 
+from ..i18n import tr
 from .auth_display import AUTH_MISSING_TEXT, AUTH_UNVERIFIED_TEXT
-from .messages import tr
 
 
 def format_status_summary(

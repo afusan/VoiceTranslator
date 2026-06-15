@@ -2,7 +2,7 @@
 
 役割: 各レイヤの device 報告から「演算: …」ラベルの文言と色を決める。
 
-移行元(P1 / refactor-ui-3move): control_panel.py の `_refresh_accel_label` の判定部。
+移行元: control_panel.py の `_refresh_accel_label` の判定部。
 文言・色・判定規則は移行元と同一に保つこと。
 """
 
@@ -12,7 +12,7 @@ from typing import Mapping
 
 from voice_translator.common.types import LayerKind
 
-from .messages import tr
+from ..i18n import tr
 from .palette import ACCEL_AMBER, ACCEL_GREEN, ACCEL_SLATE
 
 

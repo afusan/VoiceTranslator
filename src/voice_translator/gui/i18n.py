@@ -1,4 +1,4 @@
-"""messages: UI 表示文言を集約する i18n 辞書とアクセス API。
+"""i18n: UI 表示文言を集約する言語別カタログとアクセス API。
 
 役割: 画面に出る文言を 1 か所(言語別カタログ)に集約し、`tr(key, **kwargs)` で
 キー経由で引けるようにする。logic / widget は文言を直書きせず、必ず `tr()` を通す。
@@ -8,9 +8,14 @@
   `common.*` に集約する。
 - キーは **リテラル**で渡す(`tr("ready.toggle.start")`)。動的なキー生成は禁止
   (健全性検査を静的解析で成立させるため)。
+- **`tr()` は表示する瞬間(関数内)で呼ぶ。モジュールレベルで結果を定数に焼かない**。
+  これにより将来 `current_locale()` を可変化したとき(即時切替が要件化したとき)に
+  追従できる(健全性検査でトップレベル `tr()` を機械的に禁止している)。
 - 現状の対応言語は ja のみ。`current_locale()` をロケール解決の単一窓口とし、将来
   en / zh / es を足すときは `_CATALOGS` に辞書を追加し、ここで現在ロケールを返す形にする。
 - 未登録キー / テンプレート引数不足は黙って空文字にせず例外にする(早期発見のため)。
+- **カタログに入れるのは「翻訳対象の文言」のみ**。他の真実の源のミラー(enum value と
+  揃える `Missing Credentials` 等)はカタログに入れず、源を直接参照する(二重管理を避ける)。
 """
 
 from __future__ import annotations
@@ -50,9 +55,6 @@ _JA: dict[str, str] = {
         "TTS バックエンド {backend} は読み上げ言語 {lang} に対応していません"
         "(Translator 出力言語を変えるか、別の TTS バックエンドに切り替えてください)"
     ),
-    # --- auth_display: 認証ステータス(値は ModelStatus と揃えた英語表記のまま) ---
-    "auth.missing": "Missing Credentials",
-    "auth.unverified": "Not Verified",
     # --- accel_summary: 「演算: …」ラベル ---
     "accel.gpu": "演算: GPU ({devices})",
     "accel.cpu": "演算: CPU のみ",
@@ -67,6 +69,11 @@ _JA: dict[str, str] = {
     "backend.skipped_status": "(なし)",
     "capture_kind.device": "デバイス",
     "capture_kind.process": "プロセス",
+    # --- restart_messages: 自動 restart バナー ---
+    "restart.device.input": "入力",
+    "restart.device.output": "出力",
+    "restart.started": "{device}デバイスを切り替えました(再開中…)",
+    "restart.failed": "{device}デバイス変更後の再開に失敗しました: {message}",
 }
 
 _CATALOGS: dict[str, dict[str, str]] = {
@@ -79,8 +86,9 @@ _DEFAULT_LOCALE = "ja"
 def current_locale() -> str:
     """現在の UI ロケールを返す(ロケール解決の単一窓口)。
 
-    土台フェーズでは ja 固定。将来の言語切替はこの関数の戻り値を切り替える形で
-    差し込む(切替 UI / 永続化 / 再描画イベントは後続フェーズ)。
+    土台フェーズでは ja 固定で、起動後も不変(その場切替 UI は作らない)。即時切替が
+    要件化したら、この関数の戻り値を可変化し再描画イベントを足すだけで拡張できる
+    (文言は表示時に `tr()` で引く規約のため焼き付きが無い)。
     """
     return _DEFAULT_LOCALE
 

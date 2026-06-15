@@ -3,7 +3,7 @@
 役割: レイヤ状態・出力モード・入力ソース状況から「各ボタンの表示文言と有効/無効」を
 計算して返す。widget には触らない(適用は View 側)。
 
-移行元(P1 / refactor-ui-3move): control_panel.py の `_sync_ready_state` /
+移行元: control_panel.py の `_sync_ready_state` /
 `_sync_load_button_state` / `_sync_test_button_state` / `_capture_source_required_but_empty` /
 `_active_layer_statuses` の判断部。表示文言・優先順位は移行元と同一に保つこと。
 """
@@ -20,7 +20,7 @@ from voice_translator.common.types import (
     ModelStatus,
 )
 
-from .messages import tr
+from ..i18n import tr
 
 
 @dataclass(frozen=True)

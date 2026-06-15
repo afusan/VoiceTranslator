@@ -96,6 +96,6 @@ class TestSkippedStatusText:
     """
 
     def test_skipped_status_text(self) -> None:
-        from voice_translator.gui.logic.backend_display import SKIPPED_STATUS_TEXT
+        from voice_translator.gui.logic.backend_display import skipped_status_text
 
-        assert SKIPPED_STATUS_TEXT == "(なし)"
+        assert skipped_status_text() == "(なし)"

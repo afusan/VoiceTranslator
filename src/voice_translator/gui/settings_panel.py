@@ -36,12 +36,12 @@ from .collapsible_section import CollapsibleSection
 from .consent_dialog import ConsentDialog
 from .layer_settings_dialog import LayerSettingsDialog
 from .logic.backend_display import (
-    SKIPPED_STATUS_TEXT,
-    TTS_NONE_DISPLAY,
     TTS_NONE_INTERNAL,
     backend_display_to_internal,
     backend_internal_to_display,
     capture_internal_to_display,
+    skipped_status_text,
+    tts_none_display,
 )
 from .logic.language_choices import (
     compute_src_selection,
@@ -253,7 +253,7 @@ class SettingsPanel(ctk.CTkFrame):
         - その他: backend 名そのまま
         """
         if layer == LayerKind.TTS:
-            return list(internal_names) + [TTS_NONE_DISPLAY]
+            return list(internal_names) + [tts_none_display()]
         if layer == LayerKind.CAPTURE:
             return [self._capture_internal_to_display(n) for n in internal_names]
         return list(internal_names)
@@ -630,7 +630,7 @@ class SettingsPanel(ctk.CTkFrame):
         absorbed = self._absorbed_roles()
         overrides: dict[LayerKind, str] = {layer: "" for layer in absorbed}
         for layer in self._skipped_roles():
-            overrides.setdefault(layer, SKIPPED_STATUS_TEXT)
+            overrides.setdefault(layer, skipped_status_text())
 
         prev = set(self._status_overridden)
         self._status_overridden = set(overrides)
