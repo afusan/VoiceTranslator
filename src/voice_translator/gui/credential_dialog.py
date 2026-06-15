@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 import customtkinter as ctk
 
 from voice_translator.common.types import LayerKind
+from voice_translator.gui.i18n import tr
 
 if TYPE_CHECKING:
     from voice_translator.common.app_controller import AppController
@@ -52,7 +53,7 @@ class CredentialDialog(ctk.CTkToplevel):
         # key_name -> 既存値があるか(送信時の「空欄=未編集」判定用)
         self._has_existing: dict[str, bool] = {}
 
-        self.title(f"認証情報の入力 — {self._service_name}")
+        self.title(tr("dialog.credential.title", service=self._service_name))
         self.geometry("560x520")
         self.transient(parent)
         try:
@@ -68,22 +69,19 @@ class CredentialDialog(ctk.CTkToplevel):
         spec = self._controller.get_credential_spec(self._layer, self._backend_name)
 
         ctk.CTkLabel(
-            self, text=f"認証情報の入力 — {self._service_name}",
+            self, text=tr("dialog.credential.title", service=self._service_name),
             font=("", 16, "bold"),
         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(12, 4))
 
         ctk.CTkLabel(
             self,
-            text=(
-                "下のフィールドに API キー等を入力し、「テスト」を押してください。"
-                "成功すると保存され、「動作開始」ボタンが押せるようになります。"
-            ),
+            text=tr("dialog.credential.description"),
             text_color="#94a3b8", wraplength=520, justify="left", anchor="w",
         ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 8))
 
         if not spec:
             ctk.CTkLabel(
-                self, text="このバックエンドは認証情報を要求していません。",
+                self, text=tr("dialog.credential.no_spec"),
                 text_color="#94a3b8",
             ).grid(row=2, column=0, columnspan=2, sticky="w", padx=12, pady=12)
             field_rows = 1
@@ -110,10 +108,10 @@ class CredentialDialog(ctk.CTkToplevel):
             column=0, columnspan=2, sticky="e", padx=12, pady=(10, 12),
         )
         ctk.CTkButton(
-            btn_frame, text="キャンセル", width=110, command=self._on_cancel,
+            btn_frame, text=tr("dialog.credential.cancel"), width=110, command=self._on_cancel,
         ).pack(side="right", padx=(8, 0))
         self._test_btn = ctk.CTkButton(
-            btn_frame, text="テスト", width=110, command=self._on_test,
+            btn_frame, text=tr("dialog.credential.test"), width=110, command=self._on_test,
         )
         self._test_btn.pack(side="right")
 
@@ -135,13 +133,16 @@ class CredentialDialog(ctk.CTkToplevel):
         # (どこを指しているかが見える。secret=False が普通)
         if is_file and existing and not field.secret:
             initial_value = existing
-            placeholder = "(参照ボタンで選択)"
+            placeholder = tr("dialog.credential.placeholder_file")
         elif existing:
             initial_value = ""
-            placeholder = "●●●●●●●● (設定済み、変更時のみ入力)"
+            placeholder = tr("dialog.credential.placeholder_set")
         else:
             initial_value = ""
-            placeholder = "(未設定)" if not is_file else "(参照ボタンで選択)"
+            placeholder = (
+                tr("dialog.credential.placeholder_unset") if not is_file
+                else tr("dialog.credential.placeholder_file")
+            )
 
         var = ctk.StringVar(value=initial_value)
         ctk.CTkLabel(self, text=field.label).grid(
@@ -159,7 +160,7 @@ class CredentialDialog(ctk.CTkToplevel):
             row_frame.columnconfigure(0, weight=1)
             ctk.CTkEntry(row_frame, **entry_kwargs).grid(row=0, column=0, sticky="ew")
             ctk.CTkButton(
-                row_frame, text="参照…", width=80,
+                row_frame, text=tr("dialog.credential.browse"), width=80,
                 command=lambda v=var, fl=field: self._pick_file(v, fl),
             ).grid(row=0, column=1, padx=(6, 0))
         else:
@@ -190,7 +191,7 @@ class CredentialDialog(ctk.CTkToplevel):
         ]
         path = filedialog.askopenfilename(
             parent=self,
-            title=f"{field.label} のファイルを選択",
+            title=tr("dialog.credential.file_picker_title", label=field.label),
             filetypes=filetypes,
         )
         if path:
@@ -217,34 +218,40 @@ class CredentialDialog(ctk.CTkToplevel):
         missing = [k for k, v in values.items() if v == ""]
         if missing:
             self._message_label.configure(
-                text=f"未入力のフィールドがあります: {', '.join(missing)}",
+                text=tr("dialog.credential.missing_fields", fields=", ".join(missing)),
                 text_color="#dc2626",
             )
             return
 
-        self._test_btn.configure(state="disabled", text="テスト中…")
+        self._test_btn.configure(state="disabled", text=tr("dialog.credential.testing"))
         try:
             result = self._controller.verify_and_save_credentials(
                 self._layer, self._backend_name, values
             )
         except Exception as e:  # noqa: BLE001
-            self._test_btn.configure(state="normal", text="テスト")
+            self._test_btn.configure(state="normal", text=tr("dialog.credential.test"))
             self._message_label.configure(
-                text=f"検証中に内部エラー: {e}",
+                text=tr("dialog.credential.internal_error", error=e),
                 text_color="#dc2626",
             )
             return
-        self._test_btn.configure(state="normal", text="テスト")
+        self._test_btn.configure(state="normal", text=tr("dialog.credential.test"))
 
         if result.ok:
             self._message_label.configure(
-                text=f"✓ 認証 OK — {result.message or '保存しました'}",
+                text=tr(
+                    "dialog.credential.ok",
+                    message=result.message or tr("dialog.credential.saved"),
+                ),
                 text_color="#16a34a",
             )
             self.after(800, self._dismiss)
         else:
             self._message_label.configure(
-                text=f"✗ 認証失敗 — {result.message or '原因不明'}",
+                text=tr(
+                    "dialog.credential.failed",
+                    message=result.message or tr("dialog.credential.unknown_cause"),
+                ),
                 text_color="#dc2626",
             )
 

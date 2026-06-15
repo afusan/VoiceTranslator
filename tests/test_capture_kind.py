@@ -275,3 +275,22 @@ class TestSettingsPanelCaptureDisplay:
         assert capture_display_to_internal("プロセス (proctap)") == "proctap"
         # ネストカッコなど不正形式はそのまま返す(防衛)
         assert capture_display_to_internal("plain_backend") == "plain_backend"
+
+
+class TestSettingsPanelSubscriptionCleanup:
+    """言語切替で Panel が再構築される前提のリーク回帰(第2次レビュー 4a-1/4a-2)。"""
+
+    def test_destroy_unsubscribes_all(self, root) -> None:
+        from voice_translator.gui.settings_panel import SettingsPanel
+
+        ctrl = _make_controller_mock(
+            capture_backends=["soundcard"], current_capture="soundcard",
+        )
+        panel = SettingsPanel(root, ctrl)
+        subs = list(panel._subscriptions)  # noqa: SLF001
+        assert subs, "購読が張られていること"
+
+        panel.destroy()
+        # 破棄時に全 Subscription が解除されている(死んだ listener を残さない)。
+        for sub in subs:
+            sub.unsubscribe.assert_called()

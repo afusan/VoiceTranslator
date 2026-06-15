@@ -35,6 +35,8 @@ from typing import Any, Callable, TYPE_CHECKING
 from voice_translator.common.hw_info import ModelFit, assess_model_fit, detect_hw
 from voice_translator.common.types import LayerKind, ModelInfo
 
+from .i18n import tr
+
 if TYPE_CHECKING:
     from voice_translator.common.app_controller import AppController
 
@@ -64,10 +66,10 @@ class SettingField:
     """
 
     keys: tuple[str, ...]              # ConfigStore の get/set に渡すキー列。button のみ () でも可
-    label: str                         # 入力欄の左側に出すラベル(日本語OK)
+    label_key: str                     # ラベルの i18n キー(LayerSettingsDialog が tr() で解決)
     field_type: FieldType              # ALL_FIELD_TYPES のいずれか
     default: Any = None                # 値が config 未設定だったときに使う表示初期値
-    help_text: str = ""                # ラベル下のヘルプ(1行)
+    help_key: str = ""                 # ラベル下のヘルプの i18n キー(空ならヘルプ無し)
     applies_when_backend: str | None = None  # 「この名前のバックエンドが選ばれているときだけ表示」
 
     # Phase C1 追加(callback 系)。SettingField は frozen なので、必要な引数は呼び出し側が渡す。
@@ -166,9 +168,13 @@ def recent_durations_text(controller: "AppController", layer: LayerKind) -> str:
     """
     durations = controller.get_recent_durations(layer)
     if not durations:
-        return "直近データなし"
+        return tr("layer_settings.recent_durations.none")
     avg = sum(durations) / len(durations)
-    return f"直近 {len(durations)} 件平均: {avg:.1f} ms"
+    return tr(
+        "layer_settings.recent_durations.average",
+        count=len(durations),
+        avg=f"{avg:.1f}",
+    )
 
 
 # ============================================================
@@ -178,14 +184,11 @@ def _auto_load_toggle(backend_name: str) -> "SettingField":
     """指定 backend が選ばれているときだけ表示される auto_load トグル(Phase C2)。"""
     return SettingField(
         keys=("backends_config", backend_name, "auto_load"),
-        label="起動時に自動ロード",
+        label_key="layer_settings.auto_load.label",
         field_type="toggle",
         default=False,
         applies_when_backend=backend_name,
-        help_text=(
-            "ON にすると、アプリ起動時にこの backend を自動でロードする(既定 OFF)。"
-            "OFF のままなら「▶ 開始」を押したときにロードする。"
-        ),
+        help_key="layer_settings.auto_load.help",
     )
 
 
@@ -198,13 +201,10 @@ def _load_model_button(layer: LayerKind) -> "SettingField":
     """
     return SettingField(
         keys=(),
-        label="モデルを(再)ロード",
+        label_key="layer_settings.load_model.label",
         field_type="button",
         action_fn=load_model_action,
-        help_text=(
-            "今すぐこのレイヤの backend をバックグラウンドで(再)ロードする。"
-            "既にロード済みでも一度 evict して新しい設定値で作り直す。"
-        ),
+        help_key="layer_settings.load_model.help",
     )
 
 
@@ -284,10 +284,10 @@ def _recent_durations_label(layer: LayerKind) -> "SettingField":
     """
     return SettingField(
         keys=("_info", layer.value, "recent_durations"),  # 表示用のダミーキー
-        label="直近処理時間",
+        label_key="layer_settings.recent_durations.label",
         field_type="label_readonly",
         reactive_to=(layer,),
-        help_text="完了した発話の直近 5 件の平均処理時間。",
+        help_key="layer_settings.recent_durations.help",
     )
 
 
@@ -298,29 +298,21 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
     LayerKind.CAPTURE: [
         SettingField(
             keys=("pipeline", "captured_queue_max_bytes"),
-            label="入力バッファ容量 (bytes)",
+            label_key="layer_settings.pipeline.captured_queue_max_bytes.label",
             field_type="int",
             default=10_000_000,
-            help_text=(
-                "VAD出力PCMを次段(ASR)に渡すバッファのバイト上限。"
-                "16kHz×float32 で 10MB ≒ 約 156 秒分。"
-                "「▶ 開始」を押した時に反映される。"
-            ),
+            help_key="layer_settings.pipeline.captured_queue_max_bytes.help",
         ),
         _auto_load_toggle("soundcard"),
         # ProcTap(プロセス単位キャプチャ)の入力ゲイン。対象プロセスの再生音量が
         # 小さいと VAD が発話を拾えないため、内部で増幅できるようにする。
         SettingField(
             keys=("backends_config", "proctap", "input_gain"),
-            label="ProcTap: 入力ゲイン (倍率)",
+            label_key="layer_settings.backends_config.proctap.input_gain.label",
             field_type="float",
             default=1.0,
             applies_when_backend="proctap",
-            help_text=(
-                "取得した音声に掛ける増幅倍率(1.0=等倍、2〜8 程度が目安)。"
-                "対象アプリの音量が小さく認識されないときに上げる(±1.0 でクリップ)。"
-                "音量 0 は増幅できない。変更後は「モデルを(再)ロード」で反映。"
-            ),
+            help_key="layer_settings.backends_config.proctap.input_gain.help",
         ),
     ],
     LayerKind.VAD: [
@@ -331,142 +323,126 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
         # フィルタする)。
         SettingField(
             keys=("backends_config", "webrtcvad", "aggressiveness"),
-            label="WebRTC: 感度 (0=低 〜 3=高)",
+            label_key="layer_settings.backends_config.webrtcvad.aggressiveness.label",
             field_type="int",
             default=2,
             applies_when_backend="webrtcvad",
-            help_text="3 にすると speech 判定が厳しくなり、ノイズで誤検知しにくい代わりに発話の取りこぼし増。",
+            help_key="layer_settings.backends_config.webrtcvad.aggressiveness.help",
         ),
         SettingField(
             keys=("backends_config", "webrtcvad", "frame_ms"),
-            label="WebRTC: フレーム長 (ms)",
+            label_key="layer_settings.backends_config.webrtcvad.frame_ms.label",
             field_type="int",
             default=30,
             applies_when_backend="webrtcvad",
-            help_text="10 / 20 / 30 のいずれか。短いほど反応速いが CPU 負荷↑。",
+            help_key="layer_settings.backends_config.webrtcvad.frame_ms.help",
         ),
         _auto_load_toggle("webrtcvad"),
         SettingField(
             keys=("backends_config", "pyannote", "model_id"),
-            label="pyannote: モデル ID",
+            label_key="layer_settings.backends_config.pyannote.model_id.label",
             field_type="str",
             default="pyannote/voice-activity-detection",
             applies_when_backend="pyannote",
-            help_text="HuggingFace のモデル ID。標準は voice-activity-detection。",
+            help_key="layer_settings.backends_config.pyannote.model_id.help",
         ),
         SettingField(
             keys=("backends_config", "pyannote", "device"),
-            label="pyannote: device",
+            label_key="layer_settings.backends_config.pyannote.device.label",
             field_type="str",
             default="auto",
             applies_when_backend="pyannote",
-            help_text="cpu / cuda / mps / auto。CPU でも動くが激重。",
+            help_key="layer_settings.backends_config.pyannote.device.help",
         ),
         _auto_load_toggle("pyannote"),
         SettingField(
             keys=("backends_config", "pvcobra", "threshold"),
-            label="Cobra: 閾値 (0〜1)",
+            label_key="layer_settings.backends_config.pvcobra.threshold.label",
             field_type="float",
             default=0.5,
             applies_when_backend="pvcobra",
-            help_text="voice probability の閾値。下げると speech が拾いやすくなる。",
+            help_key="layer_settings.backends_config.pvcobra.threshold.help",
         ),
         _auto_load_toggle("pvcobra"),
     ],
     LayerKind.ASR: [
         SettingField(
             keys=("pipeline", "recognized_queue_size"),
-            label="認識結果バッファ件数",
+            label_key="layer_settings.pipeline.recognized_queue_size.label",
             field_type="int",
             default=10,
-            help_text=(
-                "ASR が出力した認識テキストを翻訳段に渡すキューの上限件数。"
-                "テキストは1発話で数百バイトと小さいため件数で管理する。"
-            ),
+            help_key="layer_settings.pipeline.recognized_queue_size.help",
         ),
         SettingField(
             keys=("backends_config", "faster_whisper", "model_size"),
-            label="Whisper モデル",
+            label_key="layer_settings.backends_config.faster_whisper.model_size.label",
             field_type="dropdown",
             default="small",
             applies_when_backend="faster_whisper",
             options_fn=_faster_whisper_model_options,
-            help_text=(
-                "Whisper のモデルサイズ。大きいほど精度が上がるが、RAM/VRAM と処理時間が増える。"
-                "✓ 推奨 / ⚠ 重い / ✗ 不可 アイコンは現環境(RAM/VRAM)との適合度の目安。"
-                "変更後は「モデルを(再)ロード」ボタンで反映する。"
-            ),
+            help_key="layer_settings.backends_config.faster_whisper.model_size.help",
         ),
         _auto_load_toggle("faster_whisper"),
         # openai-whisper(公式)用の同等項目。Whisper サイズ系は共通名だが、backend が
         # 別なので config キーも別系統(backends_config.openai_whisper.*)。
         SettingField(
             keys=("backends_config", "openai_whisper", "model_size"),
-            label="Whisper モデル(公式)",
+            label_key="layer_settings.backends_config.openai_whisper.model_size.label",
             field_type="dropdown",
             default="small",
             applies_when_backend="openai_whisper",
             options_fn=_openai_whisper_model_options,
-            help_text=(
-                "openai-whisper(公式)のモデルサイズ。faster-whisper より重い傾向。"
-                "tiny/base/small/medium/large-v3 から選択。"
-            ),
+            help_key="layer_settings.backends_config.openai_whisper.model_size.help",
         ),
         _auto_load_toggle("openai_whisper"),
         # OpenAI Whisper API(クラウド)用の項目。モデル名(現状 whisper-1 のみ)を露出。
         SettingField(
             keys=("backends_config", "openai_whisper_api", "model"),
-            label="OpenAI API: モデル",
+            label_key="layer_settings.backends_config.openai_whisper_api.model.label",
             field_type="str",
             default="whisper-1",
             applies_when_backend="openai_whisper_api",
-            help_text="OpenAI Whisper API のモデル名。現状は `whisper-1` のみ。",
+            help_key="layer_settings.backends_config.openai_whisper_api.model.help",
         ),
         _auto_load_toggle("openai_whisper_api"),
         # Google Cloud STT(クラウド)。auto 検出非対応のため、auto を選んだ時に
         # 何の言語で投げるかを「default_language」で指定する。
         SettingField(
             keys=("backends_config", "google_stt", "default_language"),
-            label="Google STT: default 言語(auto 時)",
+            label_key="layer_settings.backends_config.google_stt.default_language.label",
             field_type="str",
             default="eng",
             applies_when_backend="google_stt",
-            help_text=(
-                "Google STT は自動言語検出に未対応のため、入力言語が `auto` のときは"
-                "ここで指定した言語(ISO 639-3)で API を呼ぶ。"
-            ),
+            help_key="layer_settings.backends_config.google_stt.default_language.help",
         ),
         _auto_load_toggle("google_stt"),
         # Deepgram(クラウド)。モデル名のみ露出(現状 nova-3)。
         SettingField(
             keys=("backends_config", "deepgram", "model"),
-            label="Deepgram: モデル",
+            label_key="layer_settings.backends_config.deepgram.model.label",
             field_type="str",
             default="nova-3",
             applies_when_backend="deepgram",
-            help_text="Deepgram のモデル名(例: nova-3 / nova-2)。既定は nova-3。",
+            help_key="layer_settings.backends_config.deepgram.model.help",
         ),
         _auto_load_toggle("deepgram"),
     ],
     LayerKind.TRANSLATOR: [
         SettingField(
             keys=("pipeline", "translated_queue_size"),
-            label="翻訳結果バッファ件数",
+            label_key="layer_settings.pipeline.translated_queue_size.label",
             field_type="int",
             default=10,
-            help_text="翻訳済みテキストを TTS に渡すキューの上限件数。",
+            help_key="layer_settings.pipeline.translated_queue_size.help",
         ),
         SettingField(
             keys=("backends_config", "nllb200", "model_name"),
-            label="NLLB-200 モデル",
+            label_key="layer_settings.backends_config.nllb200.model_name.label",
             field_type="dropdown",
             default="facebook/nllb-200-distilled-600M",
             applies_when_backend="nllb200",
             options_fn=_nllb200_model_options,
-            help_text=(
-                "NLLB-200 のモデル名(HF id)。distilled-600M / distilled-1.3B / "
-                "1.3B / 3.3B から選択。大型は GPU 推奨。"
-            ),
+            help_key="layer_settings.backends_config.nllb200.model_name.help",
         ),
         _auto_load_toggle("nllb200"),
         # DeepL は backend 固有設定なし(API key のみ)
@@ -474,131 +450,110 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
         # OpenAI GPT
         SettingField(
             keys=("backends_config", "openai_gpt", "model"),
-            label="OpenAI GPT: モデル",
+            label_key="layer_settings.backends_config.openai_gpt.model.label",
             field_type="str",
             default="gpt-4o-mini",
             applies_when_backend="openai_gpt",
-            help_text="OpenAI Chat Completions のモデル名(例: gpt-4o-mini / gpt-4o)。",
+            help_key="layer_settings.backends_config.openai_gpt.model.help",
         ),
         _auto_load_toggle("openai_gpt"),
         # Anthropic Claude
         SettingField(
             keys=("backends_config", "anthropic_claude", "model"),
-            label="Anthropic Claude: モデル",
+            label_key="layer_settings.backends_config.anthropic_claude.model.label",
             field_type="str",
             default="claude-haiku-4-5-20251001",
             applies_when_backend="anthropic_claude",
-            help_text="Anthropic Messages のモデル名(例: claude-haiku-4-5-20251001)。",
+            help_key="layer_settings.backends_config.anthropic_claude.model.help",
         ),
         _auto_load_toggle("anthropic_claude"),
     ],
     LayerKind.TTS: [
         SettingField(
             keys=("backends_config", "sapi", "rate"),
-            label="読み上げ速度 (rate)",
+            label_key="layer_settings.backends_config.sapi.rate.label",
             field_type="int",
             default=180,
             applies_when_backend="sapi",
-            help_text=(
-                "SAPI(pyttsx3)の rate。既定 180(普通)。早口にすると再生時間が短くなる。"
-                "GUI 反映には「設定を再読込」または再起動が必要。"
-            ),
+            help_key="layer_settings.backends_config.sapi.rate.help",
         ),
         _auto_load_toggle("sapi"),
         # Piper TTS(ローカル、マルチ OS、ONNX)
         SettingField(
             keys=("backends_config", "piper", "voice_name"),
-            label="Piper: voice",
+            label_key="layer_settings.backends_config.piper.voice_name.label",
             field_type="dropdown",
             default="en_US-amy-low",
             applies_when_backend="piper",
             options_fn=_piper_voice_options,
-            help_text=(
-                "Piper の voice モデル名(`<lang_country>-<speaker>-<quality>` 形式)。"
-                "初回利用時に Hugging Face `rhasspy/piper-voices` から DL される。"
-                "日本語(ja)voice は標準配布なし。"
-            ),
+            help_key="layer_settings.backends_config.piper.voice_name.help",
         ),
         _auto_load_toggle("piper"),
         # ElevenLabs(クラウド、プリメイド voice)
         SettingField(
             keys=("backends_config", "elevenlabs", "voice_id"),
-            label="ElevenLabs: voice_id",
+            label_key="layer_settings.backends_config.elevenlabs.voice_id.label",
             field_type="str",
             default="21m00Tcm4TlvDq8ikWAM",  # Rachel
             applies_when_backend="elevenlabs",
-            help_text=(
-                "ElevenLabs のプリメイド voice ID。デフォルトは Rachel(英語女性)。"
-                "他の voice は ElevenLabs ダッシュボードの Voices ページから ID を取得。"
-            ),
+            help_key="layer_settings.backends_config.elevenlabs.voice_id.help",
         ),
         SettingField(
             keys=("backends_config", "elevenlabs", "model_id"),
-            label="ElevenLabs: モデル",
+            label_key="layer_settings.backends_config.elevenlabs.model_id.label",
             field_type="dropdown",
             default="eleven_multilingual_v2",
             applies_when_backend="elevenlabs",
             options_fn=_elevenlabs_model_options,
-            help_text=(
-                "多言語: `eleven_multilingual_v2`(29 言語、品質寄り)。"
-                "低レイテンシ: `eleven_turbo_v2_5`。"
-                "英語専用: `eleven_monolingual_v1`。"
-            ),
+            help_key="layer_settings.backends_config.elevenlabs.model_id.help",
         ),
         _auto_load_toggle("elevenlabs"),
         # OpenAI TTS(クラウド、プリメイド 6 voice)
         SettingField(
             keys=("backends_config", "openai_tts", "voice"),
-            label="OpenAI TTS: voice",
+            label_key="layer_settings.backends_config.openai_tts.voice.label",
             field_type="dropdown",
             default="alloy",
             applies_when_backend="openai_tts",
             options_fn=_openai_tts_voice_options,
-            help_text="プリメイド 6 voice(alloy / echo / fable / onyx / nova / shimmer)。",
+            help_key="layer_settings.backends_config.openai_tts.voice.help",
         ),
         SettingField(
             keys=("backends_config", "openai_tts", "model"),
-            label="OpenAI TTS: モデル",
+            label_key="layer_settings.backends_config.openai_tts.model.label",
             field_type="dropdown",
             default="tts-1",
             applies_when_backend="openai_tts",
             options_fn=_openai_tts_model_options,
-            help_text="tts-1(低レイテンシ)/ tts-1-hd(高品質)。",
+            help_key="layer_settings.backends_config.openai_tts.model.help",
         ),
         _auto_load_toggle("openai_tts"),
         # Google Cloud TTS(クラウド、サービスアカウント JSON)
         SettingField(
             keys=("backends_config", "google_tts", "voice_name"),
-            label="Google TTS: voice 名",
+            label_key="layer_settings.backends_config.google_tts.voice_name.label",
             field_type="str",
             default="",
             applies_when_backend="google_tts",
-            help_text=(
-                "Google TTS の voice 名(例: `en-US-Wavenet-A`、`ja-JP-Neural2-B`)。"
-                "空欄なら言語コードから既定 voice が自動選択される。"
-            ),
+            help_key="layer_settings.backends_config.google_tts.voice_name.help",
         ),
         SettingField(
             keys=("backends_config", "google_tts", "default_language"),
-            label="Google TTS: default 言語",
+            label_key="layer_settings.backends_config.google_tts.default_language.label",
             field_type="str",
             default="eng",
             applies_when_backend="google_tts",
-            help_text="`tgt_lang` が空のときに使う既定言語(ISO 639-3)。",
+            help_key="layer_settings.backends_config.google_tts.default_language.help",
         ),
         _auto_load_toggle("google_tts"),
     ],
     LayerKind.OUTPUT: [
         SettingField(
             keys=("pipeline", "synthesized_queue_max_bytes"),
-            label="出力バッファ容量 (bytes)",
+            label_key="layer_settings.pipeline.synthesized_queue_max_bytes.label",
             field_type="int",
             default=5_000_000,
-            help_text=(
-                "TTS 合成済み PCM を再生段に渡すバッファのバイト上限。"
-                "16kHz×float32 で 5MB ≒ 約 78 秒分。"
-                "「▶ 開始」を押した時に反映される。"
-            ),
+            help_key="layer_settings.pipeline.synthesized_queue_max_bytes.help",
         ),
         _auto_load_toggle("soundcard"),
     ],

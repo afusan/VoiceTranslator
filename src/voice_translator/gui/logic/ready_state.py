@@ -3,7 +3,7 @@
 役割: レイヤ状態・出力モード・入力ソース状況から「各ボタンの表示文言と有効/無効」を
 計算して返す。widget には触らない(適用は View 側)。
 
-移行元(P1 / refactor-ui-3move): control_panel.py の `_sync_ready_state` /
+移行元: control_panel.py の `_sync_ready_state` /
 `_sync_load_button_state` / `_sync_test_button_state` / `_capture_source_required_but_empty` /
 `_active_layer_statuses` の判断部。表示文言・優先順位は移行元と同一に保つこと。
 """
@@ -19,6 +19,8 @@ from voice_translator.common.types import (
     LayerKind,
     ModelStatus,
 )
+
+from ..i18n import tr
 
 
 @dataclass(frozen=True)
@@ -104,40 +106,40 @@ def compute_ready_state(
         any(a == AuthState.MISSING for a in auth_vals)
         or any(s == ModelStatus.MISSING_CREDENTIALS for s in vals)
     ):
-        toggle = WidgetSpec("認証情報未設定", enabled=False)
-        status_text = "認証情報未設定(詳細ダイアログで設定してください)"
+        toggle = WidgetSpec(tr("ready.toggle.auth_missing"), enabled=False)
+        status_text = tr("ready.status.auth_missing")
     elif any(a == AuthState.UNVERIFIED for a in auth_vals):
-        toggle = WidgetSpec("認証未検証", enabled=False)
-        status_text = "認証が未検証です(詳細ダイアログの「認証」でテストしてください)"
+        toggle = WidgetSpec(tr("ready.toggle.auth_unverified"), enabled=False)
+        status_text = tr("ready.status.auth_unverified")
     elif any(s == ModelStatus.DOWNLOADING for s in vals):
-        toggle = WidgetSpec("モデル DL 中…", enabled=False)
-        status_text = "モデルダウンロード中…"
+        toggle = WidgetSpec(tr("ready.toggle.downloading"), enabled=False)
+        status_text = tr("ready.status.downloading")
     elif capture_kind == CaptureKind.PROCESS and not has_input_source:
-        toggle = WidgetSpec("プロセス未選択", enabled=False)
-        status_text = "プロセスを選択してください(設定 → プロセス選択…)"
+        toggle = WidgetSpec(tr("ready.toggle.no_process"), enabled=False)
+        status_text = tr("ready.status.no_process")
     else:
-        toggle = WidgetSpec("▶ 開始", enabled=True)
+        toggle = WidgetSpec(tr("ready.toggle.start"), enabled=True)
         if any(s in (ModelStatus.INIT, ModelStatus.NOT_DOWNLOADED) for s in vals):
-            status_text = "停止中(押下時にロードします)"
+            status_text = tr("ready.status.idle_will_load")
         elif any(s == ModelStatus.LOADING for s in vals):
-            status_text = "停止中(ロード中)"
+            status_text = tr("ready.status.idle_loading")
         else:
-            status_text = "停止中"
+            status_text = tr("ready.status.idle")
 
     # --- 中央ロードボタン ---
     if all(s == ModelStatus.LOADED for s in vals):
-        load = WidgetSpec("ロード済み", enabled=False)
+        load = WidgetSpec(tr("ready.load.loaded"), enabled=False)
     elif any(s == ModelStatus.LOADING for s in vals):
-        load = WidgetSpec("ロード中…", enabled=False)
+        load = WidgetSpec(tr("ready.load.loading"), enabled=False)
     else:
-        load = WidgetSpec("↻ ロード", enabled=True)
+        load = WidgetSpec(tr("ready.load.load"), enabled=True)
 
     # --- 出力テストボタン ---
     if output_mode == "text_only":
-        test = WidgetSpec("🔊 (TTS なし)", enabled=False)
+        test = WidgetSpec(tr("ready.test.tts_none"), enabled=False)
     elif not has_output_device:
-        test = WidgetSpec("🔊 出力未選択", enabled=False)
+        test = WidgetSpec(tr("ready.test.no_output"), enabled=False)
     else:
-        test = WidgetSpec("🔊 出力テスト", enabled=True)
+        test = WidgetSpec(tr("ready.test.run"), enabled=True)
 
     return ReadyState(toggle=toggle, status_text=status_text, load=load, test=test)

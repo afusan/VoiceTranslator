@@ -67,6 +67,10 @@ class NotificationBanner(ctk.CTkFrame):
         )
         self._dismiss_btn.pack(side="right", padx=6, pady=4)
 
+    def set_before_widget(self, widget) -> None:
+        """バナーを表示する際の `before` 対象を差し替える(Panel 再構築時に貼り替える)。"""
+        self._before_widget = widget
+
     # ============================================================
     # 公開 API
     # ============================================================

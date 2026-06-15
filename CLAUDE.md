@@ -179,8 +179,15 @@ large テストを必ず追加**する。
   認証 → `CredentialsService` / 表示整形 → `gui/logic/` / 「実行条件が変わったら反応する」→
   `set_setting` の反応系。AppController 本体は「設定反映・backend ロード・起動停止」の
   ランタイムに限る。
-- **表示文言は logic 側に置き、固定文字列テストで守る**(集約テキストは golden テスト)。
-  文言・分岐の変更が「ふるまい変更」として必ずテスト差分に現れるようにする。
+- **表示文言は `gui/i18n.py` に集約し `tr(key)` で引く**(logic / widget とも直書きしない)。
+  キーは文脈単位・リテラル渡し、`tr()` は表示する瞬間(関数内)で呼ぶ(モジュールレベルで
+  定数に焼かない)。翻訳対象でない文言(enum value のミラー等)はカタログに入れず源を直接参照する。
+  欠落/死に/動的キー・トップレベル `tr()`・CJK 直書き残存・テンプレ引数・カタログ間整合は
+  `tests/test_i18n.py` の AST 検査で守る。固定文字列/golden テストも併用し、文言・分岐の変更が
+  必ずテスト差分に現れるようにする。
+- **購読する widget は破棄時に必ず解除する**: `_subscriptions` を持つ Panel は `destroy()` を
+  override して一括 `unsubscribe`(周期 `after` は `after_cancel`)。言語切替の再構築等で
+  死んだ listener を残さない(`tests/test_subscription_cleanup.py` で機械化)。
 - **「モック対策」の防御 try/except を本番コードに足さない**: それはテストの書き方の問題。
   判断は logic 直テスト(モック不要の small)、View は配線 smoke で検証する。
   controller 問い合わせの失敗縮退だけは View の入力収集ヘルパに置いてよい。

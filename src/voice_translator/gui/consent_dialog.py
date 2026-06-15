@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 
 import customtkinter as ctk
 
+from voice_translator.gui.i18n import tr
+
 if TYPE_CHECKING:
     from voice_translator.common.app_controller import AppController
 
@@ -39,13 +41,13 @@ class ConsentDialog(ctk.CTkToplevel):
         backend_name: str,
         service_name: str,
         terms_url: str | None = None,
-        data_sent_summary: str = "音声データ(発話単位の PCM)とテキスト",
+        data_sent_summary: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._result: bool = False
         self._suppress: bool = False
 
-        self.title("クラウド送信の同意確認")
+        self.title(tr("dialog.consent.title"))
         self.geometry("520x420")
         self.transient(parent)
         try:
@@ -72,16 +74,19 @@ class ConsentDialog(ctk.CTkToplevel):
         data_sent_summary: str,
     ) -> None:
         ctk.CTkLabel(
-            self, text=f"クラウドサービスの利用同意",
+            self, text=tr("dialog.consent.heading"),
             font=("", 16, "bold"),
         ).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
 
-        msg = (
-            f"backend: {backend_name}\n"
-            f"送信先サービス: {service_name}\n"
-            f"送信内容: {data_sent_summary}\n\n"
-            f"このサービスを使うと、上記のデータが外部サーバに送信されます。"
-            f"サービス側のプライバシーポリシー/利用規約を確認のうえ、同意してください。"
+        summary = (
+            data_sent_summary if data_sent_summary is not None
+            else tr("dialog.consent.default_data_summary")
+        )
+        msg = tr(
+            "dialog.consent.body",
+            backend=backend_name,
+            service=service_name,
+            summary=summary,
         )
         ctk.CTkLabel(
             self, text=msg, justify="left", wraplength=480, anchor="w",
@@ -89,7 +94,7 @@ class ConsentDialog(ctk.CTkToplevel):
 
         if terms_url:
             ctk.CTkLabel(
-                self, text=f"利用規約: {terms_url}",
+                self, text=tr("dialog.consent.terms", url=terms_url),
                 text_color="#3b82f6", anchor="w",
             ).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
 
@@ -97,7 +102,7 @@ class ConsentDialog(ctk.CTkToplevel):
         self._suppress_var = ctk.StringVar(value="0")
         ctk.CTkCheckBox(
             self,
-            text="今後このダイアログを表示しない(suppress_dialogs)",
+            text=tr("dialog.consent.suppress"),
             variable=self._suppress_var, onvalue="1", offvalue="0",
         ).grid(row=3, column=0, sticky="w", padx=12, pady=(8, 0))
 
@@ -105,10 +110,10 @@ class ConsentDialog(ctk.CTkToplevel):
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(row=4, column=0, sticky="e", padx=12, pady=(12, 12))
         ctk.CTkButton(
-            btn_frame, text="キャンセル", width=120, command=self._on_cancel,
+            btn_frame, text=tr("dialog.consent.cancel"), width=120, command=self._on_cancel,
         ).pack(side="right", padx=(8, 0))
         ctk.CTkButton(
-            btn_frame, text="同意して使用", width=140, command=self._on_accept,
+            btn_frame, text=tr("dialog.consent.accept"), width=140, command=self._on_accept,
         ).pack(side="right")
 
         self.columnconfigure(0, weight=1)
@@ -149,7 +154,7 @@ class ConsentDialog(ctk.CTkToplevel):
         backend_name: str,
         service_name: str,
         terms_url: str | None = None,
-        data_sent_summary: str = "音声データ(発話単位の PCM)とテキスト",
+        data_sent_summary: str | None = None,
     ) -> bool:
         """既存同意 / suppress 設定をチェックし、必要なら同意ダイアログを開く。
 

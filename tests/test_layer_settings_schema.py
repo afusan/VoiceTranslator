@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 from voice_translator.common.hw_info import HwInfo
 from voice_translator.common.types import LayerKind, ModelInfo
+from voice_translator.gui.i18n import tr
 from voice_translator.gui.layer_settings_schema import (
     ALL_FIELD_TYPES,
     LAYER_SETTINGS,
@@ -34,7 +35,8 @@ class TestSchemaIntegrity:
         for layer, fields in LAYER_SETTINGS.items():
             for f in fields:
                 assert isinstance(f, SettingField)
-                assert f.label.strip(), f"{layer}: label が空"
+                assert f.label_key.strip(), f"{layer}: label_key が空"
+                assert tr(f.label_key), f"{layer}: label_key {f.label_key} が辞書に無い"
                 assert f.field_type in ALL_FIELD_TYPES, f"{layer}: 未対応 field_type"
                 # button は値を持たないので keys が空でも可、それ以外は最低 2 階層
                 if f.field_type != "button":
@@ -98,7 +100,7 @@ class TestSettingFieldNewAttrs:
     """Phase C1 で追加した options_fn / action_fn / reactive_to の基本動作。"""
 
     def test_defaults_none_and_empty(self) -> None:
-        f = SettingField(keys=("a", "b"), label="x", field_type="int")
+        f = SettingField(keys=("a", "b"), label_key="x", field_type="int")
         assert f.options_fn is None
         assert f.action_fn is None
         assert f.reactive_to == ()
@@ -112,7 +114,7 @@ class TestSettingFieldNewAttrs:
 
         f = SettingField(
             keys=("backends_config", "faster_whisper", "model_size"),
-            label="モデル",
+            label_key="モデル",
             field_type="dropdown",
             options_fn=opts,
         )
@@ -129,7 +131,7 @@ class TestSettingFieldNewAttrs:
 
         f = SettingField(
             keys=(),
-            label="Load Model",
+            label_key="Load Model",
             field_type="button",
             action_fn=action,
         )
@@ -139,7 +141,7 @@ class TestSettingFieldNewAttrs:
     def test_label_readonly_with_reactive_to(self) -> None:
         f = SettingField(
             keys=("info", "asr_recent_ms"),
-            label="直近処理時間",
+            label_key="直近処理時間",
             field_type="label_readonly",
             reactive_to=(LayerKind.ASR,),
         )
@@ -226,15 +228,15 @@ class TestVisibleFields:
         # Capture には条件なしのフィールドのみ
         fields = visible_fields(LayerKind.CAPTURE, current_backend="soundcard")
         assert len(fields) >= 1
-        labels = [f.label for f in fields]
+        labels = [tr(f.label_key) for f in fields]
         assert any("入力バッファ" in l for l in labels)
 
     def test_sapi_rate_visible_only_with_sapi(self) -> None:
         """SAPI rate は backend=sapi のときだけ出る。"""
         with_sapi = visible_fields(LayerKind.TTS, current_backend="sapi")
         without_sapi = visible_fields(LayerKind.TTS, current_backend="other_tts")
-        sapi_labels_with = [f.label for f in with_sapi]
-        sapi_labels_without = [f.label for f in without_sapi]
+        sapi_labels_with = [tr(f.label_key) for f in with_sapi]
+        sapi_labels_without = [tr(f.label_key) for f in without_sapi]
         assert any("読み上げ速度" in l for l in sapi_labels_with)
         assert not any("読み上げ速度" in l for l in sapi_labels_without)
 

@@ -34,14 +34,16 @@ from voice_translator.common.types import (
 
 from .collapsible_section import CollapsibleSection
 from .consent_dialog import ConsentDialog
+from .i18n import tr
 from .layer_settings_dialog import LayerSettingsDialog
 from .logic.backend_display import (
-    SKIPPED_STATUS_TEXT,
-    TTS_NONE_DISPLAY,
     TTS_NONE_INTERNAL,
+    UNREGISTERED_INTERNAL,
     backend_display_to_internal,
     backend_internal_to_display,
     capture_internal_to_display,
+    skipped_status_text,
+    tts_none_display,
 )
 from .logic.language_choices import (
     compute_src_selection,
@@ -57,15 +59,31 @@ from .logic.palette import DISABLED_TEXT, STATUS_COLOR_DEFAULT, STATUS_COLORS
 from .logic.restart_messages import format_restart_failed, format_restart_started
 from .process_select_dialog import ProcessSelectDialog
 
-# GUIで切替対象とするレイヤと表示ラベル
-_LAYER_LABELS: list[tuple[LayerKind, str]] = [
-    (LayerKind.CAPTURE, "音声取得"),
-    (LayerKind.VAD, "VAD"),
-    (LayerKind.ASR, "ASR(書き起こし)"),
-    (LayerKind.TRANSLATOR, "翻訳"),
-    (LayerKind.TTS, "TTS(音声合成)"),
-    (LayerKind.OUTPUT, "音声出力"),
+# GUIで切替対象とするレイヤ(表示順)。表示名は i18n の layer.* キーから引く。
+_LAYER_ORDER: list[LayerKind] = [
+    LayerKind.CAPTURE,
+    LayerKind.VAD,
+    LayerKind.ASR,
+    LayerKind.TRANSLATOR,
+    LayerKind.TTS,
+    LayerKind.OUTPUT,
 ]
+
+
+def _layer_label(layer: LayerKind) -> str:
+    if layer == LayerKind.CAPTURE:
+        return tr("layer.capture")
+    if layer == LayerKind.VAD:
+        return tr("layer.vad")
+    if layer == LayerKind.ASR:
+        return tr("layer.asr")
+    if layer == LayerKind.TRANSLATOR:
+        return tr("layer.translator")
+    if layer == LayerKind.TTS:
+        return tr("layer.tts")
+    if layer == LayerKind.OUTPUT:
+        return tr("layer.output")
+    return layer.value
 
 # 翻訳先(tgt)言語の候補: backend 未登録/対応言語不明のときの fallback 固定リスト。
 # auto は出力言語としては意味が無いので含めない。コードは内部標準の ISO 639-3。
@@ -98,8 +116,8 @@ class SettingsPanel(ctk.CTkFrame):
         # ステータス欄を編成表示(「〜側で実行」/「(なし)」)で上書き中のレイヤ。
         # ここに入っている間は実ステータスでの再描画をブロックする。
         self._status_overridden: set[LayerKind] = set()
-        self._capture_var = ctk.StringVar(value="(未選択)")
-        self._output_var = ctk.StringVar(value="(未選択)")
+        self._capture_var = ctk.StringVar(value=tr("settings_panel.unselected"))
+        self._output_var = ctk.StringVar(value=tr("settings_panel.unselected"))
         # 言語プルダウンは表示形式 "eng (English)" を保持。内部値(コード)と区別する。
         initial_src = str(controller.get_setting("languages", "src", default="auto"))
         initial_tgt = str(controller.get_setting("languages", "tgt", default="jpn"))
@@ -139,6 +157,20 @@ class SettingsPanel(ctk.CTkFrame):
         ]
 
     # ============================================================
+    def destroy(self) -> None:
+        """破棄時に AppController 購読を解除する(言語切替で再構築されるため必須)。
+
+        解除しないと死んだ Panel の listener が残留し、emit のたびに破棄済み widget を
+        叩く(リーク + ログ汚染)。`Subscription` の R2-6 規約に従う。
+        """
+        for sub in getattr(self, "_subscriptions", []):
+            try:
+                sub.unsubscribe()
+            except Exception:  # noqa: BLE001 - 解除失敗でも破棄は続行
+                pass
+        super().destroy()
+
+    # ============================================================
     def _build_widgets(self) -> None:
         # 3 セクションを縦に並べる(pack で並べ、各 section の body 内は grid)。
         # ヘッダ「設定」は CollapsibleSection 自身が出すので不要。
@@ -161,7 +193,7 @@ class SettingsPanel(ctk.CTkFrame):
         initially_open = self._initial_open_state(_CFG_COLLAPSED_BACKENDS)
         section = CollapsibleSection(
             self,
-            title="バックエンド",
+            title=tr("settings_panel.section_backends"),
             initially_open=initially_open,
             on_toggle=lambda is_open: self._persist_collapsed(
                 _CFG_COLLAPSED_BACKENDS, is_open
@@ -175,12 +207,12 @@ class SettingsPanel(ctk.CTkFrame):
         # (ValueError)ため、構築時の既定値を保存しておき復元に使う。
         self._default_row_text_color: object | None = None
         row = 0
-        for layer, label in _LAYER_LABELS:
-            label_widget = ctk.CTkLabel(body, text=f"{label}:")
+        for layer in _LAYER_ORDER:
+            label_widget = ctk.CTkLabel(body, text=f"{_layer_label(layer)}:")
             if self._default_row_text_color is None:
                 self._default_row_text_color = label_widget.cget("text_color")
             label_widget.grid(row=row, column=0, sticky="w", padx=4, pady=2)
-            internal_names = self._available_backend_names(layer) or ["(未登録)"]
+            internal_names = self._available_backend_names(layer) or [UNREGISTERED_INTERNAL]
             # 表示用候補(layer ごとに display フォーマットを変換)
             names = self._render_backend_choices(layer, internal_names)
             current_internal = str(
@@ -204,7 +236,7 @@ class SettingsPanel(ctk.CTkFrame):
             self._status_labels[layer] = status_label
 
             cfg_btn = ctk.CTkButton(
-                body, text="設定", width=60,
+                body, text=tr("settings_panel.config_btn"), width=60,
                 command=lambda lyr=layer: self._open_layer_settings(lyr),
             )
             cfg_btn.grid(row=row, column=3, sticky="e", padx=(0, 4), pady=2)
@@ -253,7 +285,7 @@ class SettingsPanel(ctk.CTkFrame):
         - その他: backend 名そのまま
         """
         if layer == LayerKind.TTS:
-            return list(internal_names) + [TTS_NONE_DISPLAY]
+            return list(internal_names) + [tts_none_display()]
         if layer == LayerKind.CAPTURE:
             return [self._capture_internal_to_display(n) for n in internal_names]
         return list(internal_names)
@@ -283,9 +315,9 @@ class SettingsPanel(ctk.CTkFrame):
     def _capture_kind_of(self, backend_name: str) -> CaptureKind | None:
         """backend 名から CaptureKind を解決する。取れないときは None(表示は素通し)。
 
-        防衛: 古い AppController モックや未登録 backend、空 / "(未登録)" 表示に対する縮退。
+        防衛: 古い AppController モックや未登録 backend、空 / 未登録 sentinel に対する縮退。
         """
-        if not backend_name or backend_name == "(未登録)":
+        if not backend_name or backend_name == UNREGISTERED_INTERNAL:
             return None
         try:
             kind = self._controller.get_capture_kind(backend_name)
@@ -389,7 +421,7 @@ class SettingsPanel(ctk.CTkFrame):
         initially_open = self._initial_open_state(_CFG_COLLAPSED_DEVICES)
         section = CollapsibleSection(
             self,
-            title="デバイス",
+            title=tr("settings_panel.section_devices"),
             initially_open=initially_open,
             on_toggle=lambda is_open: self._persist_collapsed(
                 _CFG_COLLAPSED_DEVICES, is_open
@@ -397,7 +429,7 @@ class SettingsPanel(ctk.CTkFrame):
         )
         body = section.body
 
-        ctk.CTkLabel(body, text="入力デバイス:").grid(
+        ctk.CTkLabel(body, text=tr("settings_panel.input_device")).grid(
             row=0, column=0, sticky="w", padx=4, pady=2
         )
         # capture_kind に応じて 2 種類の UI を使い分ける(段階 3 / ProcTap):
@@ -405,23 +437,24 @@ class SettingsPanel(ctk.CTkFrame):
         #   PROCESS → 「プロセス選択…」ボタン (`_capture_select_btn`)
         # 切替時はもう一方を `grid_remove()` して非表示にし、grid 領域は保持しない。
         self._capture_dropdown = ctk.CTkOptionMenu(
-            body, values=["(列挙中)"], variable=self._capture_var,
+            body, values=[tr("settings_panel.enumerating")], variable=self._capture_var,
             command=self._on_capture_changed,
         )
         self._capture_dropdown.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
 
         self._capture_select_btn = ctk.CTkButton(
-            body, text="プロセス選択…", command=self._on_capture_select_clicked,
+            body, text=tr("settings_panel.process_select"),
+            command=self._on_capture_select_clicked,
         )
         # 初期状態では非表示(DEVICE kind backend が選ばれている前提)
         self._capture_select_btn.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
         self._capture_select_btn.grid_remove()
 
-        ctk.CTkLabel(body, text="出力デバイス:").grid(
+        ctk.CTkLabel(body, text=tr("settings_panel.output_device")).grid(
             row=1, column=0, sticky="w", padx=4, pady=2
         )
         self._output_dropdown = ctk.CTkOptionMenu(
-            body, values=["(列挙中)"], variable=self._output_var,
+            body, values=[tr("settings_panel.enumerating")], variable=self._output_var,
             command=self._on_output_changed,
         )
         self._output_dropdown.grid(row=1, column=1, sticky="ew", padx=4, pady=2)
@@ -436,7 +469,7 @@ class SettingsPanel(ctk.CTkFrame):
         initially_open = self._initial_open_state(_CFG_COLLAPSED_LANGUAGES)
         section = CollapsibleSection(
             self,
-            title="翻訳",
+            title=tr("settings_panel.section_languages"),
             initially_open=initially_open,
             on_toggle=lambda is_open: self._persist_collapsed(
                 _CFG_COLLAPSED_LANGUAGES, is_open
@@ -444,7 +477,7 @@ class SettingsPanel(ctk.CTkFrame):
         )
         body = section.body
 
-        ctk.CTkLabel(body, text="入力言語 (src):").grid(
+        ctk.CTkLabel(body, text=tr("settings_panel.src_lang")).grid(
             row=0, column=0, sticky="w", padx=4, pady=2
         )
         self._src_dropdown = ctk.CTkOptionMenu(
@@ -460,7 +493,7 @@ class SettingsPanel(ctk.CTkFrame):
             command=lambda: self._open_language_search("src"),
         ).grid(row=0, column=2, sticky="e", padx=(0, 4), pady=2)
 
-        ctk.CTkLabel(body, text="出力言語 (tgt):").grid(
+        ctk.CTkLabel(body, text=tr("settings_panel.tgt_lang")).grid(
             row=1, column=0, sticky="w", padx=4, pady=2
         )
         self._tgt_dropdown = ctk.CTkOptionMenu(
@@ -485,7 +518,7 @@ class SettingsPanel(ctk.CTkFrame):
         # ログ出力先
         log_row = ctk.CTkFrame(self, fg_color="transparent")
         log_row.pack(fill="x", padx=10, pady=(8, 2))
-        ctk.CTkLabel(log_row, text="ログ出力先:").pack(side="left")
+        ctk.CTkLabel(log_row, text=tr("settings_panel.log_dir")).pack(side="left")
         log_entry = ctk.CTkEntry(log_row, textvariable=self._log_dir_var)
         log_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
         log_entry.bind(
@@ -496,13 +529,13 @@ class SettingsPanel(ctk.CTkFrame):
         # 保存/再読込/デバイス再列挙
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=10, pady=(4, 8))
-        ctk.CTkButton(btn_frame, text="設定を保存", command=self._on_save).pack(
+        ctk.CTkButton(btn_frame, text=tr("settings_panel.save"), command=self._on_save).pack(
             side="left", padx=4
         )
-        ctk.CTkButton(btn_frame, text="設定を再読込", command=self._on_reload).pack(
+        ctk.CTkButton(btn_frame, text=tr("settings_panel.reload"), command=self._on_reload).pack(
             side="left", padx=4
         )
-        ctk.CTkButton(btn_frame, text="デバイス再列挙", command=self._populate_devices_into_dropdowns).pack(
+        ctk.CTkButton(btn_frame, text=tr("settings_panel.redetect_devices"), command=self._populate_devices_into_dropdowns).pack(
             side="left", padx=4
         )
 
@@ -630,7 +663,7 @@ class SettingsPanel(ctk.CTkFrame):
         absorbed = self._absorbed_roles()
         overrides: dict[LayerKind, str] = {layer: "" for layer in absorbed}
         for layer in self._skipped_roles():
-            overrides.setdefault(layer, SKIPPED_STATUS_TEXT)
+            overrides.setdefault(layer, skipped_status_text())
 
         prev = set(self._status_overridden)
         self._status_overridden = set(overrides)
@@ -1055,12 +1088,12 @@ class SettingsPanel(ctk.CTkFrame):
         try:
             sources = self._controller.list_capture_sources()
         except Exception as e:  # noqa: BLE001
-            self._capture_dropdown.configure(values=[f"(取得失敗: {e})"])
+            self._capture_dropdown.configure(values=[tr("settings_panel.fetch_failed", error=e)])
             self._capture_id_map = {}
             return
 
         if not sources:
-            self._capture_dropdown.configure(values=["(入力デバイスなし)"])
+            self._capture_dropdown.configure(values=[tr("settings_panel.no_input_device")])
             self._capture_id_map = {}
             return
 
@@ -1095,13 +1128,13 @@ class SettingsPanel(ctk.CTkFrame):
         選択時:   「PID 1234 ▼」(プロセス名解決は重いのでダイアログ側で表示する)
         """
         current = self._controller.get_setting("devices", "input", default="")
-        text = "プロセス選択…"
+        text = tr("settings_panel.process_select")
         if current:
             try:
                 pid = int(str(current).strip())
-                text = f"PID {pid} ▼"
+                text = tr("settings_panel.pid_selected", pid=pid)
             except (TypeError, ValueError):
-                text = "プロセス選択…"
+                text = tr("settings_panel.process_select")
         try:
             self._capture_select_btn.configure(text=text)
         except Exception:  # noqa: BLE001
@@ -1120,7 +1153,7 @@ class SettingsPanel(ctk.CTkFrame):
         try:
             dlg = ProcessSelectDialog(self, initial_pid=initial_pid)
         except Exception as e:  # noqa: BLE001
-            self._show_message(f"プロセス選択ダイアログ起動失敗: {e}")
+            self._show_message(tr("settings_panel.process_dialog_failed", error=e))
             return
         try:
             dlg.wait_window()
@@ -1141,12 +1174,12 @@ class SettingsPanel(ctk.CTkFrame):
         try:
             devices = self._controller.list_output_devices()
         except Exception as e:  # noqa: BLE001
-            self._output_dropdown.configure(values=[f"(取得失敗: {e})"])
+            self._output_dropdown.configure(values=[tr("settings_panel.fetch_failed", error=e)])
             self._output_id_map = {}
             return
 
         if not devices:
-            self._output_dropdown.configure(values=["(出力デバイスなし)"])
+            self._output_dropdown.configure(values=[tr("settings_panel.no_output_device")])
             self._output_id_map = {}
             return
 
@@ -1203,9 +1236,9 @@ class SettingsPanel(ctk.CTkFrame):
         try:
             self._controller.save_settings()
         except Exception as e:  # noqa: BLE001
-            self._show_message(f"保存失敗: {e}")
+            self._show_message(tr("settings_panel.save_failed", error=e))
         else:
-            self._show_message("設定を保存しました")
+            self._show_message(tr("settings_panel.saved"))
 
     def _on_reload(self) -> None:
         # 動作中 / ロード中の再読込は拒否する(2026-06-10 ドッグフーディング起票)。
@@ -1213,19 +1246,17 @@ class SettingsPanel(ctk.CTkFrame):
         # Coordinator が旧インスタンスを掴んだまま表示状態だけ INIT に戻り、
         # 表示と実行状態が食い違う。
         if self._reload_blocked():
-            self._notify_warning(
-                "動作中は設定を再読込できません(停止してから実行してください)"
-            )
+            self._notify_warning(tr("settings_panel.reload_blocked"))
             return
         try:
             self._controller.load_settings()
         except Exception as e:  # noqa: BLE001
-            self._show_message(f"読込失敗: {e}")
+            self._show_message(tr("settings_panel.reload_failed", error=e))
         else:
             self._populate_devices_into_dropdowns()
             self._sync_all_status_labels()
             self._apply_absorbed_visuals()
-            self._show_message("設定を再読込しました")
+            self._show_message(tr("settings_panel.reloaded"))
 
     def _reload_blocked(self) -> bool:
         """再読込を拒否すべき状態(動作中 / ロード中)か。取得失敗は許可側に縮退。"""

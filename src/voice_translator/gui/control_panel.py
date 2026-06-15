@@ -32,6 +32,7 @@ from voice_translator.common.app_controller import AppController
 from voice_translator.common.types import CaptureKind, LayerKind, ModelStatus
 
 from .collapsible_section import CollapsibleSection
+from .i18n import tr
 from .logic.accel_summary import summarize_accel
 from .logic.ready_state import WidgetSpec, compute_ready_state
 from .logic.status_summary import append_gui_events, format_status_summary
@@ -91,37 +92,41 @@ class ControlPanel(ctk.CTkFrame):
         header_frame.grid(
             row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4),
         )
-        ctk.CTkLabel(header_frame, text="動作", font=("", 16, "bold")).pack(side="left")
-        self._status_label = ctk.CTkLabel(header_frame, text="停止中")
+        ctk.CTkLabel(
+            header_frame, text=tr("control_panel.section_action"), font=("", 16, "bold"),
+        ).pack(side="left")
+        self._status_label = ctk.CTkLabel(header_frame, text=tr("ready.status.idle"))
         self._status_label.pack(side="left", padx=(12, 0))
 
         # 開始/停止ボタン と 中央ロードボタン を 1 つの frame にまとめて col 0 に配置
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(row=1, column=0, padx=10, pady=8, sticky="w")
         self._toggle_btn = ctk.CTkButton(
-            btn_frame, text="▶ 開始", width=140, command=self._on_toggle
+            btn_frame, text=tr("ready.toggle.start"), width=140, command=self._on_toggle
         )
         self._toggle_btn.pack(side="left")
         # 中央ロードボタン: 全レイヤを冪等に load(既ロードはスキップ)。設定変更後の
         # 反映は dialog 保存時に該当 backend が evict されるため、このボタン押下で
         # 再 load される。動作中 / ロード中は disable。
         self._load_btn = ctk.CTkButton(
-            btn_frame, text="↻ ロード", width=100, command=self._on_load_clicked,
+            btn_frame, text=tr("ready.load.load"), width=100, command=self._on_load_clicked,
         )
         self._load_btn.pack(side="left", padx=(8, 0))
         # 「🔊 出力テスト」ボタン: 「翻訳まで出ているのに音が鳴らない」の切り分け用。
         # 動作中 / text_only / 出力デバイス未選択 のとき disable(_sync_ready_state で管理)。
         self._test_btn = ctk.CTkButton(
-            btn_frame, text="🔊 出力テスト", width=120,
+            btn_frame, text=tr("ready.test.run"), width=120,
             command=self._on_test_output_clicked,
         )
         self._test_btn.pack(side="left", padx=(8, 0))
 
-        self._latency_label = ctk.CTkLabel(self, text="平均レイテンシ: -")
+        self._latency_label = ctk.CTkLabel(self, text=tr("control_panel.latency_none"))
         self._latency_label.grid(row=1, column=2, padx=10, pady=8, sticky="e")
 
         # アクセラレータ表示("GPU 使ってる/CPU のみ" の一目情報)
-        self._accel_label = ctk.CTkLabel(self, text="演算: -", text_color="#94a3b8")
+        self._accel_label = ctk.CTkLabel(
+            self, text=tr("control_panel.accel_init"), text_color="#94a3b8",
+        )
         self._accel_label.grid(
             row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 4)
         )
@@ -133,7 +138,7 @@ class ControlPanel(ctk.CTkFrame):
             self._controller.get_setting(*_CFG_COLLAPSED_STATUS, default=False)
         )
         self._status_section = CollapsibleSection(
-            self, title="ステータス",
+            self, title=tr("control_panel.section_status"),
             initially_open=status_initially_open,
             on_toggle=self._on_status_toggle,
         )
@@ -148,7 +153,7 @@ class ControlPanel(ctk.CTkFrame):
         status_toolbar.pack(fill="x", padx=2, pady=(0, 2))
         self._status_clear_btn = ctk.CTkButton(
             status_toolbar,
-            text="操作イベントをクリア",
+            text=tr("control_panel.clear_events"),
             width=160,
             command=self._on_clear_status_events,
         )
@@ -160,11 +165,11 @@ class ControlPanel(ctk.CTkFrame):
         self._status_text.configure(state="disabled")
 
         # 履歴ラベル + クリアボタン(同じ行に配置)
-        ctk.CTkLabel(self, text="最近の翻訳:").grid(
+        ctk.CTkLabel(self, text=tr("control_panel.recent_translations")).grid(
             row=5, column=0, sticky="w", padx=10, pady=(8, 0)
         )
         self._clear_btn = ctk.CTkButton(
-            self, text="クリア", width=80, command=self._on_clear_history
+            self, text=tr("control_panel.clear"), width=80, command=self._on_clear_history
         )
         self._clear_btn.grid(row=5, column=2, sticky="e", padx=10, pady=(8, 0))
 
@@ -211,10 +216,10 @@ class ControlPanel(ctk.CTkFrame):
             logging.getLogger("voice_translator").exception(
                 "_on_load_clicked: load_models_async 起動失敗"
             )
-            self._show_failure_banner(f"ロード起動失敗: {e}")
+            self._show_failure_banner(tr("control_panel.load_start_failed", error=e))
             return
         # 押下中は一時的に disable + 「ロード中…」表示。完了で _sync_ready_state が戻す。
-        self._load_btn.configure(text="ロード中…", state="disabled")
+        self._load_btn.configure(text=tr("ready.load.loading"), state="disabled")
         # ロード中に出力テストを叩くと TTS / Output の二重 load 競合が起きうるので disable
         try:
             self._test_btn.configure(state="disabled")
@@ -232,16 +237,13 @@ class ControlPanel(ctk.CTkFrame):
         self._sync_ready_state()  # ボタン text/state を最新状態に合わせ直す
 
     def _apply_load_failed(self, message: str) -> None:
-        self._show_failure_banner(f"ロード失敗: {message}")
-        self._append_status_event(f"[ロード失敗] {message}")
+        self._show_failure_banner(tr("control_panel.load_failed", error=message))
+        self._append_status_event(tr("control_panel.event_load_failed", error=message))
         self._sync_ready_state()
 
     # ============================================================
     # 出力テストボタン
     # ============================================================
-    # 出力テストで読み上げるテキスト(切り分け用なので短く固定)。
-    _TEST_PLAYBACK_TEXT = "テスト音声"
-
     def _on_test_output_clicked(self) -> None:
         """🔊 出力テストボタン: TTS → Output の経路を 1 回だけ叩いて音を鳴らす。
 
@@ -256,11 +258,11 @@ class ControlPanel(ctk.CTkFrame):
         if self._controller.is_running or self._controller.is_loading:
             return
 
-        self._test_btn.configure(text="再生中…", state="disabled")
+        self._test_btn.configure(text=tr("control_panel.playing"), state="disabled")
 
         def _worker() -> None:
             try:
-                self._controller.test_output_playback(self._TEST_PLAYBACK_TEXT)
+                self._controller.test_output_playback(tr("control_panel.test_playback_text"))
             except Exception as e:  # noqa: BLE001
                 msg = str(e)
                 self.after(0, lambda m=msg: self._on_test_playback_failed(m))
@@ -274,7 +276,12 @@ class ControlPanel(ctk.CTkFrame):
     def _on_test_playback_done(self) -> None:
         """テスト再生の正常完了を UI に反映する。"""
         # ステータスにも軽く出しておく(目に見える結果が「音」だけだとボタンを連打されやすいので)
-        self._append_status_event(f"[出力テスト] 再生完了: {self._TEST_PLAYBACK_TEXT!r}")
+        self._append_status_event(
+            tr(
+                "control_panel.event_test_done",
+                text=repr(tr("control_panel.test_playback_text")),
+            )
+        )
         self._sync_ready_state()
 
     def _on_test_playback_failed(self, message: str) -> None:
@@ -283,8 +290,8 @@ class ControlPanel(ctk.CTkFrame):
         logging.getLogger("voice_translator").warning(
             "test_output_playback 失敗: %s", message,
         )
-        self._show_failure_banner(f"出力テスト失敗: {message}")
-        self._append_status_event(f"[出力テスト失敗] {message}")
+        self._show_failure_banner(tr("control_panel.test_failed", error=message))
+        self._append_status_event(tr("control_panel.event_test_failed", error=message))
         self._sync_ready_state()
 
     def _do_start_async(self) -> None:
@@ -308,44 +315,44 @@ class ControlPanel(ctk.CTkFrame):
             logging.getLogger("voice_translator").exception(
                 "_do_start_async で start_pipeline_async が同期失敗"
             )
-            self._show_failure_banner(f"起動失敗: {e}")
+            self._show_failure_banner(tr("control_panel.start_failed", error=e))
             # status_label は ready_state の周期更新で上書きされるので、
             # 短時間でも見えるようここで上書きしておく。
             try:
-                self._status_label.configure(text=f"起動失敗: {e}")
+                self._status_label.configure(text=tr("control_panel.start_failed", error=e))
             except Exception:  # noqa: BLE001 - widget 破棄済み等
                 pass
             # 履歴は status textbox 側に積む(従来は _append_history で翻訳履歴に混ぜていた)
-            self._append_status_event(f"[起動失敗] {e}")
+            self._append_status_event(tr("control_panel.event_start_failed", error=e))
             return
         self._state = "starting"
-        self._toggle_btn.configure(text="開始中…", state="disabled")
+        self._toggle_btn.configure(text=tr("control_panel.starting"), state="disabled")
         try:
-            self._load_btn.configure(text="(起動中)", state="disabled")
+            self._load_btn.configure(text=tr("control_panel.load_btn_starting"), state="disabled")
         except AttributeError:
             pass
         try:
-            self._test_btn.configure(text="🔊 出力テスト", state="disabled")
+            self._test_btn.configure(text=tr("ready.test.run"), state="disabled")
         except AttributeError:
             pass
-        self._status_label.configure(text="開始中…")
+        self._status_label.configure(text=tr("control_panel.starting"))
 
     def _do_stop(self) -> None:
         self._state = "stopping"
-        self._toggle_btn.configure(text="停止中…", state="disabled")
+        self._toggle_btn.configure(text=tr("control_panel.stopping"), state="disabled")
         try:
-            self._load_btn.configure(text="(停止中)", state="disabled")
+            self._load_btn.configure(text=tr("control_panel.load_btn_stopping"), state="disabled")
         except AttributeError:
             pass
         try:
-            self._test_btn.configure(text="🔊 出力テスト", state="disabled")
+            self._test_btn.configure(text=tr("ready.test.run"), state="disabled")
         except AttributeError:
             pass
-        self._status_label.configure(text="停止中…")
+        self._status_label.configure(text=tr("control_panel.stopping"))
         try:
             self._controller.stop_pipeline()
         except Exception as e:  # noqa: BLE001
-            self._append_status_event(f"[停止時例外] {e}")
+            self._append_status_event(tr("control_panel.event_stop_exception", error=e))
         self._state = "idle"
         # 停止後はバックエンドが残っているので即 ready 状態に戻す
         self._sync_ready_state()
@@ -361,28 +368,28 @@ class ControlPanel(ctk.CTkFrame):
 
     def _apply_loader_started(self) -> None:
         self._state = "running"
-        self._toggle_btn.configure(text="■ 停止", state="normal")
-        self._status_label.configure(text="動作中")
+        self._toggle_btn.configure(text=tr("control_panel.stop"), state="normal")
+        self._status_label.configure(text=tr("control_panel.running"))
         # 動作中はモデル差し替え禁止 → 中央ロードボタンも disable
         try:
-            self._load_btn.configure(text="(動作中)", state="disabled")
+            self._load_btn.configure(text=tr("control_panel.load_btn_running"), state="disabled")
         except AttributeError:
             pass
         # 動作中は Output backend を本体が掴んでいるため出力テストは衝突する → disable
         try:
-            self._test_btn.configure(text="🔊 (動作中)", state="disabled")
+            self._test_btn.configure(text=tr("control_panel.test_btn_running"), state="disabled")
         except AttributeError:
             pass
 
     def _apply_loader_failed(self, message: str) -> None:
         # 非同期ロード失敗も同期失敗と同じ 4 段フィードバックで通知
-        self._show_failure_banner(f"起動失敗: {message}")
-        self._append_status_event(f"[起動失敗] {message}")
+        self._show_failure_banner(tr("control_panel.start_failed", error=message))
+        self._append_status_event(tr("control_panel.event_start_failed", error=message))
         self._state = "idle"
         # 起動失敗時は現在のレイヤ状態を見て ready 表示を更新
         self._sync_ready_state()
         # ready 表示で "停止中" になった後、起動失敗を伝えるためラベルを上書き
-        self._status_label.configure(text="停止中(起動失敗)")
+        self._status_label.configure(text=tr("control_panel.idle_start_failed"))
 
     # ============================================================
     # 折り畳み + バナー連携
@@ -442,7 +449,7 @@ class ControlPanel(ctk.CTkFrame):
         if seq_id is not None:
             prefix_parts.append(f"#{seq_id}")
         prefix = " ".join(prefix_parts)
-        suffix = f" (+{suppressed}件抑制)" if suppressed > 0 else ""
+        suffix = tr("control_panel.suppressed_suffix", count=suppressed) if suppressed > 0 else ""
         if not prefix:
             return message + suffix
         return prefix + " " + message + suffix
@@ -496,7 +503,7 @@ class ControlPanel(ctk.CTkFrame):
         except Exception as e:  # noqa: BLE001
             # 取得失敗時も操作イベントだけは見えるようにする
             summary = append_gui_events(
-                f"(ステータス取得に失敗: {e})", self._gui_event_log
+                tr("control_panel.status_fetch_failed", error=e), self._gui_event_log
             )
 
         try:
@@ -524,13 +531,37 @@ class ControlPanel(ctk.CTkFrame):
     def _schedule_status_refresh(self) -> None:
         """周期的にステータスを再描画する(イベント化されていないエラー履歴の遅延表示)。"""
         try:
-            self.after(self._STATUS_REFRESH_INTERVAL_MS, self._tick_status_refresh)
+            self._status_after_id = self.after(
+                self._STATUS_REFRESH_INTERVAL_MS, self._tick_status_refresh
+            )
         except Exception:  # noqa: BLE001
-            pass
+            self._status_after_id = None
 
     def _tick_status_refresh(self) -> None:
         self._refresh_status_text()
         self._schedule_status_refresh()
+
+    # ============================================================
+    def destroy(self) -> None:
+        """破棄時に購読解除 + 周期 after のキャンセルを行う(再構築でリークさせない)。
+
+        言語切替で MainWindow がこの Panel を destroy → 再生成するため、ここで
+        AppController 購読(`_subscriptions`)を解除し、周期ステータス更新の `after` も
+        止める。怠ると死んだ widget が emit/after で叩かれログを汚す(`Subscription` R2-6)。
+        """
+        after_id = getattr(self, "_status_after_id", None)
+        if after_id is not None:
+            try:
+                self.after_cancel(after_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._status_after_id = None
+        for sub in getattr(self, "_subscriptions", []):
+            try:
+                sub.unsubscribe()
+            except Exception:  # noqa: BLE001
+                pass
+        super().destroy()
 
     def _sync_ready_state(self) -> None:
         """各レイヤのステータスを見て、開始ボタン/ステータスラベルを再構成する。
@@ -662,7 +693,10 @@ class ControlPanel(ctk.CTkFrame):
             self._latencies.append(latency)
             avg = sum(self._latencies) / len(self._latencies)
             self._latency_label.configure(
-                text=f"平均レイテンシ: {avg:.2f} 秒(直近{len(self._latencies)}件)"
+                text=tr(
+                    "control_panel.latency",
+                    avg=f"{avg:.2f}", count=len(self._latencies),
+                )
             )
 
     def _apply_text_ready(self, record: dict) -> None:
@@ -680,12 +714,12 @@ class ControlPanel(ctk.CTkFrame):
         self._append_history(text)
 
     def _apply_fatal(self, message: str) -> None:
-        self._append_status_event(f"[致命的エラー] {message}")
+        self._append_status_event(tr("control_panel.event_fatal", error=message))
         self._state = "idle"
         # ready 表示を更新(基本は全 LOADED 維持なので "▶ 開始" 復活)
         self._sync_ready_state()
         # その上で「(エラー)」を明示してユーザに通知
-        self._status_label.configure(text="停止中(エラー)")
+        self._status_label.configure(text=tr("control_panel.idle_error"))
 
     def _apply_warn(self, message: str) -> None:
         # 警告は UI には出さない(app.log に残るので、調査時はログを参照)。
@@ -710,7 +744,7 @@ class ControlPanel(ctk.CTkFrame):
         self._history_text.delete("1.0", "end")
         self._history_text.configure(state="disabled")
         self._latencies.clear()
-        self._latency_label.configure(text="平均レイテンシ: -")
+        self._latency_label.configure(text=tr("control_panel.latency_none"))
 
     # ============================================================
     def _append_history(self, text: str) -> None:

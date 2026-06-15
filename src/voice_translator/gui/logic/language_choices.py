@@ -4,7 +4,7 @@
 「fallback が起きたか」を計算して返す。通知バナーの文言整形もここで行う。
 ConfigStore への書き込み・banner 表示・dropdown 操作は View 側の責務。
 
-移行元(P1 / refactor-ui-3move): settings_panel.py の
+移行元: settings_panel.py の
 `_refresh_input_language_choices` / `_refresh_target_language_choices` /
 `_check_tts_output_lang_compatibility` の判断部と `_notify_*` の文言部。
 候補の順序・fallback 規則・メッセージ文言は移行元と一字一句同一に保つこと。
@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from voice_translator.common.languages import format_language
+
+from ..i18n import tr
 
 
 @dataclass(frozen=True)
@@ -129,24 +131,30 @@ def tts_warning_needed(
 # ============================================================
 def format_src_fallback_message(old_code: str, new_code: str, backend_name: str) -> str:
     """入力言語の自動 fallback を伝えるバナー文言。"""
-    return (
-        f"入力言語を {format_language(old_code)} から {format_language(new_code)} に変更しました"
-        f"({backend_name} が {old_code} に対応していないため)"
+    return tr(
+        "language.src_fallback",
+        old=format_language(old_code),
+        new=format_language(new_code),
+        backend=backend_name,
+        code=old_code,
     )
 
 
 def format_tgt_fallback_message(old_code: str, new_code: str, backend_name: str) -> str:
     """出力言語の自動 fallback を伝えるバナー文言。"""
-    return (
-        f"出力言語を {format_language(old_code)} から {format_language(new_code)} に変更しました"
-        f"({backend_name} が {old_code} に対応していないため)"
+    return tr(
+        "language.tgt_fallback",
+        old=format_language(old_code),
+        new=format_language(new_code),
+        backend=backend_name,
+        code=old_code,
     )
 
 
 def format_tts_warning_message(tgt_code: str, backend_name: str) -> str:
     """TTS 非対応言語の警告バナー文言。"""
-    return (
-        f"TTS バックエンド {backend_name} は読み上げ言語 "
-        f"{format_language(tgt_code)} に対応していません"
-        "(Translator 出力言語を変えるか、別の TTS バックエンドに切り替えてください)"
+    return tr(
+        "language.tts_warning",
+        backend=backend_name,
+        lang=format_language(tgt_code),
     )
