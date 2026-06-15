@@ -1,6 +1,27 @@
 # feature-mms-multilingual 作業計画(多言語対応の拡張)
 
-起票: 2026-06-14 / 親: master / 状態: 計画(未着手)
+起票: 2026-06-14 / 親: master / ブランチ: `feature/mms-multilingual`
+
+## 進捗(コンテキストをクリアしても再開できるよう、ここを更新する)
+
+- [x] **Phase 1-a: MMS-TTS backend 本体**(2026-06-15)。`tts/mms_backend.py` を追加。
+      言語単位の LRU 遅延ロード + `prefetch_language()` + `synthesize()`。`backend_setup` 登録
+      (`requires_modules=("transformers",)` → 常に列挙)、extras `tts-mms`(uroman)を `full` に追加。
+      small テスト(`tests/test_mms_backend.py`)+ large 実ロードテスト(`tests/test_mms_tts_large.py`、
+      `facebook/mms-tts-eng` で DL→合成を通過確認済み)。対応言語は 639-1 で表現できる高信頼の
+      初期集合 14 言語(`_ISO1_TO_MMS`)に限定。
+- [ ] **Phase 1-b: prefetch 配線**(次の作業)。出力言語の確定を契機に GUI が
+      `MmsTtsBackend.prefetch_language()` をバックグラウンドで呼ぶ配線。現状は synthesize 時の
+      同期ロードで縮退(初回発話が DL で固まる)。AppController のイベント/設定反応系に乗せる。
+- [ ] **横断課題: 言語コード 639-3 拡張**(本丸、未着手)。低資源言語(639-1 を持たない)を
+      開放するため `common/languages.py` を 639-3 まで拡張し、NLLB/MMS のコードを正規化。
+      これが終わると `_ISO1_TO_MMS` の縛り(14 言語)が外れアフリカ系言語が載る。
+- [ ] **Phase 2: 翻訳との AND 連携**(横断課題に依存)。
+- [ ] **Phase 3: 言語選択フィルタリング**(着手時に方式決定)。
+- [ ] **Phase 4: ドキュメント/コマンド回りの最終確認**。
+
+> 再開手順: この Plan と `相談記録_低資源言語対応と音声出力.md` を読む → 上の未チェック項目の
+> 先頭から着手。実装の現物は `tts/mms_backend.py`(テンプレは `tts/piper_backend.py`)。
 
 ## 背景・狙い
 

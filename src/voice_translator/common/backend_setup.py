@@ -74,6 +74,7 @@ def register_default_backends(
     )
     from voice_translator.tts.sapi_backend import SapiTtsBackend
     from voice_translator.tts.piper_backend import PiperTtsBackend
+    from voice_translator.tts.mms_backend import MmsTtsBackend
     from voice_translator.tts.elevenlabs_backend import ElevenLabsTtsBackend
     from voice_translator.tts.openai_tts_backend import OpenAiTtsBackend
     from voice_translator.tts.google_cloud_tts_backend import GoogleCloudTtsBackend
@@ -572,6 +573,31 @@ def register_default_backends(
             notes="Piper TTS (ONNX, CPU 軽量)。voice モデルは初回 DL。",
         ),
         requires_modules=("piper", "huggingface_hub"),
+    )
+
+    # MMS TTS(ローカル、多言語、言語単位の遅延ロード)。transformers/torch は base 依存。
+    # 一部スクリプトの言語のみ uroman(extras `tts-mms`)が要る。モデルは CC-BY-NC(非商用)。
+    mms_device = _read_str(
+        config, ("backends_config", "mms", "device"), default="auto"
+    )
+    mms_max_cached = _read_int(
+        config, ("backends_config", "mms", "max_cached_languages"), default=2
+    )
+    registry.register(
+        LayerKind.TTS,
+        "mms",
+        lambda: MmsTtsBackend(
+            device=mms_device, max_cached_languages=mms_max_cached,
+        ),
+        backend_cls=MmsTtsBackend,
+        capabilities=BackendCapabilities(
+            is_cloud=False,
+            requires_credentials=False,
+            service_name="Meta MMS-TTS",
+            terms_url="https://huggingface.co/facebook/mms-tts",
+            notes="Meta MMS-TTS (VITS)。1,100+ 言語、言語単位の遅延ロード。CC-BY-NC(非商用)。",
+        ),
+        requires_modules=("transformers",),
     )
 
     # ElevenLabs TTS(クラウド)。extras: `tts-elevenlabs`(httpx)。

@@ -48,6 +48,7 @@ def patched_backend_setup(monkeypatch):
         ("voice_translator.translator.anthropic_claude_backend", "AnthropicClaudeTranslatorBackend"),
         ("voice_translator.tts.sapi_backend", "SapiTtsBackend"),
         ("voice_translator.tts.piper_backend", "PiperTtsBackend"),
+        ("voice_translator.tts.mms_backend", "MmsTtsBackend"),
         ("voice_translator.tts.elevenlabs_backend", "ElevenLabsTtsBackend"),
         ("voice_translator.tts.openai_tts_backend", "OpenAiTtsBackend"),
         ("voice_translator.tts.google_cloud_tts_backend", "GoogleCloudTtsBackend"),
@@ -92,7 +93,7 @@ class TestRegisterDefaultBackends:
         # Phase F2 で Piper / ElevenLabs / OpenAI TTS / Google Cloud TTS を追加。
         # MVP の sapi が先頭。
         assert registry.list_names(LayerKind.TTS) == [
-            "sapi", "piper", "elevenlabs", "openai_tts", "google_tts",
+            "sapi", "piper", "mms", "elevenlabs", "openai_tts", "google_tts",
         ]
         assert registry.list_names(LayerKind.OUTPUT) == ["soundcard"]
 
@@ -514,6 +515,7 @@ class TestRequiresModulesDeclarations:
         (LayerKind.TRANSLATOR, "openai_gpt"): ("httpx",),
         (LayerKind.TRANSLATOR, "anthropic_claude"): ("httpx",),
         (LayerKind.TTS, "piper"): ("piper", "huggingface_hub"),
+        (LayerKind.TTS, "mms"): ("transformers",),
         (LayerKind.TTS, "elevenlabs"): ("httpx",),
         (LayerKind.TTS, "openai_tts"): ("httpx",),
         (LayerKind.TTS, "google_tts"): ("google.cloud.texttospeech",),

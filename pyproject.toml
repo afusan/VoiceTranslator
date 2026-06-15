@@ -107,6 +107,12 @@ tts-openai-api = [
 tts-google = [
     "google-cloud-texttospeech>=2.16",
 ]
+# MMS-TTS(ローカル、多言語)。エンジン本体(transformers/torch)は base 依存に乗るため、
+# extras は「一部スクリプトの言語で必要な入力ローマ字化(uroman)」のみ。uroman 不要の
+# 言語は extras 無しでも動く(未導入時は該当言語の synthesize で分かりやすく落とす)。
+tts-mms = [
+    "uroman>=1.3",
+]
 # Capture: ProcTap (per-process audio capture)。Windows = WASAPI Process Loopback の
 # C++ native 実装。scipy はリサンプル(48kHz → 16kHz)に必要だが、proc-tap が依存に
 # 持っているので extras としては proc-tap のみで足りる(scipy も自動で入る)。
@@ -127,7 +133,7 @@ capture-proctap = [
 # [tool.uv.sources] の torch index 選択(+cpu / +cu126)が効かず、素の PyPI torch に
 # 化けることを確認済み(uv export で検証)。演算系は従来どおり直接指定する。
 full = [
-    "voice-translator[vad-extra,asr-whisper-official,asr-openai-api,asr-google-stt,asr-deepgram,translator-deepl,translator-openai-api,translator-anthropic,tts-piper,tts-elevenlabs,tts-openai-api,tts-google,capture-proctap]",
+    "voice-translator[vad-extra,asr-whisper-official,asr-openai-api,asr-google-stt,asr-deepgram,translator-deepl,translator-openai-api,translator-anthropic,tts-piper,tts-elevenlabs,tts-openai-api,tts-google,tts-mms,capture-proctap]",
 ]
 
 [tool.uv]

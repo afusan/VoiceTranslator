@@ -6974,6 +6974,18 @@ wheels = [
 ]
 
 [[package]]
+name = "uroman"
+version = "1.3.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "regex" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/73/03/7d23f79d9b259861c31437ed76007eb8dc6f6c419b709f5b2ef37d4fa7da/uroman-1.3.1.1.tar.gz", hash = "sha256:6aaf2d5265f24f15201cbbf92c86720b2b804ac53294ce43a3307fcd242387d5", size = 896697, upload-time = "2024-06-28T06:03:34.868Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/e1/43722c41eebab0592c6f83410e5e35edc1d6e333f44feb0a543bd38dba3e/uroman-1.3.1.1-py3-none-any.whl", hash = "sha256:394f965f7011fd56a84aca098a6c3b50082f365324f5d94c992852137918c8f5", size = 930684, upload-time = "2024-06-28T06:03:32.578Z" },
+]
+
+[[package]]
 name = "voice-translator"
 version = "0.1.0"
 source = { editable = "." }
@@ -7036,6 +7048,7 @@ full = [
     { name = "pvcobra" },
     { name = "pyannote-audio" },
     { name = "pycaw" },
+    { name = "uroman" },
     { name = "webrtcvad-wheels" },
 ]
 translator-anthropic = [
@@ -7052,6 +7065,9 @@ tts-elevenlabs = [
 ]
 tts-google = [
     { name = "google-cloud-texttospeech" },
+]
+tts-mms = [
+    { name = "uroman" },
 ]
 tts-openai-api = [
     { name = "httpx" },
@@ -7109,10 +7125,11 @@ requires-dist = [
     { name = "torchaudio", marker = "extra == 'cpu'", specifier = ">=2.8", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "voice-translator", extra = "cpu" } },
     { name = "torchaudio", marker = "extra == 'cuda'", specifier = ">=2.8", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "voice-translator", extra = "cuda" } },
     { name = "transformers", specifier = ">=4.40" },
-    { name = "voice-translator", extras = ["vad-extra", "asr-whisper-official", "asr-openai-api", "asr-google-stt", "asr-deepgram", "translator-deepl", "translator-openai-api", "translator-anthropic", "tts-piper", "tts-elevenlabs", "tts-openai-api", "tts-google", "capture-proctap"], marker = "extra == 'full'" },
+    { name = "uroman", marker = "extra == 'tts-mms'", specifier = ">=1.3" },
+    { name = "voice-translator", extras = ["vad-extra", "asr-whisper-official", "asr-openai-api", "asr-google-stt", "asr-deepgram", "translator-deepl", "translator-openai-api", "translator-anthropic", "tts-piper", "tts-elevenlabs", "tts-openai-api", "tts-google", "tts-mms", "capture-proctap"], marker = "extra == 'full'" },
     { name = "webrtcvad-wheels", marker = "extra == 'vad-extra'", specifier = ">=2.0.10" },
 ]
-provides-extras = ["cpu", "cuda", "vad-extra", "asr-whisper-official", "asr-openai-api", "asr-google-stt", "asr-deepgram", "translator-deepl", "translator-openai-api", "translator-anthropic", "tts-piper", "tts-elevenlabs", "tts-openai-api", "tts-google", "capture-proctap", "full"]
+provides-extras = ["cpu", "cuda", "vad-extra", "asr-whisper-official", "asr-openai-api", "asr-google-stt", "asr-deepgram", "translator-deepl", "translator-openai-api", "translator-anthropic", "tts-piper", "tts-elevenlabs", "tts-openai-api", "tts-google", "tts-mms", "capture-proctap", "full"]
 
 [package.metadata.requires-dev]
 dev = [
