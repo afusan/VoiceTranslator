@@ -69,6 +69,8 @@ docs/
 - [docs/design/UserSinario.md](docs/design/UserSinario.md) — ユーザシナリオ
 - [docs/design/TaskList.md](docs/design/TaskList.md) — 実装タスクリスト
 - [docs/design/pendList.md](docs/design/pendList.md) — 保留・暫定決定
+- [docs/design/AgenticWorkflow.md](docs/design/AgenticWorkflow.md) — エージェンティック開発の運用フロー(主/配下サブエージェントの役割、停止点、レビューのラリー、メモリ規約)
+- [claudeKnowledge/README.md](claudeKnowledge/README.md) — エージェント別メモリ(教訓)の規約と置き場
 
 ## 恒常ドキュメントの記述方針
 恒常的に参照するドキュメント(`Architecture.html` / `Class.md` / `manual.md` / 本ファイル)は
