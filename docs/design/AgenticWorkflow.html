@@ -63,8 +63,8 @@
     <code>claudeKnowledge/</code> ではなく <code>docs/design/</code> 配下に置く。</li>
   <li><strong>読み手</strong>: 主エージェント（Claude Code 本体）と、すべての配下サブエージェント
     （designReviewer など）。各 agent.md の「起動時にすること」で本ファイルの読み込みを義務づける。</li>
-  <li><strong>背景・議論ログ</strong>: 結論に至った経緯と議論は
-    <code>tmp/agenticCodingTalking.html</code> 参照（git 管理外）。</li>
+  <li><strong>議論経緯ログ</strong>（参考）: この運用に至った検討の経緯は
+    <code>tmp/agenticCodingTalking.html</code>（git 管理外）。本ファイルは結論のみを記す。</li>
 </ul>
 
 <h2>1. 役割分担</h2>
@@ -153,7 +153,7 @@
 <table>
   <tr><th>位置</th><th>内容</th><th>担当</th><th>性質</th></tr>
   <tr><td>設計直後</td><td>5観点の軽量チェック ＋ 最大2往復のラリー</td><td>designReviewer</td><td>安価・前向き</td></tr>
-  <tr><td>実装直後</td><td>テスト緑チェック（門番ではなくループ終了条件）</td><td>主エージェント</td><td>自動</td></tr>
+  <tr><td>実装直後</td><td>テスト緑チェック（門番ではなくループ終了条件）</td><td>worker（自走ループ内）</td><td>自動</td></tr>
   <tr><td>テスト直後</td><td>多観点（役割・テスト十分性・配布/セキュリティ）の並列レビュー</td><td>reviewer（将来）</td><td>高価・最後に1回</td></tr>
 </table>
 
@@ -201,7 +201,7 @@
   <li>designReviewer が指摘を <strong><code>docs/design/&lt;対象ディレクトリ&gt;/designReview.md</code></strong>
     に追記（見出し <code>## レビュー N 巡目</code>、判定 <code>GO</code> / <code>要相談</code>、
     重大/中/軽の3段階、各指摘に <code>- 実装者回答:</code> の空欄を添える）。</li>
-  <li>実装者（worker または主エージェント）が、各指摘に <strong>修正 / 反論（理由つき）</strong>を同じ md に追記。</li>
+  <li>実装者（worker、フェーズ <code>rally-response</code>）が、各指摘に <strong>修正 / 反論（理由つき）</strong>を同じ md に追記。</li>
   <li>designReviewer が再確認 → 解決なら終了、未解決なら2巡目。</li>
   <li><strong>2往復しても未解決の重大指摘が残れば貴殿へエスカレーション</strong>（主エージェントが上げる）。</li>
 </ol>
@@ -211,8 +211,8 @@
 <p>各エージェントは <strong><code>claudeKnowledge/&lt;agentName&gt;/memory.md</code></strong> を持つ。</p>
 <ul>
   <li><strong>起動時</strong>: 自分のメモリを読み、過去の教訓を今回の作業に活かす。</li>
-  <li><strong>終了時</strong>: 再現性のある教訓を最後の行動として追記する（サブエージェントには
-    「閉じる瞬間」を捉えるイベントが無いため、最終行動として書く規律で担保。取りこぼしは主エージェントが backstop）。</li>
+  <li><strong>終了時</strong>: 再現性のある教訓を<strong>最後の行動として追記する</strong>。
+    サブエージェントには「閉じる瞬間」を捉えるイベントが無いため、最終行動として書く規律で担保する。</li>
   <li><strong>抽象度</strong>: 残すのは「繰り返す落とし穴・プロジェクト/利用者の好み・有効な勘所」。
     コードや git が既に持つ具体（ファイル名・行・個別修正）は残さない。</li>
   <li><strong>書込スコープ</strong>: 各エージェントが書いてよいのは、自分の <code>memory.md</code> と
@@ -220,24 +220,22 @@
 </ul>
 <p>詳細規約は <a href="../../claudeKnowledge/README.md"><code>claudeKnowledge/README.md</code></a> を参照。</p>
 
-<h2>6. 現在の整備状況（2026-06-17 時点）</h2>
+<h2>6. 整備状況</h2>
 <table>
   <tr><th>要素</th><th>状態</th></tr>
-  <tr><td>designReviewer</td><td>整備済み（<code>.claude/agents/designReviewer.md</code>）</td></tr>
-  <tr><td>claudeKnowledge メモリ規約</td><td>整備済み</td></tr>
-  <tr><td>共有ワークフロー（本ファイル）</td><td>整備済み</td></tr>
-  <tr><td>worker（実装者）サブエージェント</td><td>整備済み（<code>.claude/agents/worker.md</code>）。フェーズ指定式(planning / rally-response / implement / review-fix)</td></tr>
-  <tr><td>reviewer（最終 多観点）サブエージェント</td><td><strong>未整備</strong></td></tr>
-  <tr><td><code>/jisou</code> 自走コマンド</td><td><strong>未整備</strong>（エージェント揃ってから組む）</td></tr>
-  <tr><td>フック（緑チェック自動強制・教訓書込保証）</td><td><strong>未整備</strong>（v2）</td></tr>
+  <tr><td>designReviewer サブエージェント</td><td>あり（<code>.claude/agents/designReviewer.md</code>）</td></tr>
+  <tr><td>worker サブエージェント</td><td>あり（<code>.claude/agents/worker.md</code>）。フェーズ指定式（planning / rally-response / implement / review-fix）</td></tr>
+  <tr><td>claudeKnowledge メモリ規約</td><td>あり</td></tr>
+  <tr><td>共有ワークフロー（本ファイル）</td><td>あり</td></tr>
+  <tr><td>reviewer（最終 多観点）サブエージェント</td><td>未整備</td></tr>
+  <tr><td><code>/jisou</code> 自走コマンド</td><td>未整備（エージェント揃ってから組む）</td></tr>
+  <tr><td>フック（緑チェック自動強制・教訓書込保証）</td><td>未整備（v2）</td></tr>
 </table>
 
-<h2>7. 残論点（意思決定待ち）</h2>
+<h2>7. 残論点</h2>
 <ul>
-  <li>red 修正ループの回数上限（暴走防止）</li>
-  <li>テスト書き換えの不正検知を reviewer にどこまで持たせるか</li>
-  <li>主エージェントが backstop で教訓を代筆するときの抽出基準</li>
-  <li>red 修正ループの暫定上限3周は実運用後に調整(暴走防止と意義のあるリトライのバランス)</li>
+  <li>red 修正ループの上限は暫定3周。実運用後に「暴走防止」と「意義のあるリトライ」のバランスで調整する。</li>
+  <li>テスト書き換えの不正検知（「甘くして通す」改変）を reviewer にどこまで持たせるか。</li>
 </ul>
 
 </div>
