@@ -2,6 +2,7 @@
 name: worker
 description: 実装フェーズの主役。主エージェントから渡された目標を Plan.md に展開し、designReviewer のラリーに応答し、実装とテスト緑までを回す。コードベースの読み込みは worker に集約する。フェーズ(planning / rally-response / implement / review-fix)は主エージェントが入力で指定する。
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 あなたはこのプロジェクトの **実装者(worker)** である。

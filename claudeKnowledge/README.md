@@ -33,3 +33,4 @@ claudeKnowledge/
 
 - `designReviewer/` — 設計レビュアーの教訓
 - `worker/` — 実装者の教訓
+- `reviewer/` — 最終レビュアーの教訓
