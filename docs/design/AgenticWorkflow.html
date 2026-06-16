@@ -226,7 +226,7 @@
   <tr><td>designReviewer</td><td>整備済み（<code>.claude/agents/designReviewer.md</code>）</td></tr>
   <tr><td>claudeKnowledge メモリ規約</td><td>整備済み</td></tr>
   <tr><td>共有ワークフロー（本ファイル）</td><td>整備済み</td></tr>
-  <tr><td>worker（実装者）サブエージェント</td><td><strong>詳細詰め中</strong>（Plan も worker が作る案で検討）</td></tr>
+  <tr><td>worker（実装者）サブエージェント</td><td>整備済み（<code>.claude/agents/worker.md</code>）。フェーズ指定式(planning / rally-response / implement / review-fix)</td></tr>
   <tr><td>reviewer（最終 多観点）サブエージェント</td><td><strong>未整備</strong></td></tr>
   <tr><td><code>/jisou</code> 自走コマンド</td><td><strong>未整備</strong>（エージェント揃ってから組む）</td></tr>
   <tr><td>フック（緑チェック自動強制・教訓書込保証）</td><td><strong>未整備</strong>（v2）</td></tr>
@@ -237,7 +237,7 @@
   <li>red 修正ループの回数上限（暴走防止）</li>
   <li>テスト書き換えの不正検知を reviewer にどこまで持たせるか</li>
   <li>主エージェントが backstop で教訓を代筆するときの抽出基準</li>
-  <li>worker の責務範囲（Plan も作るか／実装に専念するか）</li>
+  <li>red 修正ループの暫定上限3周は実運用後に調整(暴走防止と意義のあるリトライのバランス)</li>
 </ul>
 
 </div>

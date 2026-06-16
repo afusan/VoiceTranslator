@@ -32,3 +32,4 @@ claudeKnowledge/
 ## 現在のメモリ
 
 - `designReviewer/` — 設計レビュアーの教訓
+- `worker/` — 実装者の教訓
