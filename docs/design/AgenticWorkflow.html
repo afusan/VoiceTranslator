@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>エージェンティック開発ワークフロー</title>
+<style>
+  :root {
+    --b: #B4B2A9;
+    --ink: #2C2C2A;
+    --ink2: #5F5E5A;
+    --bg: #FBFAF7;
+    --card: #FFFFFF;
+    --line: #E3E1D9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
+    color: var(--ink); background: var(--bg); margin: 0; line-height: 1.75;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 36px 28px 80px; }
+  h1 { font-size: 24px; border-bottom: 2px solid var(--ink); padding-bottom: 10px; }
+  h2 { font-size: 19px; margin-top: 36px; border-left: 5px solid #7F77DD; padding-left: 12px; }
+  h3 { font-size: 15px; margin-top: 22px; color: var(--ink2); }
+  p, li { font-size: 14.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #F1EFE8; }
+  code { background: #F1EFE8; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  a { color: #185FA5; }
+  .fig { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 14px; margin: 18px 0; }
+  .cap { font-size: 12.5px; color: var(--ink2); margin: 4px 0 8px; text-align: center; }
+  .note { background: #FAEEDA; border-left: 4px solid #EF9F27; padding: 12px 16px; border-radius: 6px; margin: 16px 0; font-size: 14px; }
+
+  /* SVG theming */
+  svg text.t  { font-size: 14px; }
+  svg text.ts { font-size: 12px; }
+  svg .c-gray   rect { fill: #F1EFE8; stroke: #B4B2A9; stroke-width: 1.5; }
+  svg .c-purple rect { fill: #EEEDFE; stroke: #7F77DD; stroke-width: 1.5; }
+  svg .c-amber  rect { fill: #FAEEDA; stroke: #EF9F27; stroke-width: 1.5; }
+  svg .c-blue   rect { fill: #E6F1FB; stroke: #378ADD; stroke-width: 1.5; }
+  svg .c-teal   rect { fill: #E1F5EE; stroke: #1D9E75; stroke-width: 1.5; }
+  svg .c-green  rect { fill: #EAF3DE; stroke: #639922; stroke-width: 1.5; }
+  svg .c-coral  rect { fill: #FAECE7; stroke: #D85A30; stroke-width: 1.5; }
+  svg .c-gray   text { fill: #2C2C2A; }
+  svg .c-purple text { fill: #26215C; }
+  svg .c-amber  text { fill: #412402; }
+  svg .c-blue   text { fill: #042C53; }
+  svg .c-teal   text { fill: #04342C; }
+  svg .c-green  text { fill: #173404; }
+  svg .c-coral  text { fill: #4A1B0C; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>エージェンティック開発ワークフロー</h1>
+<p>
+本プロジェクトのチャットラリー方式からエージェンティック方式への移行で合意した
+<strong>運用フロー全体像</strong>を、関係する全エージェントが起動時に参照するために置く。
+</p>
+<ul>
+  <li><strong>位置づけ</strong>: 固定的な運用設計（可変な教訓＝メモリではない）。よって
+    <code>claudeKnowledge/</code> ではなく <code>docs/design/</code> 配下に置く。</li>
+  <li><strong>読み手</strong>: 主エージェント（Claude Code 本体）と、すべての配下サブエージェント
+    （designReviewer など）。各 agent.md の「起動時にすること」で本ファイルの読み込みを義務づける。</li>
+  <li><strong>背景・議論ログ</strong>: 結論に至った経緯と議論は
+    <code>tmp/agenticCodingTalking.html</code> 参照（git 管理外）。</li>
+</ul>
+
+<h2>1. 役割分担</h2>
+
+<div class="fig">
+<svg width="100%" viewBox="0 0 680 250" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>主エージェントを中心とした役割分担</title>
+<desc>利用者がClaudeにリクエストを出し、Claudeがオーケストレータとしてworker、designReviewer、reviewerへ作業を委譲する。エージェント同士は直接やり取りせず、連携と調停はすべてClaudeを経由する。</desc>
+<defs><marker id="a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+<g class="c-gray"><rect x="270" y="20" width="140" height="40" rx="8"/><text class="t" x="340" y="45" text-anchor="middle">貴殿（利用者）</text></g>
+<line x1="324" y1="60" x2="324" y2="100" stroke="var(--b)" stroke-width="1.5" marker-end="url(#a1)"/>
+<text class="ts" x="318" y="82" text-anchor="end" fill="#5F5E5A">リクエスト</text>
+<line x1="360" y1="100" x2="360" y2="60" stroke="#D85A30" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#a1)"/>
+<text class="ts" x="368" y="82" text-anchor="start" fill="#5F5E5A">重要トレードオフのみ</text>
+
+<g class="c-purple"><rect x="225" y="102" width="230" height="56" rx="8"/><text class="t" x="340" y="125" text-anchor="middle">主エージェント（Claude）</text><text class="ts" x="340" y="144" text-anchor="middle">作業分配・監督・調停</text></g>
+
+<line x1="285" y1="158" x2="135" y2="200" stroke="var(--b)" stroke-width="1.5" marker-start="url(#a1)" marker-end="url(#a1)"/>
+<line x1="340" y1="160" x2="340" y2="200" stroke="var(--b)" stroke-width="1.5" marker-start="url(#a1)" marker-end="url(#a1)"/>
+<line x1="395" y1="158" x2="545" y2="200" stroke="var(--b)" stroke-width="1.5" marker-start="url(#a1)" marker-end="url(#a1)"/>
+
+<g class="c-teal"><rect x="30" y="202" width="210" height="44" rx="8"/><text class="t" x="135" y="222" text-anchor="middle">worker</text><text class="ts" x="135" y="238" text-anchor="middle">Plan 作成・実装・テスト</text></g>
+<g class="c-blue"><rect x="245" y="202" width="190" height="44" rx="8"/><text class="t" x="340" y="222" text-anchor="middle">designReviewer</text><text class="ts" x="340" y="238" text-anchor="middle">設計フェーズの軽量レビュー</text></g>
+<g class="c-blue"><rect x="440" y="202" width="210" height="44" rx="8"/><text class="t" x="545" y="222" text-anchor="middle">reviewer（将来）</text><text class="ts" x="545" y="238" text-anchor="middle">最終 多観点レビュー</text></g>
+</svg>
+<div class="cap">図1: 主エージェントがハブ。配下サブエージェントは互いに直接やり取りしない。</div>
+</div>
+
+<ul>
+  <li><strong>主エージェントがハブ。</strong>サブエージェントは互いに直接やり取りせず、連携と
+    調停は主エージェントを経由する（各サブエージェントは独立コンテキストで1回走り、結果を返して消える）。</li>
+  <li><strong>重要なトレードオフ以外は主エージェントが解決</strong>する。判断が分岐して成果物が
+    変わる／設計変更／破壊的変更のときだけ貴殿にエスカレーションする。</li>
+</ul>
+
+<h2>2. パイプライン（back-edge を持つ）</h2>
+
+<div class="fig">
+<svg width="100%" viewBox="0 0 680 215" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>差し戻し辺を持つ自走パイプライン</title>
+<desc>設計、実装、テスト、最終レビュー、コミットへ進む主線に対し、テストから実装への赤の修正ループ、実装やテストから設計へ戻る設計差し戻し辺、最終レビューから実装への指摘差し戻し辺を持つ。設計後レビュー・設計差し戻し・最終レビューには利用者の確認点を置く。</desc>
+<defs><marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+<text class="ts" x="40" y="22" text-anchor="start" fill="#5F5E5A">自走パイプライン（直線ではなく差し戻し辺を持つ）</text>
+
+<path d="M508 56 C 508 36, 232 36, 232 56" fill="none" stroke="#D85A30" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#a2)"/>
+<text class="ts" x="370" y="33" text-anchor="middle" fill="#5F5E5A">レビュー指摘 → 実装へ差し戻し</text>
+
+<g class="c-purple"><rect x="40" y="56" width="108" height="44" rx="8"/><text class="t" x="94" y="83" text-anchor="middle">設計</text></g>
+<g class="c-purple"><rect x="178" y="56" width="108" height="44" rx="8"/><text class="t" x="232" y="83" text-anchor="middle">実装</text></g>
+<g class="c-purple"><rect x="316" y="56" width="108" height="44" rx="8"/><text class="t" x="370" y="83" text-anchor="middle">テスト</text></g>
+<g class="c-blue"><rect x="454" y="56" width="108" height="44" rx="8"/><text class="t" x="508" y="83" text-anchor="middle">最終レビュー</text></g>
+<g class="c-teal"><rect x="580" y="56" width="60" height="44" rx="8"/><text class="t" x="610" y="83" text-anchor="middle">コミット</text></g>
+<line x1="148" y1="78" x2="176" y2="78" stroke="var(--b)" stroke-width="1.5" marker-end="url(#a2)"/>
+<line x1="286" y1="78" x2="314" y2="78" stroke="var(--b)" stroke-width="1.5" marker-end="url(#a2)"/>
+<line x1="424" y1="78" x2="452" y2="78" stroke="var(--b)" stroke-width="1.5" marker-end="url(#a2)"/>
+<line x1="562" y1="78" x2="578" y2="78" stroke="var(--b)" stroke-width="1.5" marker-end="url(#a2)"/>
+
+<circle cx="162" cy="78" r="6" fill="#EF9F27"/>
+<circle cx="232" cy="150" r="6" fill="#EF9F27"/>
+<circle cx="508" cy="50" r="6" fill="#EF9F27"/>
+
+<path d="M370 100 C 370 120, 232 120, 232 100" fill="none" stroke="#D85A30" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#a2)"/>
+<text class="ts" x="301" y="134" text-anchor="middle" fill="#5F5E5A">red: 実装⇄テスト 修正ループ（任せる）</text>
+
+<path d="M360 100 C 360 162, 94 162, 94 100" fill="none" stroke="#534AB7" stroke-width="1.4" stroke-dasharray="2 4" marker-end="url(#a2)"/>
+<text class="ts" x="150" y="178" text-anchor="middle" fill="#5F5E5A">設計差し戻し（発見時は止まって相談）</text>
+
+<circle cx="430" cy="190" r="6" fill="#EF9F27"/>
+<text class="ts" x="442" y="194" text-anchor="start" fill="#5F5E5A">＝ 貴殿が確認・判断する停止点</text>
+</svg>
+<div class="cap">図2: 差し戻し辺を持つ自走パイプライン。停止点は3つ。</div>
+</div>
+
+<p><strong>人間（貴殿）の停止点は3つ</strong>:</p>
+<ol>
+  <li>設計後レビュー直後 — designReviewer の判定 <code>要相談</code> 時、または重大な未解決指摘あり</li>
+  <li>設計差し戻しが起きたとき（実装/テスト中に設計の不備を発見した場合）</li>
+  <li>最終レビューの結果</li>
+</ol>
+<p>それ以外（実装ループ内の red 修正・軽微な判断）は主エージェントに委譲。</p>
+
+<h2>3. レビューの差し込み方 — ハイブリッド</h2>
+<p>軽い自動ゲートを各境界に置き、最後に多観点レビューを1回。</p>
+<table>
+  <tr><th>位置</th><th>内容</th><th>担当</th><th>性質</th></tr>
+  <tr><td>設計直後</td><td>5観点の軽量チェック ＋ 最大2往復のラリー</td><td>designReviewer</td><td>安価・前向き</td></tr>
+  <tr><td>実装直後</td><td>テスト緑チェック（門番ではなくループ終了条件）</td><td>主エージェント</td><td>自動</td></tr>
+  <tr><td>テスト直後</td><td>多観点（役割・テスト十分性・配布/セキュリティ）の並列レビュー</td><td>reviewer（将来）</td><td>高価・最後に1回</td></tr>
+</table>
+
+<h3>Green チェックの分岐（red になったとき）</h3>
+<table>
+  <tr><th>red の原因</th><th>取るべき行動</th></tr>
+  <tr><td>新規コードの単純バグ</td><td>修正してループ（回数上限つき）</td></tr>
+  <tr><td>テストが古い仕様を守っている</td><td>テストを直す（「甘くして通す」不正は最終 reviewer がフラグ）</td></tr>
+  <tr><td>失敗が設計の不備を示す</td><td><strong>設計差し戻し</strong>（停止点 2 へ）</td></tr>
+  <tr><td>環境 / flaky</td><td>churn せず報告</td></tr>
+</table>
+
+<h2>4. designReviewer のラリー（最大2往復）</h2>
+
+<div class="fig">
+<svg width="100%" viewBox="0 0 680 222" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>designReviewerと実装者の設計レビュー・ラリー</title>
+<desc>designReviewerが指摘をdesignReview.mdに記録して実装者へ渡し、実装者が妥当性判断と修正または反論を行い、designReviewerが再確認する。やり取りは最大2往復で、解決すれば実装フェーズへ、2往復でも未解決なら利用者へ相談する。</desc>
+<defs><marker id="a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+<text class="ts" x="40" y="22" text-anchor="start" fill="#5F5E5A">designReviewer × 実装者 の設計レビュー・ラリー（最大2往復）</text>
+
+<g class="c-blue"><rect x="70" y="42" width="210" height="54" rx="8"/><text class="t" x="175" y="65" text-anchor="middle">designReviewer</text><text class="ts" x="175" y="83" text-anchor="middle">指摘を記録・再確認</text></g>
+<g class="c-teal"><rect x="400" y="42" width="210" height="54" rx="8"/><text class="t" x="505" y="65" text-anchor="middle">実装者（worker）</text><text class="ts" x="505" y="83" text-anchor="middle">妥当性判断・修正/反論</text></g>
+
+<line x1="282" y1="58" x2="398" y2="58" stroke="var(--b)" stroke-width="1.5" marker-end="url(#a3)"/>
+<text class="ts" x="340" y="52" text-anchor="middle" fill="#5F5E5A">① 指摘を渡す</text>
+<line x1="398" y1="82" x2="282" y2="82" stroke="var(--b)" stroke-width="1.5" marker-end="url(#a3)"/>
+<text class="ts" x="340" y="95" text-anchor="middle" fill="#5F5E5A">② 修正 / 反論</text>
+
+<line x1="225" y1="96" x2="305" y2="114" stroke="var(--b)" stroke-width="1.2" stroke-dasharray="3 3"/>
+<line x1="455" y1="96" x2="375" y2="114" stroke="var(--b)" stroke-width="1.2" stroke-dasharray="3 3"/>
+<g class="c-amber"><rect x="285" y="114" width="110" height="28" rx="8"/><text class="ts" x="340" y="132" text-anchor="middle">designReview.md</text></g>
+
+<line x1="330" y1="142" x2="225" y2="166" stroke="var(--b)" stroke-width="1.5" marker-end="url(#a3)"/>
+<line x1="350" y1="142" x2="470" y2="166" stroke="var(--b)" stroke-width="1.5" marker-end="url(#a3)"/>
+<g class="c-green"><rect x="110" y="168" width="195" height="40" rx="8"/><text class="ts" x="207" y="192" text-anchor="middle">解決 → 実装フェーズへ</text></g>
+<g class="c-coral"><rect x="378" y="168" width="222" height="40" rx="8"/><text class="ts" x="489" y="192" text-anchor="middle">2往復でも未解決 → 貴殿へ相談</text></g>
+<circle cx="370" cy="188" r="6" fill="#EF9F27"/>
+</svg>
+<div class="cap">図3: designReviewer のラリー手順。記録はすべて designReview.md。</div>
+</div>
+
+<ol>
+  <li>designReviewer が指摘を <strong><code>docs/design/&lt;対象ディレクトリ&gt;/designReview.md</code></strong>
+    に追記（見出し <code>## レビュー N 巡目</code>、判定 <code>GO</code> / <code>要相談</code>、
+    重大/中/軽の3段階、各指摘に <code>- 実装者回答:</code> の空欄を添える）。</li>
+  <li>実装者（worker または主エージェント）が、各指摘に <strong>修正 / 反論（理由つき）</strong>を同じ md に追記。</li>
+  <li>designReviewer が再確認 → 解決なら終了、未解決なら2巡目。</li>
+  <li><strong>2往復しても未解決の重大指摘が残れば貴殿へエスカレーション</strong>（主エージェントが上げる）。</li>
+</ol>
+<p>反論が妥当なら指摘は取り下げる（設計原則と実ファイルの根拠で判断、メンツで残さない）。</p>
+
+<h2>5. メモリ（教訓）</h2>
+<p>各エージェントは <strong><code>claudeKnowledge/&lt;agentName&gt;/memory.md</code></strong> を持つ。</p>
+<ul>
+  <li><strong>起動時</strong>: 自分のメモリを読み、過去の教訓を今回の作業に活かす。</li>
+  <li><strong>終了時</strong>: 再現性のある教訓を最後の行動として追記する（サブエージェントには
+    「閉じる瞬間」を捉えるイベントが無いため、最終行動として書く規律で担保。取りこぼしは主エージェントが backstop）。</li>
+  <li><strong>抽象度</strong>: 残すのは「繰り返す落とし穴・プロジェクト/利用者の好み・有効な勘所」。
+    コードや git が既に持つ具体（ファイル名・行・個別修正）は残さない。</li>
+  <li><strong>書込スコープ</strong>: 各エージェントが書いてよいのは、自分の <code>memory.md</code> と
+    役割上の成果物のみ（例: designReviewer は対象の <code>designReview.md</code>）。</li>
+</ul>
+<p>詳細規約は <a href="../../claudeKnowledge/README.md"><code>claudeKnowledge/README.md</code></a> を参照。</p>
+
+<h2>6. 現在の整備状況（2026-06-17 時点）</h2>
+<table>
+  <tr><th>要素</th><th>状態</th></tr>
+  <tr><td>designReviewer</td><td>整備済み（<code>.claude/agents/designReviewer.md</code>）</td></tr>
+  <tr><td>claudeKnowledge メモリ規約</td><td>整備済み</td></tr>
+  <tr><td>共有ワークフロー（本ファイル）</td><td>整備済み</td></tr>
+  <tr><td>worker（実装者）サブエージェント</td><td><strong>詳細詰め中</strong>（Plan も worker が作る案で検討）</td></tr>
+  <tr><td>reviewer（最終 多観点）サブエージェント</td><td><strong>未整備</strong></td></tr>
+  <tr><td><code>/jisou</code> 自走コマンド</td><td><strong>未整備</strong>（エージェント揃ってから組む）</td></tr>
+  <tr><td>フック（緑チェック自動強制・教訓書込保証）</td><td><strong>未整備</strong>（v2）</td></tr>
+</table>
+
+<h2>7. 残論点（意思決定待ち）</h2>
+<ul>
+  <li>red 修正ループの回数上限（暴走防止）</li>
+  <li>テスト書き換えの不正検知を reviewer にどこまで持たせるか</li>
+  <li>主エージェントが backstop で教訓を代筆するときの抽出基準</li>
+  <li>worker の責務範囲（Plan も作るか／実装に専念するか）</li>
+</ul>
+
+</div>
+</body>
+</html>
