@@ -78,11 +78,6 @@ _JA: dict[str, str] = {
     # --- layer_settings_schema: レイヤ別設定ダイアログのラベル/ヘルプ ---
     # キーは layer_settings.<config パス>.{label,help}。共通ヘルパは概念単位で 1 キー。
     # schema は label_key / help_key にこのキーを持ち、LayerSettingsDialog が tr() で解決する。
-    "layer_settings.auto_load.label": "起動時に自動ロード",
-    "layer_settings.auto_load.help": (
-        "ON にすると、アプリ起動時にこの backend を自動でロードする(既定 OFF)。"
-        "OFF のままなら「▶ 開始」を押したときにロードする。"
-    ),
     "layer_settings.load_model.label": "モデルを(再)ロード",
     "layer_settings.load_model.help": (
         "今すぐこのレイヤの backend をバックグラウンドで(再)ロードする。"
@@ -423,11 +418,6 @@ _EN: dict[str, str] = {
     "restart.started": "Switched {device} device (restarting…)",
     "restart.failed": "Failed to restart after changing {device} device: {message}",
     # layer_settings_schema
-    "layer_settings.auto_load.label": "Auto-load on startup",
-    "layer_settings.auto_load.help": (
-        "When ON, this backend is loaded automatically at app startup (default OFF). "
-        "If left OFF, it loads when you press '▶ Start'."
-    ),
     "layer_settings.load_model.label": "(Re)load model",
     "layer_settings.load_model.help": (
         "(Re)load this layer's backend in the background now. "
@@ -751,11 +741,6 @@ _ZH: dict[str, str] = {
     "restart.device.output": "输出",
     "restart.started": "已切换{device}设备(正在重启…)",
     "restart.failed": "更改{device}设备后重启失败: {message}",
-    "layer_settings.auto_load.label": "启动时自动加载",
-    "layer_settings.auto_load.help": (
-        "开启后,应用启动时会自动加载此后端(默认关闭)。"
-        "若保持关闭,则在按下“▶ 开始”时加载。"
-    ),
     "layer_settings.load_model.label": "(重新)加载模型",
     "layer_settings.load_model.help": (
         "立即在后台(重新)加载此层的后端。"
@@ -1067,11 +1052,6 @@ _ES: dict[str, str] = {
     "restart.device.output": "salida",
     "restart.started": "Dispositivo de {device} cambiado (reiniciando…)",
     "restart.failed": "Error al reiniciar tras cambiar el dispositivo de {device}: {message}",
-    "layer_settings.auto_load.label": "Cargar automáticamente al iniciar",
-    "layer_settings.auto_load.help": (
-        "Si está activado, este backend se carga automáticamente al iniciar la aplicación "
-        "(predeterminado: desactivado). Si se deja desactivado, se carga al pulsar '▶ Iniciar'."
-    ),
     "layer_settings.load_model.label": "(Re)cargar modelo",
     "layer_settings.load_model.help": (
         "(Re)cargar ahora el backend de esta capa en segundo plano. "

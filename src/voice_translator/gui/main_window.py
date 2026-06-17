@@ -1,9 +1,8 @@
 """MainWindow: アプリのルートウィンドウ(customtkinter)。
 
 役割: 言語切替バー / NotificationBanner / SettingsPanel / ControlPanel を内包し、
-AppController を介して連携させる。アプリ起動時に `auto_load=True` が指定されている
-backend のレイヤだけを先行ロードする(Phase B: 既定では全レイヤが auto_load=False
-なので、起動はモデルロード無しで完了する)。
+AppController を介して連携させる。モデルのロードは Start ボタン押下時に行う(lazy
+ロード)。起動はモデルロード無しで完了する。
 
 UI 改修(2026-06-05 / P1):
 - SettingsPanel 全体を 1 セクションで包む方式は廃止。SettingsPanel が内部で
@@ -67,10 +66,6 @@ class MainWindow(ctk.CTk):
         self._build_panels()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-        # Phase B: auto_load=True のレイヤだけ起動時にバックグラウンドロード。
-        # 既定 OFF なので通常はこの呼び出しは即時 on_done する(対象なし)。
-        self._controller.load_auto_load_layers_async()
 
     # ----------------------------------------------------------
     def _build_locale_bar(self) -> None:

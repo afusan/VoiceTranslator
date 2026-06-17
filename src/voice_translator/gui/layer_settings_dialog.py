@@ -481,8 +481,8 @@ class LayerSettingsDialog(ctk.CTkToplevel):
 
         2026-05-30: per-layer 「(再)ロード」ボタンを UI から外したため、本レイヤ選択中
         backend の `backends_config` 値が変わった場合は **保存時に自動 evict** する
-        (= 中央ロードボタン押下で新しい設定値で作り直される)。`auto_load` や
-        `pipeline.*` などの「ロード時パラメータでない」キーは evict 対象外。
+        (= 中央ロードボタン押下で新しい設定値で作り直される)。`pipeline.*` などの
+        「ロード時パラメータでない」キーは evict 対象外。
         """
         # 1) 全フィールドを変換(失敗があれば中止)
         new_values: list[tuple[tuple[str, ...], object]] = []
@@ -531,7 +531,6 @@ class LayerSettingsDialog(ctk.CTkToplevel):
                 len(keys) >= 3
                 and keys[0] == "backends_config"
                 and keys[1] == current_backend
-                and keys[2] != "auto_load"  # auto_load は load 時パラメータでないので除外
                 and old_value != value
             ):
                 backend_config_changed = True

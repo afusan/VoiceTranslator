@@ -110,7 +110,7 @@ class AppController:
 
         # バックエンド実体のキャッシュ(レイヤごとに1つ)。
         # load_models() で埋め、backends 設定の変更時は該当レイヤを破棄する(再ロードは
-        # 開始 / ↻ ロード / auto_load のタイミング)。
+        # 開始 / ↻ ロード のタイミング)。
         self._backends: dict[LayerKind, Any] = {}
         # backend ごとの状態変化購読(load 時に subscribe、eviction で unsubscribe)。
         self._backend_subscriptions: dict[LayerKind, Subscription] = {}
@@ -459,7 +459,7 @@ class AppController:
 
         認証成功時、該当レイヤで本 backend が選択中かつロード済みなら evict して
         INIT に戻す(古い認証情報で作られたインスタンスを使い続けない)。即時の
-        作り直しはしない — 実ロードは Start / ↻ ロード / auto_load に寄せる方針
+        作り直しはしない — 実ロードは Start / ↻ ロード に寄せる方針
         (バックエンド変更時の evict-only と同じ規則)。backend キャッシュに触るため、
         この後処理だけはランタイム(本クラス)の責務。
         """
@@ -540,7 +540,7 @@ class AppController:
     def set_setting(self, *keys_and_value: Any) -> None:
         self._config.set(*keys_and_value)
         # バックエンド名が変わったら、該当レイヤのキャッシュを破棄して INIT に戻すだけ。
-        # 実ロードは「開始ボタン押下 / ↻ ロード / 起動時 auto_load」の 3 経路に寄せる。
+        # 実ロードは「開始ボタン押下 / ↻ ロード」の 2 経路に寄せる。
         # 変更即ロードは廃止: 押し間違いでも数 GB のロードが走る・ロード中の再変更で
         # UI スレッドがロック待ちで固まる、の 2 点が実害で、即ロードを要した前提
         # (全レイヤ LOADED でないと開始不可)は「押下時にロード」方式で消滅している。
@@ -744,7 +744,7 @@ class AppController:
         `text_only`、それ以外は `audio`。独立した `pipeline.output_mode` キーは持たない。
 
         text_only モードでは TTS / Output レイヤが「対象外」扱いになる:
-        - `load_models` / `load_auto_load_layers_async` の対象から外れる
+        - `load_models` の対象から外れる
         - `_check_missing_credentials_gate` のチェック対象から外れる
         - Coordinator は TTS / Output スレッドを起動しない
         """
@@ -1007,62 +1007,6 @@ class AppController:
         self._loader_thread.start()
 
     # ---- 起動 ----
-    def get_auto_load_layers(self) -> list[LayerKind]:
-        """選択中 backend に `auto_load=True` が指定されているレイヤを返す(Phase B)。
-
-        ユーザは詳細ダイアログから per-backend で auto_load を ON にする。
-        該当する backend が選ばれているレイヤだけが起動時に自動ロードされる。
-        text_only モードでは TTS / Output レイヤは候補から除外する(出力モードに
-        対象外のレイヤを起動時に読み込まないため)。
-        """
-        active = set(self._active_layers())
-        layers: list[LayerKind] = []
-        for layer in LayerKind:
-            if layer not in active:
-                continue
-            backend_name = self._config.get("backends", layer.value)
-            if not backend_name:
-                continue
-            if self._config.get(
-                "backends_config", backend_name, "auto_load", default=False
-            ):
-                layers.append(layer)
-        return layers
-
-    def load_auto_load_layers_async(
-        self,
-        *,
-        on_done: Callable[[], None] | None = None,
-        on_failed: Callable[[str], None] | None = None,
-    ) -> None:
-        """`auto_load=True` のレイヤだけを Loader スレッドで順次ロードする(Phase B 起動シーケンス)。
-
-        対象レイヤなしなら即時 on_done。既ロード中なら何もしない。
-        """
-        if self.is_loading:
-            return
-        layers = self.get_auto_load_layers()
-        on_done = on_done or (lambda: None)
-        on_failed = on_failed or (lambda _msg: None)
-        if not layers:
-            on_done()
-            return
-
-        def _target() -> None:
-            try:
-                for layer in layers:
-                    self.load_model_layer(layer)
-            except Exception as exc:  # noqa: BLE001
-                self._logger.exception("auto-load レイヤのロード失敗")
-                on_failed(str(exc))
-                return
-            on_done()
-
-        self._loader_thread = threading.Thread(
-            target=_target, name="vt_auto_loader", daemon=True
-        )
-        self._loader_thread.start()
-
     def _check_missing_credentials_gate(self) -> None:
         """認証が必要なレイヤで未完了の項目があれば FatalError で start をブロック。
 

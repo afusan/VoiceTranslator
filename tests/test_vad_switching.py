@@ -6,7 +6,7 @@ Phase F1 で VAD レイヤに 4 つの backend (silero / webrtcvad / pyannote / 
 構造的に保証される(CLAUDE.md「構造上適当に破棄されるならすべてのパターンを試す必要はない」)。
 
 変更即ロードは廃止済み: `set_setting` は evict + INIT のみで、実ロードは
-Start / ↻ ロード / auto_load(テストでは `load_model_layer`)で行う。
+Start / ↻ ロード(テストでは `load_model_layer`)で行う。
 
 検証する 3 つの不変条件:
 1. 切替前の backend インスタンスの `subscribe()` が返した `Subscription.unsubscribe()` が呼ばれる
