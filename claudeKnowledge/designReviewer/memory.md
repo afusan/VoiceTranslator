@@ -8,3 +8,4 @@
 
 - 削除系タスクでは「恒常ドキュメントの残存参照」が漏れやすい。Plan のコード grep だけでなく `docs/design/` 全体(append/ 配下の補足ドキュメント含む)を grep して突き合わせる観点が有効。
 - 削除順序の記述で「被呼び出し側を先に消す → 呼び出し元を消す」と書かれがちだが、実際は呼び出し元を先に消さないと中間状態でテストが壊れる。因果方向を確認する勘所。
+- SettingsPanel の visual 系メソッド(`_apply_running_lock_visual` / `_apply_absorbed_visuals` / `_apply_tts_none_visual`)は連鎖呼び出しで widget 状態を上書きし合う。新たな disable 条件を追加する Plan では、既存の復元チェーン全体を辿って「最後に誰が上書きするか」を確認する観点が有効。
