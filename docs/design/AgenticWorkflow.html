@@ -67,6 +67,18 @@
     <code>tmp/agenticCodingTalking.html</code>（git 管理外）。本ファイルは結論のみを記す。</li>
 </ul>
 
+<h2>0. 要求の流れ — request.md と checkedRequest.md</h2>
+<p>主エージェントは利用者リクエストを<strong>ファイルで</strong>下流に渡す(チャットに長文を貼らない)。
+作業ディレクトリ <code>docs/design/&lt;branch&gt;/</code> に以下を置く:</p>
+<ul>
+  <li><strong><code>request.md</code></strong>: 起動時の入力プロンプト全文。改変・要約せず原文を残す。</li>
+  <li><strong><code>checkedRequest.md</code></strong>: 主エージェントが「目標を一意に決めるための情報が足りているか」を点検し、
+    不足あれば利用者に短く問い合わせた上で整えたもの。目標(5〜10 行)・スコープ/非目標・規約参照(リンクのみ)・起点ヒント等を含む。</li>
+</ul>
+<p>worker / designReviewer / reviewer は起動時に上記2ファイルを読み、これを<strong>第一の根拠</strong>として動く。
+レビュアー(designReviewer / reviewer)は <strong>観点 0「上位整合性」(※1)</strong> として、
+成果物が request / checkedRequest / prePlan(= Plan.md)に沿っているか、これら上流ドキュメント自体に誤情報や矛盾がないかも独立に検査する。</p>
+
 <h2>1. 役割分担</h2>
 
 <div class="fig">
@@ -161,7 +173,10 @@
   <tr><td>テスト直後</td><td>7観点(設計整合・テスト十分性と健全性・配布方針（条件付き）・セキュリティ・規約遵守・役割表明とドキュメント・スコープ/複雑性)</td><td>reviewer</td><td>高価・最後に1回</td></tr>
 </table>
 
-<h3>reviewer の 7 観点</h3>
+<h3>reviewer の観点(0〜7)</h3>
+<ol start="0">
+  <li><strong>上位整合性（※1）</strong>: 実装と <code>Plan.md</code>(prePlan) / <code>checkedRequest.md</code> / <code>request.md</code> の整合。上流ドキュメント自体の正しさ・矛盾の検出も含む。観点 1 以降より先に見る。</li>
+</ol>
 <ol>
   <li><strong>設計整合（コード現実）</strong>: 役割・単一責任・既存資産再利用、Architecture/Class.md との乖離。</li>
   <li><strong>テストの十分性と健全性</strong>: カバレッジ穴、「甘くして通す」改変の独立検証。</li>
@@ -223,11 +238,24 @@
   <li><strong>2往復しても未解決の重大指摘が残れば貴殿へエスカレーション</strong>（主エージェントが上げる）。</li>
 </ol>
 <p>反論が妥当なら指摘は取り下げる（設計原則と実ファイルの根拠で判断、メンツで残さない）。</p>
+<p>designReviewer も上記と同じ規律(観点 0 を冒頭に置き、最大2往復、コミットは自分で実行)。</p>
+
+<h3>コミットは各役が実行する</h3>
+<p>動作フェーズ後はそれぞれの役が自分でコミットする(主エージェントが束ねない)。例:</p>
+<ul>
+  <li>主エージェント: <code>request.md</code> / <code>checkedRequest.md</code> 作成後</li>
+  <li>worker: planning(Plan.md 作成) / rally-response(実装者回答) / implement(コード) / review-fix(指摘対応) の各フェーズ後</li>
+  <li>designReviewer / reviewer: 指摘 md を追記した直後</li>
+</ul>
+<p>関連ファイルは明示的に <code>git add</code> する(<code>git add -A</code> / <code>.</code> は使わない)。
+prefix は CLAUDE.md の対応表(<code>feat:</code> / <code>fix:</code> / <code>refactor:</code> / <code>docs:</code> /
+<code>test:</code> / <code>chore:</code>)に従う。マージ・リモート操作はしない。</p>
 
 <h2>5. メモリ（教訓）</h2>
 <p>各エージェントは <strong><code>claudeKnowledge/&lt;agentName&gt;/memory.md</code></strong> を持つ。</p>
 <ul>
-  <li><strong>起動時</strong>: 自分のメモリを読み、過去の教訓を今回の作業に活かす。</li>
+  <li><strong>起動時</strong>: 自分のメモリを読み、過去の教訓を今回の作業に活かす。
+    <strong>既存教訓と現状を突き合わせ、事実と乖離している記述があれば削除・修正してから着手</strong>(腐ったメモリを放置しない)。</li>
   <li><strong>終了時</strong>: 再現性のある教訓を<strong>最後の行動として追記する</strong>。
     サブエージェントには「閉じる瞬間」を捉えるイベントが無いため、最終行動として書く規律で担保する。</li>
   <li><strong>抽象度</strong>: 残すのは「繰り返す落とし穴・プロジェクト/利用者の好み・有効な勘所」。
@@ -241,7 +269,7 @@
 <table>
   <tr><th>要素</th><th>状態</th></tr>
   <tr><td>designReviewer サブエージェント</td><td>あり（<code>.claude/agents/designReviewer.md</code>）</td></tr>
-  <tr><td>worker サブエージェント</td><td>あり（<code>.claude/agents/worker.md</code>）。フェーズ指定式（planning / rally-response / implement / review-fix）</td></tr>
+  <tr><td>worker サブエージェント</td><td>あり（<code>.claude/agents/worker.md</code>）。フェーズ指定式（planning / rally-response / implement / review-fix）。書込スコープに上位設計ドキュメント(Architecture.html / manual / pendList / 他)も含む(構造変更は設計差し戻し扱い)。</td></tr>
   <tr><td>claudeKnowledge メモリ規約</td><td>あり</td></tr>
   <tr><td>共有ワークフロー（本ファイル）</td><td>あり</td></tr>
   <tr><td>reviewer（最終 多観点）サブエージェント</td><td>あり（<code>.claude/agents/reviewer.md</code>）。7 観点・<code>finalReview.md</code> にラリー記録・最大2往復</td></tr>
@@ -253,9 +281,9 @@
 <table>
   <tr><th>エージェント</th><th>モデル</th><th>理由</th></tr>
   <tr><td>主エージェント（Claude Code 本体）</td><td>セッションで利用者が選択</td><td>調停・委譲の品質に依存。利用者の選択を尊重。</td></tr>
-  <tr><td>designReviewer</td><td>opus</td><td>設計の妥当性判断。深い文脈把握と原則照合が要る。</td></tr>
-  <tr><td>worker</td><td>sonnet</td><td>計画と実装の反復。スループットとコストの均衡。red 修正ループで何周も走る前提。</td></tr>
-  <tr><td>reviewer</td><td>opus</td><td>多観点での見落とし防止。最後の砦としての判断品質が最優先。</td></tr>
+  <tr><td>designReviewer</td><td><code>claude-opus-4-6</code></td><td>設計の妥当性判断。深い文脈把握と原則照合が要る。</td></tr>
+  <tr><td>worker</td><td><code>sonnet</code></td><td>計画と実装の反復。スループットとコストの均衡。red 修正ループで何周も走る前提。</td></tr>
+  <tr><td>reviewer</td><td><code>claude-opus-4-6</code></td><td>多観点での見落とし防止。最後の砦としての判断品質が最優先。</td></tr>
 </table>
 <p>モデルは各 agent.md の frontmatter <code>model:</code> で明示。主エージェントの調停判断
 (「重要なトレードオフかどうか」の見極め)は利用者の選択モデルに依存するため固定しない。</p>
