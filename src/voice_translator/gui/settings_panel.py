@@ -55,6 +55,7 @@ from .logic.language_choices import (
     tts_warning_needed,
 )
 from .logic.auth_display import auth_status_override
+from .logic.settings_button import has_settings
 from .logic.palette import DISABLED_TEXT, STATUS_COLOR_DEFAULT, STATUS_COLORS
 from .logic.restart_messages import format_restart_failed, format_restart_started
 from .process_select_dialog import ProcessSelectDialog
@@ -203,6 +204,8 @@ class SettingsPanel(ctk.CTkFrame):
         body = section.body
         # 6 レイヤ行を保持(TTS=(なし) 時にグレーアウトするため参照を残す)
         self._backend_rows: dict[LayerKind, list[ctk.CTkBaseClass]] = {}
+        # 設定ボタン参照(enabled/disabled の再計算専用。_backend_rows[layer][3] と同じ widget)
+        self._settings_btns: dict[LayerKind, ctk.CTkButton] = {}
         # グレーアウト解除時の復元色。ctk は text_color=None を受け付けない
         # (ValueError)ため、構築時の既定値を保存しておき復元に使う。
         self._default_row_text_color: object | None = None
@@ -240,6 +243,11 @@ class SettingsPanel(ctk.CTkFrame):
                 command=lambda lyr=layer: self._open_layer_settings(lyr),
             )
             cfg_btn.grid(row=row, column=3, sticky="e", padx=(0, 4), pady=2)
+
+            # 設定項目がないバックエンドの設定ボタンは構築時から disabled にする
+            if not has_settings(layer, current_internal):
+                cfg_btn.configure(state="disabled")
+            self._settings_btns[layer] = cfg_btn
 
             self._backend_rows[layer] = [label_widget, option, status_label, cfg_btn]
             row += 1
@@ -345,13 +353,20 @@ class SettingsPanel(ctk.CTkFrame):
         rows = getattr(self, "_backend_rows", {})
 
         # Output 行: TTS=(なし) なら全要素 disable / グレーアウト(ステータス欄を除く)
+        # CTkButton(設定ボタン)は is_none 時のみ disabled にする。is_none でないときは
+        # 触れない: _sync_all_settings_btn_states が正しい状態を管理している
+        # (将来 Output に設定項目ゼロの backend が追加された場合でも上書きしない)。
         out_status = self._status_labels.get(LayerKind.OUTPUT)
         for w in rows.get(LayerKind.OUTPUT, []):
             try:
-                if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
+                if isinstance(w, ctk.CTkOptionMenu):
                     w.configure(
                         state="disabled" if is_none else self._interactive_state()
                     )
+                elif isinstance(w, ctk.CTkButton):
+                    # TTS 行と同様: is_none 時のみ disabled にし、それ以外は触れない
+                    if is_none:
+                        w.configure(state="disabled")
                 elif isinstance(w, ctk.CTkLabel) and w is not out_status:
                     w.configure(
                         text_color=DISABLED_TEXT if is_none else self._restore_text_color()
@@ -368,10 +383,11 @@ class SettingsPanel(ctk.CTkFrame):
                         text_color=DISABLED_TEXT if is_none else self._restore_text_color()
                     )
                 elif isinstance(w, ctk.CTkButton):
-                    # 設定ボタンは TTS=(なし) のとき意味がない → disable
-                    w.configure(
-                        state="disabled" if is_none else self._interactive_state()
-                    )
+                    # 設定ボタンは TTS=(なし) のとき意味がない → disable。
+                    # TTS=(なし) 以外のときは触れない: _sync_settings_btn_state が管理する
+                    # (mms 等の設定項目ゼロ backend では disabled のまま保たれる)。
+                    if is_none:
+                        w.configure(state="disabled")
             except Exception:  # noqa: BLE001
                 pass
 
@@ -392,6 +408,37 @@ class SettingsPanel(ctk.CTkFrame):
         except Exception:  # noqa: BLE001
             running = False
         return "disabled" if running else "normal"
+
+    def _sync_settings_btn_state(self, layer: LayerKind, internal: str) -> None:
+        """指定レイヤの設定ボタンを backend の設定項目有無に応じて enabled/disabled に切替える。
+
+        running ロック / 吸収 / TTS=(なし) による disable よりも後に呼ぶと、
+        それらが "normal" に戻した後でも正しく disabled に保てる。
+        """
+        btn = self._settings_btns.get(layer)
+        if btn is None:
+            return
+        enabled = has_settings(layer, internal)
+        target_state = "normal" if enabled else "disabled"
+        try:
+            btn.configure(state=target_state)
+        except Exception:  # noqa: BLE001 - widget 破棄後の呼び出しは無視
+            pass
+
+    def _sync_all_settings_btn_states(self) -> None:
+        """全レイヤの設定ボタン enabled/disabled を現在の backend 選択から再計算する。
+
+        running ロック解除・absorbed 解除後の復元で呼ぶ。
+        """
+        for layer, btn in self._settings_btns.items():
+            internal = str(
+                self._controller.get_setting("backends", layer.value, default="")
+            )
+            enabled = has_settings(layer, internal)
+            try:
+                btn.configure(state="normal" if enabled else "disabled")
+            except Exception:  # noqa: BLE001
+                pass
 
     def _on_running_changed(self, running: bool) -> None:
         """running イベント(emit 元スレッド)→ バックエンド行のロック/解除を反映する。"""
@@ -705,8 +752,19 @@ class SettingsPanel(ctk.CTkFrame):
             except Exception:  # noqa: BLE001
                 pass
 
+        # 空設定 backend の設定ボタンを backend 選択から再計算する。
+        # _apply_absorbed_visuals の解除ループで normal に戻った widget を
+        # 正しい disabled に修正するために呼ぶ。
+        # _apply_tts_none_visual の前に呼ぶことで、TTS=(なし) 由来の Output
+        # 設定ボタン disable が最後に確定する(上書きされない)。
+        try:
+            self._sync_all_settings_btn_states()
+        except Exception:  # noqa: BLE001
+            pass
         # TTS=(なし) 時の TTS/Output 行の disable は専用関数が管理しているため、
         # 吸収解除で widget を normal に戻したあとで再適用しておく(復帰直後の表示崩れ防止)。
+        # _sync_all_settings_btn_states の後に呼ぶことで、Output の設定ボタンを
+        # TTS=(なし) 状態に合わせて確定させる。
         try:
             self._apply_tts_none_visual()
         except Exception:  # noqa: BLE001
@@ -764,6 +822,9 @@ class SettingsPanel(ctk.CTkFrame):
         #  連動を保つ。Output 側は触らない)。
         if layer == LayerKind.CAPTURE:
             self._refresh_capture_sources_dropdown()
+        # 設定ボタンの enabled/disabled を新しい backend 選択に合わせて再計算する。
+        # TTS 分岐での _apply_tts_none_visual 後に呼ぶことで順序依存が生じないよう末尾に置く。
+        self._sync_settings_btn_state(layer, internal_value)
 
     # ============================================================
     # 入力言語プルダウンの連動(ASR backend ごとに対応言語が違う)
