@@ -59,3 +59,34 @@ backend 追加・device 関連コード変更を含まない。
 指摘なし。
 
 変更は「設定ボタンの enabled/disabled 制御」に完全に限定されている。過剰な抽象化は無い(`has_settings` は `visible_fields` への 1 行委譲の薄いラッパ)。Plan.md の非目標(スキーマ変更、ツールチップ、設定ボタン以外)を踏み越えていない。`_apply_tts_none_visual` の修正(TTS 行の設定ボタン処理を `is_none` 限定に変更)は designReview で合意された設計変更であり、スコープ内。
+
+## レビュー 2 巡目
+
+**判定: GO**
+
+1 巡目の指摘 3 件に対する worker の応答と実装変更を検証した結果、全件解決済みと判定する。
+
+### 観点 1: [軽] `gui/logic/__init__.py` 依存契約の乖離 → **解決**
+
+worker は `__init__.py` の docstring に「GUI 内の純宣言モジュール(layer_settings_schema 等)への依存は許容する(deferred import で循環参照を回避)」を追記した。実コードを確認し、記述が正確であること(layer_settings_schema は widget を import しない宣言的データ定義であり、deferred import で使用している)を検証した。stated contract と実態の乖離は解消された。
+
+### 観点 2: [中] `_apply_tts_none_visual` Output 行 CTkButton 上書き → **解決**
+
+worker は対応案 (a) を採用し、Output 行の `CTkButton` 処理を TTS 行と対称化した。修正内容を確認:
+
+- `settings_panel.py` 366-369 行: `isinstance(w, ctk.CTkButton)` の分岐で `is_none` 時のみ `disabled` に設定し、`is_none=False` 時は触れない。TTS 行(385-390 行)と完全に対称。
+- 修正前は `isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton))` でまとめて `is_none` でないとき `self._interactive_state()` = "normal" を設定しており、`_sync_all_settings_btn_states` が設定した disabled を上書きする可能性があった。修正後は `CTkOptionMenu` と `CTkButton` を分離し、`CTkButton` は is_none 限定に限定した。
+- コメントも「`_sync_all_settings_btn_states` が管理している、将来の設定項目ゼロ backend でも上書きしない」旨が記載されており、意図が明確。
+
+テスト `test_output_settings_btn_not_overwritten_by_apply_tts_none_visual` を確認:
+- `monkeypatch` で `has_settings` を OUTPUT 限定で `False` を返すよう差し替え、将来の「設定項目ゼロの Output backend」をシミュレート。
+- TTS を `none` → `sapi` に変更後、Output 設定ボタンが `disabled` のままであることを検証。
+- モックの使い方は I/F 契約を破っておらず(元の `has_settings` に委譲し OUTPUT のみ偽装)、テストの健全性は問題ない。
+
+### 観点 2: [軽] `_sync_all_settings_btn_states` 単体テスト欠落 → **解決(許容)**
+
+worker は「間接カバレッジで十分」と判断。この判断は妥当。`_apply_absorbed_visuals` 経由の既存テスト、今回追加された `test_output_settings_btn_not_overwritten_by_apply_tts_none_visual`(TTS 変更 → `_sync_all_settings_btn_states` 経由で Output btn 状態を検証)、および既存の running lock テスト(`test_stop_reenables_and_reapplies_overrides`)によって実質的にカバーされている。単体テスト追加はテスト重複を増やすだけで益が薄い。
+
+### 全テスト実行結果
+
+1399 passed, 6 skipped(環境依存の既知 skip)。新規追加テスト 5 件(うち review-fix で 1 件追加)を含め全 pass。
