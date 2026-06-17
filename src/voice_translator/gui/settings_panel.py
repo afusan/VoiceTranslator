@@ -353,13 +353,20 @@ class SettingsPanel(ctk.CTkFrame):
         rows = getattr(self, "_backend_rows", {})
 
         # Output 行: TTS=(なし) なら全要素 disable / グレーアウト(ステータス欄を除く)
+        # CTkButton(設定ボタン)は is_none 時のみ disabled にする。is_none でないときは
+        # 触れない: _sync_all_settings_btn_states が正しい状態を管理している
+        # (将来 Output に設定項目ゼロの backend が追加された場合でも上書きしない)。
         out_status = self._status_labels.get(LayerKind.OUTPUT)
         for w in rows.get(LayerKind.OUTPUT, []):
             try:
-                if isinstance(w, (ctk.CTkOptionMenu, ctk.CTkButton)):
+                if isinstance(w, ctk.CTkOptionMenu):
                     w.configure(
                         state="disabled" if is_none else self._interactive_state()
                     )
+                elif isinstance(w, ctk.CTkButton):
+                    # TTS 行と同様: is_none 時のみ disabled にし、それ以外は触れない
+                    if is_none:
+                        w.configure(state="disabled")
                 elif isinstance(w, ctk.CTkLabel) and w is not out_status:
                     w.configure(
                         text_color=DISABLED_TEXT if is_none else self._restore_text_color()

@@ -14,7 +14,7 @@ request.md(「変更対象がなければ選択肢を無効に」)→ checkedReq
 
 - **[軽] `gui/logic/__init__.py` の依存契約と `settings_button.py` の実際の依存**:
   `gui/logic/__init__.py` は「依存は common 配下の純粋モジュールと標準ライブラリのみ」と宣言しているが、`settings_button.py` は `voice_translator.gui.layer_settings_schema` に依存する(deferred import)。`layer_settings_schema` は宣言的データ中心のモジュールで customtkinter を直接 import しないため実害は無いが、パッケージの stated contract との乖離がある。対応案: `__init__.py` の docstring に「`layer_settings_schema` 等の GUI 内の純宣言モジュールへの依存は許容」を追記する。
-  - worker回答:
+  - worker回答: `__init__.py` の docstring に「GUI 内の純宣言モジュール(layer_settings_schema 等)への依存は許容する(deferred import で循環参照を回避)」を追記した。
 
 上記以外は Plan.md どおりの実装。`has_settings` は `visible_fields()` への薄いラッパとして純関数に切り出されており、単一責任・既存資産の再利用とも整合。`_settings_btns` 辞書の追加と `_backend_rows` との関係(同一 widget への二重参照)も明示的にコメントされている。
 
@@ -24,10 +24,10 @@ request.md(「変更対象がなければ選択肢を無効に」)→ checkedReq
   `_apply_tts_none_visual` 内の Output 行処理(settings_panel.py 357-362行)で、TTS が「(なし)」でないとき Output 行の `CTkButton` を `self._interactive_state()` = "normal" に設定する。これは `_apply_absorbed_visuals` 内で `_sync_all_settings_btn_states()` → `_apply_tts_none_visual()` の順に呼ばれるため、`_sync_all_settings_btn_states` が OUTPUT 設定ボタンに設定した状態を `_apply_tts_none_visual` が上書きする。**現時点では OUTPUT soundcard は `has_settings == True` なので顕在化しないが、将来 Output に設定項目ゼロの backend が追加された場合にボタンが誤って normal になる**。対応案: 以下のいずれか(worker 判断):
   (a) `_apply_tts_none_visual` の Output 行の `CTkButton` 処理を TTS 行と同様に「`is_none` のときだけ disabled にする」形に変更する(TTS 行で既にやった修正と同じパターン)
   (b) 現状は顕在化しないため `pendList.md` に記録して次回の Output backend 追加時に対処する
-  - worker回答:
+  - worker回答: (a) を採用。`_apply_tts_none_visual` の Output 行 CTkButton 処理を TTS 行と同様に「`is_none` 時のみ `disabled` にし、`is_none=False` 時は触れない」形に変更した。コメントにも「`_sync_all_settings_btn_states` が管理している、将来の設定項目ゼロ backend でも上書きしない」旨を明記。テスト `test_output_settings_btn_not_overwritten_by_apply_tts_none_visual` を追加。`settings_panel` モジュール内の `has_settings` を `monkeypatch` で OUTPUT が `False` を返すよう差し替え、TTS (なし) → sapi への切替後も Output 設定ボタンが `disabled` のままであることを検証(1398 passed)。
 
 - **[軽] `_sync_all_settings_btn_states` 単体のテスト欠落**: `_sync_all_settings_btn_states` は running ロック解除と `_apply_absorbed_visuals` から呼ばれるが、直接的なテストが無い。既存の running lock テスト(`test_stop_reenables_and_reapplies_overrides`)は通っているが、running ロック解除後に「空設定 backend の設定ボタンが disabled のまま」であることを明示的に検証するテストは無い。ただし `_apply_absorbed_visuals` 経由で間接的にカバーされており、テスト爆発を避ける判断として許容範囲。
-  - worker回答:
+  - worker回答: 現状の間接カバレッジで許容範囲とする判断を維持する。`_apply_absorbed_visuals` 経由の既存テストで十分にカバーされており、`_sync_all_settings_btn_states` 単体を直接叩く新テストを加えると重複が生まれる。
 
 ### 観点 3: 発動条件外(スキップ)
 

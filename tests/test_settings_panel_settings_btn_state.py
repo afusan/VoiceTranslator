@@ -176,3 +176,46 @@ class TestSettingsBtnOnBackendChange:
         panel._on_backend_change(LayerKind.TTS, "mms")  # noqa: SLF001
 
         assert str(btn.cget("state")) == "disabled"
+
+    def test_output_settings_btn_not_overwritten_by_apply_tts_none_visual(
+        self, root, monkeypatch
+    ) -> None:
+        """TTS を (なし) からリアル backend に変更したとき、Output 設定ボタンが
+        _apply_tts_none_visual に上書きされず _sync_all_settings_btn_states の結果を保つ。
+
+        finalReview 中程度指摘: _apply_tts_none_visual が is_none=False 時に
+        Output 行 CTkButton を _interactive_state() で normal 化すると、
+        設定項目ゼロの Output backend を誤って normal にする潜在リスクがある。
+        修正後はこの分岐を削除し TTS 行と対称化したことを検証する。
+        """
+        import voice_translator.gui.settings_panel as sp_mod
+        from voice_translator.common.types import LayerKind
+        from voice_translator.gui.settings_panel import SettingsPanel
+
+        # settings_panel モジュール内の has_settings を差し替える
+        # (将来「設定項目ゼロの Output backend」が追加された状況をシミュレート)
+        original_has_settings = sp_mod.has_settings
+
+        def patched_has_settings(layer: LayerKind, backend: str) -> bool:
+            if layer == LayerKind.OUTPUT:
+                return False
+            return original_has_settings(layer, backend)
+
+        monkeypatch.setattr(sp_mod, "has_settings", patched_has_settings)
+
+        # TTS=(なし) で構築 → Output 設定ボタンは _apply_tts_none_visual で disabled
+        controller = _make_controller(tts_choice="none")
+        panel = SettingsPanel(root, controller)
+        out_btn = panel._settings_btns[LayerKind.OUTPUT]  # noqa: SLF001
+        assert str(out_btn.cget("state")) == "disabled"
+
+        # TTS を sapi(リアル backend)に変更
+        # _sync_all_settings_btn_states: OUTPUT は has_settings=False → disabled のまま
+        # _apply_tts_none_visual (is_none=False): 修正前は normal に上書きしていた
+        panel._on_backend_change(LayerKind.TTS, "sapi")  # noqa: SLF001
+
+        # 修正後: _apply_tts_none_visual は CTkButton に触れないため
+        # _sync_all_settings_btn_states の disabled が保たれる
+        assert str(out_btn.cget("state")) == "disabled", (
+            "_apply_tts_none_visual が Output 設定ボタンを normal 化してはいけない"
+        )
