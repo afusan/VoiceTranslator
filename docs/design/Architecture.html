@@ -285,9 +285,9 @@ gui/logic で表示値を計算して塗る。ControlPanel が SettingsPanel に
     <td>tkinter mainloop / MainWindow</td>
   </tr>
   <tr>
-    <td><strong>Loader</strong>(vt_loader / vt_auto_loader)</td>
-    <td>バックエンドの初期化を UI から切り離す。起動時の auto_load、Start / ↻ ロード押下時の未ロード分一括ロードで都度起動。完了/失敗は status イベントで UI に届く。backend 切替は破棄(INIT)のみで Loader は起動しない(変更即ロードは廃止)。モデル構築はロック外で行い、UI スレッドはロック待ちで固まらない(構築中の変更は世代カウンタで検出し、完成品を破棄して最新の選択をロードし直す)。</td>
-    <td>AppController.load_models_async / load_auto_load_layers_async / start_pipeline_async / _load_layer</td>
+    <td><strong>Loader</strong>(vt_loader)</td>
+    <td>バックエンドの初期化を UI から切り離す。Start / ↻ ロード押下時の未ロード分一括ロードで都度起動。完了/失敗は status イベントで UI に届く。backend 切替は破棄(INIT)のみで Loader は起動しない(変更即ロードは廃止)。モデル構築はロック外で行い、UI スレッドはロック待ちで固まらない(構築中の変更は世代カウンタで検出し、完成品を破棄して最新の選択をロードし直す)。</td>
+    <td>AppController.load_models_async / start_pipeline_async / _load_layer</td>
   </tr>
   <tr>
     <td><strong>vt_restart</strong>(任意)</td>

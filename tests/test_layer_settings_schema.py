@@ -243,14 +243,17 @@ class TestVisibleFields:
     def test_backend_filter_excludes_other_backends(self) -> None:
         """applies_when_backend で別 backend を渡すと該当エントリは除外される。
 
-        旧テスト「VAD は空」は Phase C2 で auto_load トグル等が入って意味を失ったため、
-        フィルタロジック自体を直接検証する形に書き換えた。
+        VAD の webrtcvad 専用フィールド(aggressiveness / frame_ms)を使ってフィルタ
+        ロジックを検証する。webrtcvad 選択時は出て、他の backend 選択時は出ない。
         """
-        with_silero = visible_fields(LayerKind.VAD, current_backend="silero")
-        with_other = visible_fields(LayerKind.VAD, current_backend="other_vad")
-        # silero 時に出る auto_load トグルが、other_vad 時には消える
-        assert any(f.field_type == "toggle" for f in with_silero)
-        assert not any(f.field_type == "toggle" for f in with_other)
+        with_webrtcvad = visible_fields(LayerKind.VAD, current_backend="webrtcvad")
+        with_other = visible_fields(LayerKind.VAD, current_backend="silero")
+        # webrtcvad 時は aggressiveness フィールドが出る
+        webrtcvad_keys = [f.keys for f in with_webrtcvad]
+        assert ("backends_config", "webrtcvad", "aggressiveness") in webrtcvad_keys
+        # silero 選択時は webrtcvad 専用フィールドが出ない
+        other_keys = [f.keys for f in with_other]
+        assert ("backends_config", "webrtcvad", "aggressiveness") not in other_keys
 
 
 class TestFasterWhisperModelDropdown:

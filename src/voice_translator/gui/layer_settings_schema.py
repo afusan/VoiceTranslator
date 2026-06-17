@@ -14,7 +14,7 @@
 - **"dropdown"** (Phase C1): `options_fn(controller, layer) -> list[ModelInfo|str]` で
   選択肢を実行時に取得するプルダウン。モデル選択で利用する想定
 - **"toggle"** (Phase C1): bool 値のスイッチ(GUI 上は ON/OFF トグル)。`parse_field_value`
-  でも bool 同等に扱う。`auto_load` 等で利用
+  でも bool 同等に扱う
 - **"button"** (Phase C1): クリック時に `action_fn(controller, layer) -> None` を呼ぶ
   アクション項目。`keys` は不要(設定値を持たない)。Load Model ボタン等で利用
 - **"label_readonly"** (Phase C1): 値表示のみ(編集不可)。`reactive_to` で示したレイヤの
@@ -180,18 +180,6 @@ def recent_durations_text(controller: "AppController", layer: LayerKind) -> str:
 # ============================================================
 # 共通フィールド生成ヘルパ(全レイヤで共通の項目を量産する)
 # ============================================================
-def _auto_load_toggle(backend_name: str) -> "SettingField":
-    """指定 backend が選ばれているときだけ表示される auto_load トグル(Phase C2)。"""
-    return SettingField(
-        keys=("backends_config", backend_name, "auto_load"),
-        label_key="layer_settings.auto_load.label",
-        field_type="toggle",
-        default=False,
-        applies_when_backend=backend_name,
-        help_key="layer_settings.auto_load.help",
-    )
-
-
 def _load_model_button(layer: LayerKind) -> "SettingField":
     """指定レイヤを手動(再)ロードするボタン(Phase C2 / モデル切替時の反映に使う)。
 
@@ -303,7 +291,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             default=10_000_000,
             help_key="layer_settings.pipeline.captured_queue_max_bytes.help",
         ),
-        _auto_load_toggle("soundcard"),
         # ProcTap(プロセス単位キャプチャ)の入力ゲイン。対象プロセスの再生音量が
         # 小さいと VAD が発話を拾えないため、内部で増幅できるようにする。
         SettingField(
@@ -316,8 +303,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
         ),
     ],
     LayerKind.VAD: [
-        # Silero(MVP)
-        _auto_load_toggle("silero"),
         # Phase F1 で追加した代替 VAD 群。`applies_when_backend` でその backend が選ばれているときだけ
         # フィールドが出る。重複が見えるのは設計上の意図(ダイアログは選択中 backend で
         # フィルタする)。
@@ -337,7 +322,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="webrtcvad",
             help_key="layer_settings.backends_config.webrtcvad.frame_ms.help",
         ),
-        _auto_load_toggle("webrtcvad"),
         SettingField(
             keys=("backends_config", "pyannote", "model_id"),
             label_key="layer_settings.backends_config.pyannote.model_id.label",
@@ -354,7 +338,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="pyannote",
             help_key="layer_settings.backends_config.pyannote.device.help",
         ),
-        _auto_load_toggle("pyannote"),
         SettingField(
             keys=("backends_config", "pvcobra", "threshold"),
             label_key="layer_settings.backends_config.pvcobra.threshold.label",
@@ -363,7 +346,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="pvcobra",
             help_key="layer_settings.backends_config.pvcobra.threshold.help",
         ),
-        _auto_load_toggle("pvcobra"),
     ],
     LayerKind.ASR: [
         SettingField(
@@ -382,7 +364,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             options_fn=_faster_whisper_model_options,
             help_key="layer_settings.backends_config.faster_whisper.model_size.help",
         ),
-        _auto_load_toggle("faster_whisper"),
         # openai-whisper(公式)用の同等項目。Whisper サイズ系は共通名だが、backend が
         # 別なので config キーも別系統(backends_config.openai_whisper.*)。
         SettingField(
@@ -394,7 +375,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             options_fn=_openai_whisper_model_options,
             help_key="layer_settings.backends_config.openai_whisper.model_size.help",
         ),
-        _auto_load_toggle("openai_whisper"),
         # OpenAI Whisper API(クラウド)用の項目。モデル名(現状 whisper-1 のみ)を露出。
         SettingField(
             keys=("backends_config", "openai_whisper_api", "model"),
@@ -404,7 +384,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="openai_whisper_api",
             help_key="layer_settings.backends_config.openai_whisper_api.model.help",
         ),
-        _auto_load_toggle("openai_whisper_api"),
         # Google Cloud STT(クラウド)。auto 検出非対応のため、auto を選んだ時に
         # 何の言語で投げるかを「default_language」で指定する。
         SettingField(
@@ -415,7 +394,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="google_stt",
             help_key="layer_settings.backends_config.google_stt.default_language.help",
         ),
-        _auto_load_toggle("google_stt"),
         # Deepgram(クラウド)。モデル名のみ露出(現状 nova-3)。
         SettingField(
             keys=("backends_config", "deepgram", "model"),
@@ -425,7 +403,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="deepgram",
             help_key="layer_settings.backends_config.deepgram.model.help",
         ),
-        _auto_load_toggle("deepgram"),
     ],
     LayerKind.TRANSLATOR: [
         SettingField(
@@ -444,9 +421,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             options_fn=_nllb200_model_options,
             help_key="layer_settings.backends_config.nllb200.model_name.help",
         ),
-        _auto_load_toggle("nllb200"),
-        # DeepL は backend 固有設定なし(API key のみ)
-        _auto_load_toggle("deepl"),
         # OpenAI GPT
         SettingField(
             keys=("backends_config", "openai_gpt", "model"),
@@ -456,7 +430,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="openai_gpt",
             help_key="layer_settings.backends_config.openai_gpt.model.help",
         ),
-        _auto_load_toggle("openai_gpt"),
         # Anthropic Claude
         SettingField(
             keys=("backends_config", "anthropic_claude", "model"),
@@ -466,7 +439,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="anthropic_claude",
             help_key="layer_settings.backends_config.anthropic_claude.model.help",
         ),
-        _auto_load_toggle("anthropic_claude"),
     ],
     LayerKind.TTS: [
         SettingField(
@@ -477,7 +449,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="sapi",
             help_key="layer_settings.backends_config.sapi.rate.help",
         ),
-        _auto_load_toggle("sapi"),
         # Piper TTS(ローカル、マルチ OS、ONNX)
         SettingField(
             keys=("backends_config", "piper", "voice_name"),
@@ -488,7 +459,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             options_fn=_piper_voice_options,
             help_key="layer_settings.backends_config.piper.voice_name.help",
         ),
-        _auto_load_toggle("piper"),
         # ElevenLabs(クラウド、プリメイド voice)
         SettingField(
             keys=("backends_config", "elevenlabs", "voice_id"),
@@ -507,7 +477,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             options_fn=_elevenlabs_model_options,
             help_key="layer_settings.backends_config.elevenlabs.model_id.help",
         ),
-        _auto_load_toggle("elevenlabs"),
         # OpenAI TTS(クラウド、プリメイド 6 voice)
         SettingField(
             keys=("backends_config", "openai_tts", "voice"),
@@ -527,7 +496,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             options_fn=_openai_tts_model_options,
             help_key="layer_settings.backends_config.openai_tts.model.help",
         ),
-        _auto_load_toggle("openai_tts"),
         # Google Cloud TTS(クラウド、サービスアカウント JSON)
         SettingField(
             keys=("backends_config", "google_tts", "voice_name"),
@@ -545,7 +513,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             applies_when_backend="google_tts",
             help_key="layer_settings.backends_config.google_tts.default_language.help",
         ),
-        _auto_load_toggle("google_tts"),
     ],
     LayerKind.OUTPUT: [
         SettingField(
@@ -555,7 +522,6 @@ LAYER_SETTINGS: dict[LayerKind, list[SettingField]] = {
             default=5_000_000,
             help_key="layer_settings.pipeline.synthesized_queue_max_bytes.help",
         ),
-        _auto_load_toggle("soundcard"),
     ],
 }
 
